@@ -27,13 +27,28 @@
                                "height":  0.20
                            },
     "center_lane_region_ratio":  {
-                                     "x":  0.42,
-                                     "y":  0.42,
-                                     "width":  0.16,
-                                     "height":  0.35
+                                     "x":  0.37,
+                                     "y":  0.37,
+                                     "width":  0.26,
+                                     "height":  0.38
                                  },
     "center_lane_clearance_low_threshold":  0.42,
     "center_lane_clearance_high_threshold":  0.62,
+    "clear_retry_limit":  0,
+    "risky_retry_limit":  0,
+    "blocked_retry_limit":  0,
+    "blocked_adjustment_max_steps":  12,
+    "adjustment_settle_sec":  0.2,
+    "adjustment_pitch_step_pixels":  40,
+    "adjustment_yaw_step_pixels":  55,
+    "bad_angle_failure_threshold":  1,
+    "bobber_region_ratio":  {
+                                "x":  0.40,
+                                "y":  0.47,
+                                "width":  0.24,
+                                "height":  0.20
+                            },
+    "bobber_min_score":  0.55,
     "cast_keyword":  "Bobber thrown",
     "reel_keyword":  "Bobber retrieved",
     "interval_sec":  0.08,
@@ -50,10 +65,9 @@
     "print_ocr_text":  true,
     "bite_presence_keywords":  [
                                    "Fishing Bobber splashes",
-                                   "Bobber splashes",
-                                   "Splashing"
+                                   "Bobber splashes"
                                ],
-    "no_bite_timeout_sec":  10,
+    "no_bite_timeout_sec":  20,
     "no_bite_timeout_action":  "smart_recover",
     "no_bite_recover_cooldown_sec":  20,
     "ocr_empty_timeout_sec":  5,

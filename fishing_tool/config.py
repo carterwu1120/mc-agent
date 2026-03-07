@@ -39,6 +39,16 @@ class FishingConfig:
     center_lane_region_ratio: Optional[dict[str, float]]
     center_lane_clearance_low_threshold: float
     center_lane_clearance_high_threshold: float
+    clear_retry_limit: int
+    risky_retry_limit: int
+    blocked_retry_limit: int
+    blocked_adjustment_max_steps: int
+    adjustment_settle_sec: float
+    adjustment_pitch_step_pixels: int
+    adjustment_yaw_step_pixels: int
+    bad_angle_failure_threshold: int
+    bobber_region_ratio: Optional[dict[str, float]]
+    bobber_min_score: float
     debug_window: bool
     debug_window_scale: float
 
@@ -88,6 +98,16 @@ class FishingConfig:
             center_lane_clearance_high_threshold=float(
                 data.get("center_lane_clearance_high_threshold", 0.62)
             ),
+            clear_retry_limit=int(data.get("clear_retry_limit", 0)),
+            risky_retry_limit=int(data.get("risky_retry_limit", 0)),
+            blocked_retry_limit=int(data.get("blocked_retry_limit", 0)),
+            blocked_adjustment_max_steps=int(data.get("blocked_adjustment_max_steps", 12)),
+            adjustment_settle_sec=float(data.get("adjustment_settle_sec", 0.2)),
+            adjustment_pitch_step_pixels=int(data.get("adjustment_pitch_step_pixels", 18)),
+            adjustment_yaw_step_pixels=int(data.get("adjustment_yaw_step_pixels", 26)),
+            bad_angle_failure_threshold=int(data.get("bad_angle_failure_threshold", 1)),
+            bobber_region_ratio=data.get("bobber_region_ratio"),
+            bobber_min_score=float(data.get("bobber_min_score", 0.55)),
             debug_window=bool(data.get("debug_window", False)),
             debug_window_scale=float(data.get("debug_window_scale", 0.75)),
         )

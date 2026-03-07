@@ -57,6 +57,9 @@ agent.run()
 - `water_region_ratio` can target the cast landing area for simple water-feature debugging.
 - `center_lane_region_ratio`, `center_lane_clearance_low_threshold`, and `center_lane_clearance_high_threshold` let you classify the cast lane as `CLEAR`, `RISKY`, or `BLOCKED`.
 - The center-lane debug score now emphasizes water-vs-non-water occupancy in the middle corridor, with edge metrics kept as supporting signals.
+- Recovery adjustments now inspect both water distribution and obstacle distribution in the upper, lower, left, and right parts of the center lane, then try the opposite direction first.
+- `clear_retry_limit`, `risky_retry_limit`, `blocked_retry_limit`, and the adjustment pixel settings drive the basic recovery ladder before angle-search logic gets more advanced.
+- `bad_angle_failure_threshold` and `bobber_region_ratio` add a simple bad-angle memory and a bobber-candidate debug signal so obviously useless clear angles are less likely to repeat.
 - Set `debug_window` to `true` to open an OpenCV preview showing the full capture, OCR ROI, water ROI, and basic feature scores.
 - Real-time behavior is polling-based; use `interval_sec` around `0.05` to `0.2`.
 - Check game/platform rules before using automation.

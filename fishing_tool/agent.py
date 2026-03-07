@@ -38,6 +38,16 @@ class FishingAgent:
         self.last_no_bite_recover_at = 0.0
         self.last_nonempty_ocr_at = self.started_at
         self.last_ocr_empty_recover_at = 0.0
+        self.last_lane_state = "UNKNOWN"
+        self.last_lane_score = 0.0
+        self.last_adjustment_note = "none"
+        self.recovery_retry_count = 0
+        self.recovery_ladder_index = 0
+        self.recovery_offsets = {"pitch": 0, "yaw": 0}
+        self.recovery_plan: list[tuple[int, int, str]] = []
+        self.angle_failure_counts: dict[tuple[int, int], int] = {}
+        self.last_bobber_visible = False
+        self.last_bobber_score = 0.0
 
         if self.config.ocr_engine == "easyocr":
             self.reader = easyocr.Reader(config.languages, gpu=False)
@@ -49,6 +59,14 @@ class FishingAgent:
                 lang=self.config.ocr_lang,
                 show_log=False,
             )
+
+    def _lane_snapshot(self) -> dict[str, float | str]:
+        center_lane_region = self._center_lane_region()
+        center_lane_img = self._capture_region(center_lane_region) if center_lane_region else None
+        lane = self._compute_center_lane_features(center_lane_img)
+        self.last_lane_state = str(lane["lane_state"])
+        self.last_lane_score = float(lane["clearance_score"])
+        return lane
 
     def _capture_region(self, region: dict[str, int]) -> np.ndarray:
         with mss.mss() as sct:
@@ -91,6 +109,12 @@ class FishingAgent:
         if not self.config.center_lane_region_ratio:
             return None
         return self._sub_region(self._window_region(), self.config.center_lane_region_ratio)
+
+    def _bobber_region(self) -> Optional[dict[str, int]]:
+        ratio = self.config.bobber_region_ratio or self.config.water_region_ratio
+        if not ratio:
+            return None
+        return self._sub_region(self._window_region(), ratio)
 
     def _sub_region(
         self, base: dict[str, int], ratio: Optional[dict[str, float]]
@@ -194,7 +218,19 @@ class FishingAgent:
                 "center_nonwater_occupancy": 0.0,
                 "connected_block_ratio": 0.0,
                 "upper_open_ratio": 0.0,
+                "upper_water_ratio": 0.0,
+                "upper_nonwater_ratio": 0.0,
+                "lower_water_ratio": 0.0,
                 "lower_nonwater_ratio": 0.0,
+                "left_water_ratio": 0.0,
+                "left_nonwater_ratio": 0.0,
+                "right_water_ratio": 0.0,
+                "right_nonwater_ratio": 0.0,
+                "dominant_block_side": "unknown",
+                "move_pitch_up_score": 0.0,
+                "move_pitch_down_score": 0.0,
+                "move_yaw_left_score": 0.0,
+                "move_yaw_right_score": 0.0,
                 "edge_density": 0.0,
                 "vertical_edge_ratio": 0.0,
                 "horizontal_edge_ratio": 0.0,
@@ -233,15 +269,90 @@ class FishingAgent:
 
         upper_band = nonwater_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
         lower_band = nonwater_mask[int(h * 0.55) :, core_x1:core_x2]
+        upper_water_band = water_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
+        lower_water_band = water_mask[int(h * 0.55) :, core_x1:core_x2]
+        left_band = core_nonwater[:, : max(1, core_nonwater.shape[1] // 2)]
+        right_band = core_nonwater[:, max(1, core_nonwater.shape[1] // 2) :]
+        left_water_band = core_water[:, : max(1, core_water.shape[1] // 2)]
+        right_water_band = core_water[:, max(1, core_water.shape[1] // 2) :]
         upper_open_ratio = 1.0 - (
             float(np.count_nonzero(upper_band)) / float(upper_band.size)
             if upper_band.size
+            else 0.0
+        )
+        upper_water_ratio = (
+            float(np.count_nonzero(upper_water_band)) / float(upper_water_band.size)
+            if upper_water_band.size
+            else 0.0
+        )
+        upper_nonwater_ratio = (
+            float(np.count_nonzero(upper_band)) / float(upper_band.size)
+            if upper_band.size
+            else 0.0
+        )
+        lower_water_ratio = (
+            float(np.count_nonzero(lower_water_band)) / float(lower_water_band.size)
+            if lower_water_band.size
             else 0.0
         )
         lower_nonwater_ratio = (
             float(np.count_nonzero(lower_band)) / float(lower_band.size)
             if lower_band.size
             else 0.0
+        )
+        left_water_ratio = (
+            float(np.count_nonzero(left_water_band)) / float(left_water_band.size)
+            if left_water_band.size
+            else 0.0
+        )
+        left_nonwater_ratio = (
+            float(np.count_nonzero(left_band)) / float(left_band.size)
+            if left_band.size
+            else 0.0
+        )
+        right_water_ratio = (
+            float(np.count_nonzero(right_water_band)) / float(right_water_band.size)
+            if right_water_band.size
+            else 0.0
+        )
+        right_nonwater_ratio = (
+            float(np.count_nonzero(right_band)) / float(right_band.size)
+            if right_band.size
+            else 0.0
+        )
+
+        directional_blocks = {
+            "lower": lower_nonwater_ratio - 0.6 * lower_water_ratio,
+            "upper": upper_nonwater_ratio - 0.6 * upper_water_ratio,
+            "left": left_nonwater_ratio - 0.6 * left_water_ratio,
+            "right": right_nonwater_ratio - 0.6 * right_water_ratio,
+        }
+        dominant_block_side = max(directional_blocks, key=directional_blocks.get)
+
+        move_pitch_up_score = min(
+            1.0,
+            0.50 * upper_water_ratio
+            + 0.30 * upper_open_ratio
+            + 0.20 * lower_nonwater_ratio
+            - 0.20 * upper_nonwater_ratio,
+        )
+        move_pitch_down_score = min(
+            1.0,
+            0.45 * lower_water_ratio
+            + 0.20 * upper_nonwater_ratio
+            - 0.25 * lower_nonwater_ratio,
+        )
+        move_yaw_right_score = min(
+            1.0,
+            0.55 * right_water_ratio
+            + 0.30 * (1.0 - right_nonwater_ratio)
+            + 0.15 * left_nonwater_ratio,
+        )
+        move_yaw_left_score = min(
+            1.0,
+            0.55 * left_water_ratio
+            + 0.30 * (1.0 - left_nonwater_ratio)
+            + 0.15 * right_nonwater_ratio,
         )
 
         edges = cv2.Canny(blurred, 50, 150)
@@ -285,11 +396,97 @@ class FishingAgent:
             "center_nonwater_occupancy": center_nonwater_occupancy,
             "connected_block_ratio": connected_block_ratio,
             "upper_open_ratio": upper_open_ratio,
+            "upper_water_ratio": upper_water_ratio,
+            "upper_nonwater_ratio": upper_nonwater_ratio,
+            "lower_water_ratio": lower_water_ratio,
             "lower_nonwater_ratio": lower_nonwater_ratio,
+            "left_water_ratio": left_water_ratio,
+            "left_nonwater_ratio": left_nonwater_ratio,
+            "right_water_ratio": right_water_ratio,
+            "right_nonwater_ratio": right_nonwater_ratio,
+            "dominant_block_side": dominant_block_side,
+            "move_pitch_up_score": move_pitch_up_score,
+            "move_pitch_down_score": move_pitch_down_score,
+            "move_yaw_left_score": move_yaw_left_score,
+            "move_yaw_right_score": move_yaw_right_score,
             "edge_density": edge_density,
             "vertical_edge_ratio": vertical_edge_ratio,
             "horizontal_edge_ratio": horizontal_edge_ratio,
             "lane_state": lane_state,
+        }
+
+    def _compute_bobber_features(self, img: Optional[np.ndarray]) -> dict[str, float]:
+        if img is None or img.size == 0:
+            return {
+                "bobber_score": 0.0,
+                "bobber_visible": 0.0,
+                "candidate_count": 0.0,
+                "red_white_pair_ratio": 0.0,
+            }
+
+        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+
+        red_mask_1 = cv2.inRange(
+            hsv,
+            np.array([0, 120, 80], dtype=np.uint8),
+            np.array([10, 255, 255], dtype=np.uint8),
+        )
+        red_mask_2 = cv2.inRange(
+            hsv,
+            np.array([170, 120, 80], dtype=np.uint8),
+            np.array([180, 255, 255], dtype=np.uint8),
+        )
+        red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
+        white_mask = cv2.inRange(
+            hsv,
+            np.array([0, 0, 160], dtype=np.uint8),
+            np.array([180, 70, 255], dtype=np.uint8),
+        )
+
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
+
+        red_labels, _, red_stats, red_centroids = cv2.connectedComponentsWithStats(
+            red_mask, connectivity=8
+        )
+        white_labels, _, white_stats, white_centroids = cv2.connectedComponentsWithStats(
+            white_mask, connectivity=8
+        )
+
+        candidate_count = 0
+        pair_score = 0.0
+        for r_idx in range(1, red_labels):
+            r_area = int(red_stats[r_idx, cv2.CC_STAT_AREA])
+            if r_area < 1 or r_area > 30:
+                continue
+            rx, ry = red_centroids[r_idx]
+            for w_idx in range(1, white_labels):
+                w_area = int(white_stats[w_idx, cv2.CC_STAT_AREA])
+                if w_area < 1 or w_area > 45:
+                    continue
+                wx, wy = white_centroids[w_idx]
+                distance = float(np.hypot(rx - wx, ry - wy))
+                if distance > 18:
+                    continue
+                candidate_count += 1
+                pair_score = max(
+                    pair_score,
+                    max(0.0, 1.0 - distance / 18.0) * min((r_area + w_area) / 18.0, 1.0),
+                )
+
+        red_white_pair_ratio = min(candidate_count / 3.0, 1.0)
+        bobber_score = min(1.0, 0.7 * pair_score + 0.3 * red_white_pair_ratio)
+        bobber_visible = 1.0 if bobber_score >= self.config.bobber_min_score else 0.0
+        self.last_bobber_visible = bobber_visible >= 0.5
+        self.last_bobber_score = bobber_score
+
+        return {
+            "bobber_score": bobber_score,
+            "bobber_visible": bobber_visible,
+            "candidate_count": float(candidate_count),
+            "red_white_pair_ratio": red_white_pair_ratio,
         }
 
     def _draw_region_box(
@@ -367,16 +564,20 @@ class FishingAgent:
         focus_region = self._focus_region()
         water_region = self._water_region()
         center_lane_region = self._center_lane_region()
+        bobber_region = self._bobber_region()
 
         focus_img = self._capture_region(focus_region)
         water_img = self._capture_region(water_region) if water_region else None
         center_lane_img = self._capture_region(center_lane_region) if center_lane_region else None
+        bobber_img = self._capture_region(bobber_region) if bobber_region else None
         features = self._compute_water_features(water_img)
         center_lane = self._compute_center_lane_features(center_lane_img)
+        bobber = self._compute_bobber_features(bobber_img)
 
         main = cv2.cvtColor(window_img, cv2.COLOR_BGRA2BGR)
         self._draw_region_box(main, base_region, focus_region, (0, 255, 255), "OCR ROI")
         self._draw_region_box(main, base_region, water_region, (255, 180, 0), "Water ROI")
+        self._draw_region_box(main, base_region, bobber_region, (255, 110, 110), "Bobber ROI")
         lane_state = center_lane["lane_state"]
         if lane_state == "CLEAR":
             lane_color = (0, 220, 0)
@@ -386,7 +587,7 @@ class FishingAgent:
             lane_color = (0, 0, 255)
         self._draw_region_box(main, base_region, center_lane_region, lane_color, "Center Lane")
 
-        panel_width = 620
+        panel_width = 820
         canvas_height = max(main.shape[0], 720)
         canvas = np.zeros((canvas_height, main.shape[1] + panel_width, 3), dtype=np.uint8)
         canvas[: main.shape[0], : main.shape[1]] = main
@@ -413,10 +614,26 @@ class FishingAgent:
             (180, 110),
             "Center Lane",
         )
+        self._draw_preview_tile(
+            canvas,
+            bobber_img,
+            (main.shape[1] + 620, 50),
+            (180, 110),
+            "Bobber",
+        )
 
         lines = [
             f"rod_casted: {self.rod_casted}",
             f"last text: {text[:36] or '(empty)'}",
+            f"last_lane_state: {self.last_lane_state}",
+            f"last_adjustment: {self.last_adjustment_note}",
+            f"bobber_visible: {self.last_bobber_visible}",
+            f"bobber_score: {bobber['bobber_score']:.2f}",
+            f"bobber_candidates: {int(bobber['candidate_count'])}",
+            (
+                "recovery_offsets: "
+                f"pitch={self.recovery_offsets['pitch']} yaw={self.recovery_offsets['yaw']}"
+            ),
             f"water_score: {features['water_score']:.2f}",
             f"blue_ratio: {features['blue_ratio']:.2f}",
             f"brightness_std: {features['brightness_std']:.1f}",
@@ -426,8 +643,20 @@ class FishingAgent:
             f"center_water_ratio: {center_lane['center_water_ratio']:.2f}",
             f"center_nonwater_occ: {center_lane['center_nonwater_occupancy']:.2f}",
             f"connected_block_ratio: {center_lane['connected_block_ratio']:.2f}",
+            f"dominant_block_side: {center_lane['dominant_block_side']}",
             f"upper_open_ratio: {center_lane['upper_open_ratio']:.2f}",
+            f"upper_water_ratio: {center_lane['upper_water_ratio']:.2f}",
+            f"upper_nonwater_ratio: {center_lane['upper_nonwater_ratio']:.2f}",
+            f"lower_water_ratio: {center_lane['lower_water_ratio']:.2f}",
             f"lower_nonwater_ratio: {center_lane['lower_nonwater_ratio']:.2f}",
+            f"left_water_ratio: {center_lane['left_water_ratio']:.2f}",
+            f"left_nonwater_ratio: {center_lane['left_nonwater_ratio']:.2f}",
+            f"right_water_ratio: {center_lane['right_water_ratio']:.2f}",
+            f"right_nonwater_ratio: {center_lane['right_nonwater_ratio']:.2f}",
+            f"move_pitch_up_score: {center_lane['move_pitch_up_score']:.2f}",
+            f"move_pitch_down_score: {center_lane['move_pitch_down_score']:.2f}",
+            f"move_yaw_left_score: {center_lane['move_yaw_left_score']:.2f}",
+            f"move_yaw_right_score: {center_lane['move_yaw_right_score']:.2f}",
             f"center_edge_density: {center_lane['edge_density']:.2f}",
             f"vertical_edge_ratio: {center_lane['vertical_edge_ratio']:.2f}",
             f"horizontal_edge_ratio: {center_lane['horizontal_edge_ratio']:.2f}",
@@ -482,19 +711,53 @@ class FishingAgent:
     def _click(self, button: str) -> None:
         pyautogui.click(button=button)
 
-    def _cast_once(self, button: str) -> None:
+    def _ensure_cast_lane_ready(self) -> str:
+        lane = self._lane_snapshot()
+        lane_state = str(lane["lane_state"])
+        start_lane_state = lane_state
+        attempts = 0
+
+        while (
+            lane_state == "BLOCKED" or self._current_angle_is_bad()
+        ) and attempts < max(1, self.config.blocked_adjustment_max_steps):
+            pitch_delta, yaw_delta, label = self._next_recovery_adjustment(lane)
+            self._adjust_view(pitch_delta, yaw_delta)
+            self.last_adjustment_note = label
+            lane = self._lane_snapshot()
+            lane_state = str(lane["lane_state"])
+            if start_lane_state != "BLOCKED" and lane_state == "BLOCKED":
+                self._revert_last_adjustment(pitch_delta, yaw_delta)
+                lane = self._lane_snapshot()
+                lane_state = str(lane["lane_state"])
+                self.last_adjustment_note = f"{label}->reverted"
+                break
+            attempts += 1
+
+        if lane_state == "BLOCKED" or self._current_angle_is_bad():
+            self.last_adjustment_note = f"blocked_after_{attempts}_adjustments"
+        elif attempts > 0:
+            self.last_adjustment_note = f"{self.last_adjustment_note}->ready:{lane_state}"
+
+        return lane_state
+
+    def _cast_once(self, button: str, require_ready_lane: bool = True) -> bool:
+        if require_ready_lane:
+            lane_state = self._ensure_cast_lane_ready()
+            if lane_state == "BLOCKED":
+                return False
         self._click(button)
         self.rod_casted = True
         self.cast_timestamps.append(time.time())
+        return True
 
     def _reel_once(self, button: str) -> None:
         self._click(button)
         self.rod_casted = False
 
-    def _recast(self, button: str) -> None:
+    def _recast(self, button: str, require_ready_lane: bool = True) -> bool:
         self._reel_once(button)
         time.sleep(self.config.recast_delay_sec)
-        self._cast_once(button)
+        return self._cast_once(button, require_ready_lane=require_ready_lane)
 
     def _sync_state_from_text(self, normalized_text: str) -> None:
         cast_kw = self._normalize(self.config.cast_keyword)
@@ -545,50 +808,186 @@ class FishingAgent:
             target = kw if self.config.case_sensitive else kw.lower()
             if target and target in normalized_text:
                 self.last_bite_seen_at = time.time()
+                self._reset_recovery_progress("bite_seen")
                 return
+
+    def _reset_recovery_progress(self, reason: str) -> None:
+        self.recovery_retry_count = 0
+        self.recovery_ladder_index = 0
+        self.recovery_plan = []
+        self.recovery_offsets = {"pitch": 0, "yaw": 0}
+        self.last_adjustment_note = f"reset:{reason}"
+        self.angle_failure_counts[self._current_angle_key()] = 0
+
+    def _current_angle_key(self) -> tuple[int, int]:
+        return (self.recovery_offsets["pitch"], self.recovery_offsets["yaw"])
+
+    def _mark_current_angle_failure(self) -> None:
+        key = self._current_angle_key()
+        self.angle_failure_counts[key] = self.angle_failure_counts.get(key, 0) + 1
+
+    def _current_angle_is_bad(self) -> bool:
+        key = self._current_angle_key()
+        return self.angle_failure_counts.get(key, 0) >= self.config.bad_angle_failure_threshold
+
+    def _build_recovery_plan(
+        self, lane: Optional[dict[str, float | str]] = None
+    ) -> list[tuple[int, int, str]]:
+        lane = lane or {}
+        move_scores = [
+            ("pitch_up", float(lane.get("move_pitch_up_score", 0.0))),
+            ("pitch_down", float(lane.get("move_pitch_down_score", 0.0))),
+            ("yaw_left", float(lane.get("move_yaw_left_score", 0.0))),
+            ("yaw_right", float(lane.get("move_yaw_right_score", 0.0))),
+        ]
+        move_scores.sort(key=lambda item: item[1], reverse=True)
+
+        move_to_steps = {
+            "pitch_up": [(2, 0, "probe_pitch+big"), (1, 0, "follow_pitch+small")],
+            "pitch_down": [(-2, 0, "probe_pitch-big"), (-1, 0, "follow_pitch-small")],
+            "yaw_left": [(0, -2, "probe_yaw_left_big"), (0, -1, "follow_yaw_left_small")],
+            "yaw_right": [(0, 2, "probe_yaw_right_big"), (0, 1, "follow_yaw_right_small")],
+        }
+
+        primary: list[tuple[int, int, str]] = []
+        for move_name, _ in move_scores:
+            primary.extend(move_to_steps[move_name])
+
+        fallback = [
+            (-self.recovery_offsets["pitch"], 0, "reset_pitch"),
+            (0, -self.recovery_offsets["yaw"], "reset_yaw"),
+            (1, 0, "fallback_pitch_up"),
+            (0, 1, "fallback_yaw_right"),
+            (0, -1, "fallback_yaw_left"),
+        ]
+        return primary + fallback
+
+    def _retry_limit_for_lane(self, lane_state: str) -> int:
+        if lane_state == "CLEAR":
+            return max(0, self.config.clear_retry_limit)
+        if lane_state == "RISKY":
+            return max(0, self.config.risky_retry_limit)
+        return max(0, self.config.blocked_retry_limit)
+
+    def _smart_recover_probe(self, button: str) -> str:
+        probe_click_at = time.time()
+        self._click(button)
+        time.sleep(max(0.05, self.config.smart_recover_probe_wait_sec))
+
+        probe_text = self.capture_text()
+        if self.config.print_ocr_text:
+            print(f"[OCR-PROBE] {probe_text}")
+        if probe_text.strip():
+            self.last_nonempty_ocr_at = time.time()
+
+        probe_normalized = self._normalize(probe_text)
+        self._sync_state_from_text(probe_normalized)
+        self._touch_bite_presence(probe_normalized)
+
+        cast_kw = self._normalize(self.config.cast_keyword)
+        reel_kw = self._normalize(self.config.reel_keyword)
+        cast_hit = cast_kw and cast_kw in probe_normalized
+        reel_hit = reel_kw and reel_kw in probe_normalized
+
+        if reel_hit:
+            self._cast_once(button)
+            return "smart_recover(retrieved_then_cast)"
+        if cast_hit:
+            self.rod_casted = True
+            self.cast_timestamps.append(probe_click_at)
+            return "smart_recover(thrown_ok)"
+        if not self.rod_casted:
+            self._cast_once(button)
+            return "smart_recover(unknown_then_cast)"
+        return "smart_recover(unknown_keep)"
+
+    def _adjust_view(self, pitch_steps: int = 0, yaw_steps: int = 0) -> None:
+        dx = yaw_steps * self.config.adjustment_yaw_step_pixels
+        dy = -pitch_steps * self.config.adjustment_pitch_step_pixels
+        if dx == 0 and dy == 0:
+            return
+        pyautogui.moveRel(dx, dy, duration=0)
+        self.recovery_offsets["pitch"] += pitch_steps
+        self.recovery_offsets["yaw"] += yaw_steps
+        time.sleep(max(0.0, self.config.adjustment_settle_sec))
+
+    def _revert_last_adjustment(self, pitch_steps: int, yaw_steps: int) -> None:
+        self._adjust_view(-pitch_steps, -yaw_steps)
+        self.last_adjustment_note = f"revert({pitch_steps},{yaw_steps})"
+
+    def _next_recovery_adjustment(
+        self, lane: Optional[dict[str, float | str]] = None
+    ) -> tuple[int, int, str]:
+        if not self.recovery_plan or self.recovery_ladder_index >= len(self.recovery_plan):
+            self.recovery_plan = self._build_recovery_plan(lane)
+            self.recovery_ladder_index = 0
+
+        if self.recovery_ladder_index < len(self.recovery_plan):
+            pitch_delta, yaw_delta, label = self.recovery_plan[self.recovery_ladder_index]
+            self.recovery_ladder_index += 1
+            return pitch_delta, yaw_delta, label
+
+        reset_pitch = -self.recovery_offsets["pitch"]
+        reset_yaw = -self.recovery_offsets["yaw"]
+        self.recovery_ladder_index = 0
+        self.recovery_plan = []
+        return reset_pitch, reset_yaw, "reset_to_base"
+
+    def _cast_for_recovery(self, button: str) -> bool:
+        if self.rod_casted:
+            return self._recast(button, require_ready_lane=True)
+        return self._cast_once(button, require_ready_lane=True)
 
     def _run_recover_action(self, action: str, reason_tag: str) -> None:
         button = "left" if self.config.default_button == "left" else "right"
 
         if action == "recast":
-            self._recast(button)
-            recover_note = "recast"
-        elif action == "smart_recover":
-            probe_click_at = time.time()
-            self._click(button)
-            time.sleep(max(0.05, self.config.smart_recover_probe_wait_sec))
-
-            probe_text = self.capture_text()
-            if self.config.print_ocr_text:
-                print(f"[OCR-PROBE] {probe_text}")
-            if probe_text.strip():
-                self.last_nonempty_ocr_at = time.time()
-
-            probe_normalized = self._normalize(probe_text)
-            self._sync_state_from_text(probe_normalized)
-            self._touch_bite_presence(probe_normalized)
-
-            cast_kw = self._normalize(self.config.cast_keyword)
-            reel_kw = self._normalize(self.config.reel_keyword)
-            cast_hit = cast_kw and cast_kw in probe_normalized
-            reel_hit = reel_kw and reel_kw in probe_normalized
-
-            if reel_hit:
-                self._cast_once(button)
-                recover_note = "smart_recover(retrieved_then_cast)"
-            elif cast_hit:
-                self.rod_casted = True
-                self.cast_timestamps.append(probe_click_at)
-                recover_note = "smart_recover(thrown_ok)"
-            elif not self.rod_casted:
-                self._cast_once(button)
-                recover_note = "smart_recover(unknown_then_cast)"
+            if self._recast(button, require_ready_lane=True):
+                recover_note = "recast"
             else:
-                recover_note = "smart_recover(unknown_keep)"
+                recover_note = "recast(blocked_no_cast)"
+        elif action == "smart_recover":
+            lane = self._lane_snapshot()
+            lane_state = str(lane["lane_state"])
+            lane_score = float(lane["clearance_score"])
+            retry_limit = self._retry_limit_for_lane(lane_state)
+
+            if lane_state == "BLOCKED":
+                ready_lane = self._ensure_cast_lane_ready()
+                lane = self._lane_snapshot()
+                lane_state = str(lane["lane_state"])
+                lane_score = float(lane["clearance_score"])
+                if ready_lane == "BLOCKED":
+                    recover_note = (
+                        "smart_recover(blocked_gate,"
+                        f"state={lane_state}:{lane_score:.2f})"
+                    )
+                    print(f"[RECOVER] {reason_tag} action={recover_note}")
+                    return
+
+            if self.recovery_retry_count < retry_limit:
+                self.recovery_retry_count += 1
+                recover_note = (
+                    f"{self._smart_recover_probe(button)} lane={lane_state} "
+                    f"retry={self.recovery_retry_count}/{retry_limit}"
+                )
+            else:
+                pitch_delta, yaw_delta, label = self._next_recovery_adjustment(lane)
+                self._adjust_view(pitch_delta, yaw_delta)
+                updated_lane = self._lane_snapshot()
+                self.recovery_retry_count = 0
+                casted = self._cast_for_recovery(button)
+                recover_note = (
+                    "smart_recover(adjust="
+                    f"{label},before={lane_state}:{lane_score:.2f},"
+                    f"after={updated_lane['lane_state']}:{updated_lane['clearance_score']:.2f},"
+                    f"casted={casted})"
+                )
+                self.last_adjustment_note = label
         elif action == "cast_if_idle":
             if not self.rod_casted:
-                self._cast_once(button)
-                recover_note = "cast_if_idle(casted)"
+                casted = self._cast_once(button, require_ready_lane=True)
+                recover_note = "cast_if_idle(casted)" if casted else "cast_if_idle(blocked)"
             else:
                 recover_note = "cast_if_idle(skip_already_casted)"
         else:
@@ -610,6 +1009,7 @@ class FishingAgent:
         if now - self.last_no_bite_recover_at < cooldown:
             return
 
+        self._mark_current_angle_failure()
         self._run_recover_action(self.config.no_bite_timeout_action, "no_bite_timeout")
         self.last_no_bite_recover_at = now
         self.last_bite_seen_at = now
@@ -643,6 +1043,10 @@ class FishingAgent:
         normalized_text = self._normalize(text)
         self._sync_state_from_text(normalized_text)
         self._touch_bite_presence(normalized_text)
+        if not text.strip():
+            lane = self._lane_snapshot()
+            self.last_lane_state = str(lane["lane_state"])
+            self.last_lane_score = float(lane["clearance_score"])
 
         for kw in self.config.keywords:
             target = kw if self.config.case_sensitive else kw.lower()
@@ -657,10 +1061,10 @@ class FishingAgent:
             button = self._select_button(normalized_text)
 
             if action == "recast":
-                self._recast(button)
+                self._recast(button, require_ready_lane=True)
             elif action == "cast_if_idle":
                 if not self.rod_casted:
-                    self._cast_once(button)
+                    self._cast_once(button, require_ready_lane=True)
             elif action == "reel_only":
                 self._reel_once(button)
             else:
@@ -684,8 +1088,10 @@ class FishingAgent:
         start_button = "left" if self.config.default_button == "left" else "right"
         if not self.rod_casted:
             print("[BOOT] no cast state detected, casting once.")
-            self._cast_once(start_button)
-            time.sleep(self.config.recast_delay_sec)
+            if self._cast_once(start_button, require_ready_lane=True):
+                time.sleep(self.config.recast_delay_sec)
+            else:
+                print("[BOOT] lane stayed blocked, skipped initial cast.")
 
         while True:
             try:
