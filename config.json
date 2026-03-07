@@ -49,6 +49,10 @@
                                 "height":  0.20
                             },
     "bobber_min_score":  0.55,
+    "blocked_scan_trigger_count":  2,
+    "blocked_probe_min_improvement":  0.08,
+    "blocked_scan_yaw_steps":  6,
+    "blocked_scan_pitch_steps":  4,
     "cast_keyword":  "Bobber thrown",
     "reel_keyword":  "Bobber retrieved",
     "interval_sec":  0.08,

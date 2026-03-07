@@ -46,6 +46,7 @@ class FishingAgent:
         self.recovery_offsets = {"pitch": 0, "yaw": 0}
         self.recovery_plan: list[tuple[int, int, str]] = []
         self.angle_failure_counts: dict[tuple[int, int], int] = {}
+        self.blocked_streak = 0
         self.last_bobber_visible = False
         self.last_bobber_score = 0.0
 
@@ -717,6 +718,26 @@ class FishingAgent:
         start_lane_state = lane_state
         attempts = 0
 
+        if lane_state == "BLOCKED":
+            self.blocked_streak += 1
+        else:
+            self.blocked_streak = 0
+
+        if (
+            lane_state == "BLOCKED"
+            and self.blocked_streak >= self.config.blocked_scan_trigger_count
+        ) or (
+            lane_state == "BLOCKED"
+            and self._best_move_score(lane) < self.config.blocked_probe_min_improvement
+        ):
+            improved, scanned_lane, scan_label = self._scan_for_open_lane(lane)
+            self.last_adjustment_note = scan_label
+            lane = scanned_lane
+            lane_state = str(lane["lane_state"])
+            if improved and lane_state != "BLOCKED":
+                self.blocked_streak = 0
+                return lane_state
+
         while (
             lane_state == "BLOCKED" or self._current_angle_is_bad()
         ) and attempts < max(1, self.config.blocked_adjustment_max_steps):
@@ -736,6 +757,7 @@ class FishingAgent:
         if lane_state == "BLOCKED" or self._current_angle_is_bad():
             self.last_adjustment_note = f"blocked_after_{attempts}_adjustments"
         elif attempts > 0:
+            self.blocked_streak = 0
             self.last_adjustment_note = f"{self.last_adjustment_note}->ready:{lane_state}"
 
         return lane_state
@@ -816,6 +838,7 @@ class FishingAgent:
         self.recovery_ladder_index = 0
         self.recovery_plan = []
         self.recovery_offsets = {"pitch": 0, "yaw": 0}
+        self.blocked_streak = 0
         self.last_adjustment_note = f"reset:{reason}"
         self.angle_failure_counts[self._current_angle_key()] = 0
 
@@ -861,6 +884,90 @@ class FishingAgent:
             (0, -1, "fallback_yaw_left"),
         ]
         return primary + fallback
+
+    def _best_move_score(self, lane: Optional[dict[str, float | str]] = None) -> float:
+        lane = lane or {}
+        return max(
+            float(lane.get("move_pitch_up_score", 0.0)),
+            float(lane.get("move_pitch_down_score", 0.0)),
+            float(lane.get("move_yaw_left_score", 0.0)),
+            float(lane.get("move_yaw_right_score", 0.0)),
+        )
+
+    def _scan_for_open_lane(
+        self, base_lane: Optional[dict[str, float | str]] = None
+    ) -> tuple[bool, dict[str, float | str], str]:
+        base_lane = base_lane or self._lane_snapshot()
+        base_score = float(base_lane["clearance_score"])
+        best_lane = base_lane
+        best_score = base_score
+        best_adjustment = (0, 0, "scan_none")
+
+        # Broad blocked-lane scan: pick the more promising side first, then
+        # sweep continuously in that direction before trying the opposite side.
+        yaw_left_score = float(base_lane.get("move_yaw_left_score", 0.0))
+        yaw_right_score = float(base_lane.get("move_yaw_right_score", 0.0))
+        yaw_sign = -1 if yaw_left_score >= yaw_right_score else 1
+
+        pitch_up_score = float(base_lane.get("move_pitch_up_score", 0.0))
+        pitch_down_score = float(base_lane.get("move_pitch_down_score", 0.0))
+        pitch_signs = [1, -1] if pitch_up_score >= pitch_down_score else [-1, 1]
+
+        yaw_base_unit = 4
+        pitch_base_unit = 3
+
+        moved_yaw_total = 0
+        for magnitude in range(1, max(1, self.config.blocked_scan_yaw_steps) + 1):
+            yaw_steps = yaw_sign * yaw_base_unit
+            self._adjust_view(0, yaw_steps)
+            moved_yaw_total += yaw_steps
+            lane = self._lane_snapshot()
+            score = float(lane["clearance_score"])
+            if score > best_score:
+                best_lane = lane
+                best_score = score
+                best_adjustment = (
+                    0,
+                    moved_yaw_total,
+                    f"scan_yaw_{'left' if yaw_sign < 0 else 'right'}_{magnitude}",
+                )
+
+        if best_score >= base_score + self.config.blocked_probe_min_improvement:
+            best_pitch_steps, best_yaw_steps, label = best_adjustment
+            if moved_yaw_total != best_yaw_steps:
+                self._adjust_view(0, best_yaw_steps - moved_yaw_total)
+            lane = self._lane_snapshot()
+            return True, lane, label
+
+        if moved_yaw_total != 0:
+            self._adjust_view(0, -moved_yaw_total)
+
+        for sign in pitch_signs:
+            moved_pitch_total = 0
+            for magnitude in range(1, max(1, self.config.blocked_scan_pitch_steps) + 1):
+                pitch_steps = sign * pitch_base_unit
+                self._adjust_view(pitch_steps, 0)
+                moved_pitch_total += pitch_steps
+                lane = self._lane_snapshot()
+                score = float(lane["clearance_score"])
+                if score > best_score:
+                    best_lane = lane
+                    best_score = score
+                    best_adjustment = (
+                        moved_pitch_total,
+                        0,
+                        f"scan_pitch_{'up' if sign > 0 else 'down'}_{magnitude}",
+                    )
+            if best_score >= base_score + self.config.blocked_probe_min_improvement:
+                best_pitch_steps, best_yaw_steps, label = best_adjustment
+                if moved_pitch_total != best_pitch_steps:
+                    self._adjust_view(best_pitch_steps - moved_pitch_total, 0)
+                lane = self._lane_snapshot()
+                return True, lane, label
+            if moved_pitch_total != 0:
+                self._adjust_view(-moved_pitch_total, 0)
+
+        return False, best_lane, "scan_no_improvement"
 
     def _retry_limit_for_lane(self, lane_state: str) -> int:
         if lane_state == "CLEAR":

@@ -58,6 +58,7 @@ agent.run()
 - `center_lane_region_ratio`, `center_lane_clearance_low_threshold`, and `center_lane_clearance_high_threshold` let you classify the cast lane as `CLEAR`, `RISKY`, or `BLOCKED`.
 - The center-lane debug score now emphasizes water-vs-non-water occupancy in the middle corridor, with edge metrics kept as supporting signals.
 - Recovery adjustments now inspect both water distribution and obstacle distribution in the upper, lower, left, and right parts of the center lane, then try the opposite direction first.
+- If the lane stays `BLOCKED` for repeated checks or all four directional scores stay weak, the agent falls back to broader yaw and pitch scans to look for a usable opening.
 - `clear_retry_limit`, `risky_retry_limit`, `blocked_retry_limit`, and the adjustment pixel settings drive the basic recovery ladder before angle-search logic gets more advanced.
 - `bad_angle_failure_threshold` and `bobber_region_ratio` add a simple bad-angle memory and a bobber-candidate debug signal so obviously useless clear angles are less likely to repeat.
 - Set `debug_window` to `true` to open an OpenCV preview showing the full capture, OCR ROI, water ROI, and basic feature scores.

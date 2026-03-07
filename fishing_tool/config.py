@@ -49,6 +49,10 @@ class FishingConfig:
     bad_angle_failure_threshold: int
     bobber_region_ratio: Optional[dict[str, float]]
     bobber_min_score: float
+    blocked_scan_trigger_count: int
+    blocked_probe_min_improvement: float
+    blocked_scan_yaw_steps: int
+    blocked_scan_pitch_steps: int
     debug_window: bool
     debug_window_scale: float
 
@@ -108,6 +112,10 @@ class FishingConfig:
             bad_angle_failure_threshold=int(data.get("bad_angle_failure_threshold", 1)),
             bobber_region_ratio=data.get("bobber_region_ratio"),
             bobber_min_score=float(data.get("bobber_min_score", 0.55)),
+            blocked_scan_trigger_count=int(data.get("blocked_scan_trigger_count", 2)),
+            blocked_probe_min_improvement=float(data.get("blocked_probe_min_improvement", 0.08)),
+            blocked_scan_yaw_steps=int(data.get("blocked_scan_yaw_steps", 6)),
+            blocked_scan_pitch_steps=int(data.get("blocked_scan_pitch_steps", 4)),
             debug_window=bool(data.get("debug_window", False)),
             debug_window_scale=float(data.get("debug_window_scale", 0.75)),
         )
