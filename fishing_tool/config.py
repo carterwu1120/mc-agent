@@ -36,6 +36,9 @@ class FishingConfig:
     ocr_empty_recover_cooldown_sec: float
     smart_recover_probe_wait_sec: float
     water_region_ratio: Optional[dict[str, float]]
+    center_lane_region_ratio: Optional[dict[str, float]]
+    center_lane_clearance_low_threshold: float
+    center_lane_clearance_high_threshold: float
     debug_window: bool
     debug_window_scale: float
 
@@ -78,6 +81,13 @@ class FishingConfig:
             ocr_empty_recover_cooldown_sec=float(data.get("ocr_empty_recover_cooldown_sec", 20.0)),
             smart_recover_probe_wait_sec=float(data.get("smart_recover_probe_wait_sec", 0.35)),
             water_region_ratio=data.get("water_region_ratio"),
+            center_lane_region_ratio=data.get("center_lane_region_ratio"),
+            center_lane_clearance_low_threshold=float(
+                data.get("center_lane_clearance_low_threshold", 0.42)
+            ),
+            center_lane_clearance_high_threshold=float(
+                data.get("center_lane_clearance_high_threshold", 0.62)
+            ),
             debug_window=bool(data.get("debug_window", False)),
             debug_window_scale=float(data.get("debug_window_scale", 0.75)),
         )

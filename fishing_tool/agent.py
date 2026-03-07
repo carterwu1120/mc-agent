@@ -87,6 +87,11 @@ class FishingAgent:
             return None
         return self._sub_region(self._window_region(), self.config.water_region_ratio)
 
+    def _center_lane_region(self) -> Optional[dict[str, int]]:
+        if not self.config.center_lane_region_ratio:
+            return None
+        return self._sub_region(self._window_region(), self.config.center_lane_region_ratio)
+
     def _sub_region(
         self, base: dict[str, int], ratio: Optional[dict[str, float]]
     ) -> dict[str, int]:
@@ -181,6 +186,112 @@ class FishingAgent:
             "edge_density": edge_density,
         }
 
+    def _compute_center_lane_features(self, img: Optional[np.ndarray]) -> dict[str, float]:
+        if img is None or img.size == 0:
+            return {
+                "clearance_score": 0.0,
+                "center_water_ratio": 0.0,
+                "center_nonwater_occupancy": 0.0,
+                "connected_block_ratio": 0.0,
+                "upper_open_ratio": 0.0,
+                "lower_nonwater_ratio": 0.0,
+                "edge_density": 0.0,
+                "vertical_edge_ratio": 0.0,
+                "horizontal_edge_ratio": 0.0,
+                "lane_state": "BLOCKED",
+            }
+
+        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        water_lower = np.array([80, 25, 25], dtype=np.uint8)
+        water_upper = np.array([130, 255, 255], dtype=np.uint8)
+        water_mask = cv2.inRange(hsv, water_lower, water_upper)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        water_mask = cv2.morphologyEx(water_mask, cv2.MORPH_OPEN, kernel)
+        water_mask = cv2.morphologyEx(water_mask, cv2.MORPH_CLOSE, kernel)
+        nonwater_mask = cv2.bitwise_not(water_mask)
+
+        h, w = gray.shape
+        core_x1 = int(w * 0.20)
+        core_x2 = int(w * 0.80)
+        core_y1 = int(h * 0.18)
+        core_y2 = int(h * 0.88)
+        core_water = water_mask[core_y1:core_y2, core_x1:core_x2]
+        core_nonwater = nonwater_mask[core_y1:core_y2, core_x1:core_x2]
+
+        center_water_ratio = float(np.count_nonzero(core_water)) / float(core_water.size)
+        center_nonwater_occupancy = 1.0 - center_water_ratio
+
+        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(core_nonwater, connectivity=8)
+        largest_component = 0
+        for label_idx in range(1, num_labels):
+            largest_component = max(largest_component, int(stats[label_idx, cv2.CC_STAT_AREA]))
+        connected_block_ratio = float(largest_component) / float(core_nonwater.size)
+
+        upper_band = nonwater_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
+        lower_band = nonwater_mask[int(h * 0.55) :, core_x1:core_x2]
+        upper_open_ratio = 1.0 - (
+            float(np.count_nonzero(upper_band)) / float(upper_band.size)
+            if upper_band.size
+            else 0.0
+        )
+        lower_nonwater_ratio = (
+            float(np.count_nonzero(lower_band)) / float(lower_band.size)
+            if lower_band.size
+            else 0.0
+        )
+
+        edges = cv2.Canny(blurred, 50, 150)
+        edge_density = float(np.count_nonzero(edges)) / float(edges.size)
+
+        grad_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+        abs_grad_x = np.abs(grad_x)
+        abs_grad_y = np.abs(grad_y)
+
+        grad_energy = float(np.sum(abs_grad_x) + np.sum(abs_grad_y)) + 1e-6
+        vertical_edge_ratio = float(np.sum(abs_grad_x)) / grad_energy
+        horizontal_edge_ratio = float(np.sum(abs_grad_y)) / grad_energy
+
+        obstacle_score = min(
+            1.0,
+            0.35 * center_nonwater_occupancy
+            + 0.35 * min(connected_block_ratio / 0.30, 1.0)
+            + 0.30 * lower_nonwater_ratio,
+        )
+        openness_score = min(
+            1.0,
+            0.60 * center_water_ratio
+            + 0.40 * upper_open_ratio,
+        )
+        orientation_penalty = 0.10 * max(0.0, horizontal_edge_ratio - 0.62)
+        clearance_score = max(
+            0.0,
+            min(1.0, 0.55 * openness_score + 0.45 * (1.0 - obstacle_score) - orientation_penalty),
+        )
+        if clearance_score >= self.config.center_lane_clearance_high_threshold:
+            lane_state = "CLEAR"
+        elif clearance_score >= self.config.center_lane_clearance_low_threshold:
+            lane_state = "RISKY"
+        else:
+            lane_state = "BLOCKED"
+
+        return {
+            "clearance_score": clearance_score,
+            "center_water_ratio": center_water_ratio,
+            "center_nonwater_occupancy": center_nonwater_occupancy,
+            "connected_block_ratio": connected_block_ratio,
+            "upper_open_ratio": upper_open_ratio,
+            "lower_nonwater_ratio": lower_nonwater_ratio,
+            "edge_density": edge_density,
+            "vertical_edge_ratio": vertical_edge_ratio,
+            "horizontal_edge_ratio": horizontal_edge_ratio,
+            "lane_state": lane_state,
+        }
+
     def _draw_region_box(
         self,
         frame: np.ndarray,
@@ -255,16 +366,27 @@ class FishingAgent:
         window_img = self._capture_region(base_region)
         focus_region = self._focus_region()
         water_region = self._water_region()
+        center_lane_region = self._center_lane_region()
 
         focus_img = self._capture_region(focus_region)
         water_img = self._capture_region(water_region) if water_region else None
+        center_lane_img = self._capture_region(center_lane_region) if center_lane_region else None
         features = self._compute_water_features(water_img)
+        center_lane = self._compute_center_lane_features(center_lane_img)
 
         main = cv2.cvtColor(window_img, cv2.COLOR_BGRA2BGR)
         self._draw_region_box(main, base_region, focus_region, (0, 255, 255), "OCR ROI")
         self._draw_region_box(main, base_region, water_region, (255, 180, 0), "Water ROI")
+        lane_state = center_lane["lane_state"]
+        if lane_state == "CLEAR":
+            lane_color = (0, 220, 0)
+        elif lane_state == "RISKY":
+            lane_color = (0, 215, 255)
+        else:
+            lane_color = (0, 0, 255)
+        self._draw_region_box(main, base_region, center_lane_region, lane_color, "Center Lane")
 
-        panel_width = 420
+        panel_width = 620
         canvas_height = max(main.shape[0], 720)
         canvas = np.zeros((canvas_height, main.shape[1] + panel_width, 3), dtype=np.uint8)
         canvas[: main.shape[0], : main.shape[1]] = main
@@ -284,6 +406,13 @@ class FishingAgent:
             (180, 110),
             "Water",
         )
+        self._draw_preview_tile(
+            canvas,
+            center_lane_img,
+            (main.shape[1] + 420, 50),
+            (180, 110),
+            "Center Lane",
+        )
 
         lines = [
             f"rod_casted: {self.rod_casted}",
@@ -291,20 +420,39 @@ class FishingAgent:
             f"water_score: {features['water_score']:.2f}",
             f"blue_ratio: {features['blue_ratio']:.2f}",
             f"brightness_std: {features['brightness_std']:.1f}",
-            f"edge_density: {features['edge_density']:.2f}",
+            f"water_edge_density: {features['edge_density']:.2f}",
+            f"center_clearance: {center_lane['clearance_score']:.2f}",
+            f"center_lane: {lane_state}",
+            f"center_water_ratio: {center_lane['center_water_ratio']:.2f}",
+            f"center_nonwater_occ: {center_lane['center_nonwater_occupancy']:.2f}",
+            f"connected_block_ratio: {center_lane['connected_block_ratio']:.2f}",
+            f"upper_open_ratio: {center_lane['upper_open_ratio']:.2f}",
+            f"lower_nonwater_ratio: {center_lane['lower_nonwater_ratio']:.2f}",
+            f"center_edge_density: {center_lane['edge_density']:.2f}",
+            f"vertical_edge_ratio: {center_lane['vertical_edge_ratio']:.2f}",
+            f"horizontal_edge_ratio: {center_lane['horizontal_edge_ratio']:.2f}",
+            f"lane_low_threshold: {self.config.center_lane_clearance_low_threshold:.2f}",
+            f"lane_high_threshold: {self.config.center_lane_clearance_high_threshold:.2f}",
             f"fail gap sec: {time.time() - self.last_bite_seen_at:.1f}",
             "ESC/q closes preview",
         ]
 
         y = 220
         for line in lines:
+            color = (230, 230, 230)
+            if "CLEAR" in line:
+                color = (100, 255, 100)
+            elif "RISKY" in line:
+                color = (80, 220, 255)
+            elif "BLOCKED" in line:
+                color = (120, 120, 255)
             cv2.putText(
                 canvas,
                 line,
                 (main.shape[1] + 20, y),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.58,
-                (230, 230, 230),
+                color,
                 1,
                 cv2.LINE_AA,
             )

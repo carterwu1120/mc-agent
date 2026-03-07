@@ -26,6 +26,14 @@
                                "width":  0.30,
                                "height":  0.20
                            },
+    "center_lane_region_ratio":  {
+                                     "x":  0.42,
+                                     "y":  0.42,
+                                     "width":  0.16,
+                                     "height":  0.35
+                                 },
+    "center_lane_clearance_low_threshold":  0.42,
+    "center_lane_clearance_high_threshold":  0.62,
     "cast_keyword":  "Bobber thrown",
     "reel_keyword":  "Bobber retrieved",
     "interval_sec":  0.08,

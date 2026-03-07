@@ -55,6 +55,8 @@ agent.run()
 
 - `focus_region_ratio` lets you monitor only part of a window (e.g., right-bottom subtitle area).
 - `water_region_ratio` can target the cast landing area for simple water-feature debugging.
+- `center_lane_region_ratio`, `center_lane_clearance_low_threshold`, and `center_lane_clearance_high_threshold` let you classify the cast lane as `CLEAR`, `RISKY`, or `BLOCKED`.
+- The center-lane debug score now emphasizes water-vs-non-water occupancy in the middle corridor, with edge metrics kept as supporting signals.
 - Set `debug_window` to `true` to open an OpenCV preview showing the full capture, OCR ROI, water ROI, and basic feature scores.
 - Real-time behavior is polling-based; use `interval_sec` around `0.05` to `0.2`.
 - Check game/platform rules before using automation.
