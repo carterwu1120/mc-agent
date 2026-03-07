@@ -50,6 +50,11 @@ class FishingAgent:
                 show_log=False,
             )
 
+    def _capture_region(self, region: dict[str, int]) -> np.ndarray:
+        with mss.mss() as sct:
+            shot = sct.grab(region)
+        return np.array(shot)
+
     def _normalize(self, text: str) -> str:
         if self.config.case_sensitive:
             return text
@@ -75,7 +80,16 @@ class FishingAgent:
 
     def _focus_region(self) -> dict[str, int]:
         base = self._window_region()
-        ratio = self.config.focus_region_ratio
+        return self._sub_region(base, self.config.focus_region_ratio)
+
+    def _water_region(self) -> Optional[dict[str, int]]:
+        if not self.config.water_region_ratio:
+            return None
+        return self._sub_region(self._window_region(), self.config.water_region_ratio)
+
+    def _sub_region(
+        self, base: dict[str, int], ratio: Optional[dict[str, float]]
+    ) -> dict[str, int]:
         if not ratio:
             return base
 
@@ -121,9 +135,7 @@ class FishingAgent:
 
     def capture_text(self) -> str:
         region = self._focus_region()
-        with mss.mss() as sct:
-            shot = sct.grab(region)
-        img = np.array(shot)
+        img = self._capture_region(region)
 
         if self.config.ocr_engine == "easyocr":
             texts = self._ocr_with_easyocr(img)
@@ -131,6 +143,186 @@ class FishingAgent:
             texts = self._ocr_with_paddle(img)
 
         return " ".join(texts).strip()
+
+    def _compute_water_features(self, img: Optional[np.ndarray]) -> dict[str, float]:
+        if img is None or img.size == 0:
+            return {
+                "water_score": 0.0,
+                "blue_ratio": 0.0,
+                "brightness_std": 0.0,
+                "edge_density": 0.0,
+            }
+
+        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        lower = np.array([80, 30, 30], dtype=np.uint8)
+        upper = np.array([130, 255, 255], dtype=np.uint8)
+        blue_mask = cv2.inRange(hsv, lower, upper)
+        blue_ratio = float(np.count_nonzero(blue_mask)) / float(blue_mask.size)
+
+        value_channel = hsv[:, :, 2]
+        brightness_std = float(np.std(value_channel))
+
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = float(np.count_nonzero(edges)) / float(edges.size)
+
+        water_score = min(
+            1.0,
+            0.65 * blue_ratio
+            + 0.25 * min(brightness_std / 64.0, 1.0)
+            + 0.10 * min(edge_density / 0.2, 1.0),
+        )
+
+        return {
+            "water_score": water_score,
+            "blue_ratio": blue_ratio,
+            "brightness_std": brightness_std,
+            "edge_density": edge_density,
+        }
+
+    def _draw_region_box(
+        self,
+        frame: np.ndarray,
+        base: dict[str, int],
+        region: Optional[dict[str, int]],
+        color: tuple[int, int, int],
+        label: str,
+    ) -> None:
+        if region is None:
+            return
+
+        x1 = max(0, region["left"] - base["left"])
+        y1 = max(0, region["top"] - base["top"])
+        x2 = min(frame.shape[1] - 1, x1 + region["width"])
+        y2 = min(frame.shape[0] - 1, y1 + region["height"])
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(
+            frame,
+            label,
+            (x1, max(18, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    def _draw_preview_tile(
+        self,
+        canvas: np.ndarray,
+        img: Optional[np.ndarray],
+        top_left: tuple[int, int],
+        size: tuple[int, int],
+        title: str,
+    ) -> None:
+        x, y = top_left
+        width, height = size
+        cv2.rectangle(canvas, (x, y), (x + width, y + height), (70, 70, 70), 1)
+        cv2.putText(
+            canvas,
+            title,
+            (x, max(20, y - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (220, 220, 220),
+            2,
+            cv2.LINE_AA,
+        )
+
+        if img is None or img.size == 0:
+            cv2.putText(
+                canvas,
+                "N/A",
+                (x + 10, y + height // 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (180, 180, 180),
+                2,
+                cv2.LINE_AA,
+            )
+            return
+
+        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        preview = cv2.resize(bgr, (width, height), interpolation=cv2.INTER_AREA)
+        canvas[y : y + height, x : x + width] = preview
+
+    def _show_debug_window(self, text: str) -> None:
+        if not self.config.debug_window:
+            return
+
+        base_region = self._window_region()
+        window_img = self._capture_region(base_region)
+        focus_region = self._focus_region()
+        water_region = self._water_region()
+
+        focus_img = self._capture_region(focus_region)
+        water_img = self._capture_region(water_region) if water_region else None
+        features = self._compute_water_features(water_img)
+
+        main = cv2.cvtColor(window_img, cv2.COLOR_BGRA2BGR)
+        self._draw_region_box(main, base_region, focus_region, (0, 255, 255), "OCR ROI")
+        self._draw_region_box(main, base_region, water_region, (255, 180, 0), "Water ROI")
+
+        panel_width = 420
+        canvas_height = max(main.shape[0], 720)
+        canvas = np.zeros((canvas_height, main.shape[1] + panel_width, 3), dtype=np.uint8)
+        canvas[: main.shape[0], : main.shape[1]] = main
+        cv2.rectangle(
+            canvas,
+            (main.shape[1], 0),
+            (canvas.shape[1] - 1, canvas.shape[0] - 1),
+            (40, 40, 40),
+            -1,
+        )
+
+        self._draw_preview_tile(canvas, focus_img, (main.shape[1] + 20, 50), (180, 110), "OCR")
+        self._draw_preview_tile(
+            canvas,
+            water_img,
+            (main.shape[1] + 220, 50),
+            (180, 110),
+            "Water",
+        )
+
+        lines = [
+            f"rod_casted: {self.rod_casted}",
+            f"last text: {text[:36] or '(empty)'}",
+            f"water_score: {features['water_score']:.2f}",
+            f"blue_ratio: {features['blue_ratio']:.2f}",
+            f"brightness_std: {features['brightness_std']:.1f}",
+            f"edge_density: {features['edge_density']:.2f}",
+            f"fail gap sec: {time.time() - self.last_bite_seen_at:.1f}",
+            "ESC/q closes preview",
+        ]
+
+        y = 220
+        for line in lines:
+            cv2.putText(
+                canvas,
+                line,
+                (main.shape[1] + 20, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.58,
+                (230, 230, 230),
+                1,
+                cv2.LINE_AA,
+            )
+            y += 34
+
+        scale = max(0.2, self.config.debug_window_scale)
+        resized = cv2.resize(
+            canvas,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_AREA,
+        )
+        cv2.imshow("Fishing Agent Debug", resized)
+        key = cv2.waitKey(1) & 0xFF
+        if key in (27, ord("q")):
+            self.config.debug_window = False
+            cv2.destroyWindow("Fishing Agent Debug")
 
     def _select_button(self, normalized_text: str) -> str:
         for key, button in self.config.button_rules.items():
@@ -295,6 +487,7 @@ class FishingAgent:
         text = self.capture_text()
         if self.config.print_ocr_text:
             print(f"[OCR] {text}")
+        self._show_debug_window(text)
 
         if text.strip():
             self.last_nonempty_ocr_at = time.time()
@@ -364,6 +557,8 @@ class FishingAgent:
                 time.sleep(self.config.interval_sec)
             except KeyboardInterrupt:
                 self._emit_stats(final=True)
+                if self.config.debug_window:
+                    cv2.destroyAllWindows()
                 print("Stopped.")
                 break
             except Exception as e:

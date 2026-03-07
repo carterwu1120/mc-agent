@@ -20,6 +20,12 @@
                                "width":  0.41,
                                "height":  0.32
                            },
+    "water_region_ratio":  {
+                               "x":  0.35,
+                               "y":  0.45,
+                               "width":  0.30,
+                               "height":  0.20
+                           },
     "cast_keyword":  "Bobber thrown",
     "reel_keyword":  "Bobber retrieved",
     "interval_sec":  0.08,
@@ -45,5 +51,7 @@
     "ocr_empty_timeout_sec":  5,
     "ocr_empty_timeout_action":  "smart_recover",
     "ocr_empty_recover_cooldown_sec":  10,
-    "smart_recover_probe_wait_sec":  0.35
+    "smart_recover_probe_wait_sec":  0.35,
+    "debug_window":  true,
+    "debug_window_scale":  0.75
 }

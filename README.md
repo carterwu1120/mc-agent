@@ -54,5 +54,7 @@ agent.run()
 ## Notes
 
 - `focus_region_ratio` lets you monitor only part of a window (e.g., right-bottom subtitle area).
+- `water_region_ratio` can target the cast landing area for simple water-feature debugging.
+- Set `debug_window` to `true` to open an OpenCV preview showing the full capture, OCR ROI, water ROI, and basic feature scores.
 - Real-time behavior is polling-based; use `interval_sec` around `0.05` to `0.2`.
 - Check game/platform rules before using automation.
