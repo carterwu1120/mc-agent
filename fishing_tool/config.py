@@ -53,6 +53,13 @@ class FishingConfig:
     blocked_probe_min_improvement: float
     blocked_scan_yaw_steps: int
     blocked_scan_pitch_steps: int
+    refinement_obstacle_threshold: float
+    refinement_max_steps: int
+    local_refine_max_steps: int
+    failed_cast_pitch_up_steps: int
+    viable_water_center_threshold: float
+    viable_water_direction_threshold: float
+    refinement_water_target: float
     debug_window: bool
     debug_window_scale: float
 
@@ -114,8 +121,21 @@ class FishingConfig:
             bobber_min_score=float(data.get("bobber_min_score", 0.55)),
             blocked_scan_trigger_count=int(data.get("blocked_scan_trigger_count", 2)),
             blocked_probe_min_improvement=float(data.get("blocked_probe_min_improvement", 0.08)),
-            blocked_scan_yaw_steps=int(data.get("blocked_scan_yaw_steps", 6)),
+            blocked_scan_yaw_steps=int(data.get("blocked_scan_yaw_steps", 10)),
             blocked_scan_pitch_steps=int(data.get("blocked_scan_pitch_steps", 4)),
+            refinement_obstacle_threshold=float(
+                data.get("refinement_obstacle_threshold", 0.32)
+            ),
+            refinement_max_steps=int(data.get("refinement_max_steps", 2)),
+            local_refine_max_steps=int(data.get("local_refine_max_steps", 6)),
+            failed_cast_pitch_up_steps=int(data.get("failed_cast_pitch_up_steps", 4)),
+            viable_water_center_threshold=float(
+                data.get("viable_water_center_threshold", 0.34)
+            ),
+            viable_water_direction_threshold=float(
+                data.get("viable_water_direction_threshold", 0.45)
+            ),
+            refinement_water_target=float(data.get("refinement_water_target", 0.52)),
             debug_window=bool(data.get("debug_window", False)),
             debug_window_scale=float(data.get("debug_window_scale", 0.75)),
         )
