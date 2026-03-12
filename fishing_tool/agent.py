@@ -50,6 +50,8 @@ class FishingAgent:
         self.last_bobber_visible = False
         self.last_bobber_score = 0.0
         self.optimized_angle_key: Optional[tuple[int, int]] = None
+        self.failed_pitch_forward_used = False
+        self.clear_casted_timeout_streak = 0
 
         if self.config.ocr_engine == "easyocr":
             self.reader = easyocr.Reader(config.languages, gpu=False)
@@ -772,6 +774,15 @@ class FishingAgent:
                 self.blocked_streak = 0
                 self.optimized_angle_key = None
                 return lane_state
+            if lane_state == "BLOCKED":
+                moved, water_lane, water_label = self._scan_for_most_water_and_forward(lane)
+                self.last_adjustment_note = water_label
+                lane = water_lane
+                lane_state = str(lane["lane_state"])
+                if moved and lane_state != "BLOCKED":
+                    self.blocked_streak = 0
+                    self.optimized_angle_key = None
+                    return lane_state
 
         if lane_state != "BLOCKED" and self._current_angle_is_bad():
             improved, pitched_lane, pitch_label = self._pitch_up_after_failed_cast(lane)
@@ -781,9 +792,19 @@ class FishingAgent:
             if improved and lane_state != "BLOCKED":
                 self.optimized_angle_key = self._current_angle_key()
                 return lane_state
+            if (
+                not improved
+                and pitch_label == "failed_pitch_up_limit"
+                and not self.failed_pitch_forward_used
+            ):
+                _, forwarded_lane, forward_label = self._forward_after_failed_pitch(lane)
+                self.last_adjustment_note = forward_label
+                lane = forwarded_lane
+                lane_state = str(lane["lane_state"])
+                self.failed_pitch_forward_used = True
 
         if (
-            lane_state != "BLOCKED"
+            lane_state == "RISKY"
             and self._current_angle_key() != self.optimized_angle_key
         ):
             refined, refined_lane, refine_label = self._local_refine_lane(lane)
@@ -950,6 +971,7 @@ class FishingAgent:
         self.angle_failure_counts[self._current_angle_key()] = 0
         if reason != "bite_seen":
             self.optimized_angle_key = None
+        self.failed_pitch_forward_used = False
 
     def _current_angle_key(self) -> tuple[int, int]:
         return (self.recovery_offsets["pitch"], self.recovery_offsets["yaw"])
@@ -958,6 +980,7 @@ class FishingAgent:
         key = self._current_angle_key()
         self.angle_failure_counts[key] = self.angle_failure_counts.get(key, 0) + 1
         self.optimized_angle_key = None
+        self.failed_pitch_forward_used = False
 
     def _current_angle_is_bad(self) -> bool:
         key = self._current_angle_key()
@@ -1018,6 +1041,20 @@ class FishingAgent:
             - 0.25 * float(lane.get("residual_obstacle_score", 0.0))
         )
 
+    def _lane_water_preference(self, lane: Optional[dict[str, float | str]] = None) -> float:
+        lane = lane or {}
+        directional_water = max(
+            float(lane.get("upper_water_ratio", 0.0)),
+            float(lane.get("lower_water_ratio", 0.0)),
+            float(lane.get("left_water_ratio", 0.0)),
+            float(lane.get("right_water_ratio", 0.0)),
+        )
+        return (
+            float(lane.get("center_water_ratio", 0.0))
+            + 0.40 * directional_water
+            - 0.20 * float(lane.get("residual_obstacle_score", 0.0))
+        )
+
     def _should_force_pitch_up(self, lane: Optional[dict[str, float | str]] = None) -> bool:
         lane = lane or {}
         lower_nonwater_ratio = float(lane.get("lower_nonwater_ratio", 0.0))
@@ -1065,7 +1102,23 @@ class FishingAgent:
         if str(base_lane.get("lane_state", "BLOCKED")) == "BLOCKED":
             return False, base_lane, "local_refine_skip_blocked"
 
-        move_name = self._preferred_move_name(base_lane)
+        lane_state = str(base_lane.get("lane_state", "BLOCKED"))
+        if lane_state == "CLEAR":
+            return False, base_lane, "local_refine_skip_clear"
+
+        if lane_state == "RISKY":
+            left_nonwater_ratio = float(base_lane.get("left_nonwater_ratio", 0.0))
+            right_nonwater_ratio = float(base_lane.get("right_nonwater_ratio", 0.0))
+            if left_nonwater_ratio > right_nonwater_ratio:
+                move_name = "yaw_right"
+            elif right_nonwater_ratio > left_nonwater_ratio:
+                move_name = "yaw_left"
+            else:
+                yaw_left_score = float(base_lane.get("move_yaw_left_score", 0.0))
+                yaw_right_score = float(base_lane.get("move_yaw_right_score", 0.0))
+                move_name = "yaw_left" if yaw_left_score >= yaw_right_score else "yaw_right"
+        else:
+            move_name = self._preferred_move_name(base_lane)
         direction_map = {
             "pitch_up": (1, 0),
             "pitch_down": (-1, 0),
@@ -1109,32 +1162,35 @@ class FishingAgent:
         base_lane = base_lane or self._lane_snapshot()
         if str(base_lane.get("lane_state", "BLOCKED")) == "BLOCKED":
             return False, base_lane, "failed_pitch_skip_blocked"
+        current_pitch_offset = self.recovery_offsets["pitch"]
+        if current_pitch_offset >= max(1, self.config.failed_cast_pitch_up_steps):
+            return False, base_lane, "failed_pitch_up_limit"
 
-        best_lane = base_lane
-        best_quality = self._lane_quality(base_lane)
-        best_offset = 0
-        moved_pitch = 0
+        self._adjust_view(1, 0)
+        lane = self._lane_snapshot()
+        lane_state = str(lane["lane_state"])
+        if lane_state == "BLOCKED":
+            self._revert_last_adjustment(1, 0)
+            return False, self._lane_snapshot(), "failed_pitch_up_blocked_revert"
 
-        for magnitude in range(1, max(1, self.config.failed_cast_pitch_up_steps) + 1):
-            self._adjust_view(1, 0)
-            moved_pitch += 1
-            lane = self._lane_snapshot()
-            if str(lane["lane_state"]) == "BLOCKED":
-                break
-            quality = self._lane_quality(lane)
-            if quality > best_quality + 0.01:
-                best_quality = quality
-                best_lane = lane
-                best_offset = magnitude
+        return True, lane, f"failed_pitch_up_step_{self.recovery_offsets['pitch']}"
 
-        if best_offset == 0:
-            if moved_pitch:
-                self._adjust_view(-moved_pitch, 0)
-            return False, self._lane_snapshot(), "failed_pitch_up_none"
-
-        if moved_pitch != best_offset:
-            self._adjust_view(best_offset - moved_pitch, 0)
-        return True, self._lane_snapshot(), f"failed_pitch_up_{best_offset}"
+    def _forward_after_failed_pitch(
+        self, base_lane: Optional[dict[str, float | str]] = None
+    ) -> tuple[bool, dict[str, float | str], str]:
+        base_lane = base_lane or self._lane_snapshot()
+        if self.rod_casted:
+            button = "left" if self.config.default_button == "left" else "right"
+            self._reel_once(button)
+            time.sleep(max(0.05, self.config.recast_delay_sec))
+        hold_sec = max(0.05, self.config.failed_cast_forward_sec)
+        pyautogui.keyDown("w")
+        try:
+            time.sleep(hold_sec)
+        finally:
+            pyautogui.keyUp("w")
+        time.sleep(max(0.0, self.config.adjustment_settle_sec))
+        return True, self._lane_snapshot(), f"failed_forward_w_{hold_sec:.2f}s"
 
     def _scan_for_open_lane(
         self, base_lane: Optional[dict[str, float | str]] = None
@@ -1258,6 +1314,67 @@ class FishingAgent:
                 self._adjust_view(-moved_pitch_total, 0)
         return None
 
+    def _scan_for_most_water_and_forward(
+        self, base_lane: Optional[dict[str, float | str]] = None
+    ) -> tuple[bool, dict[str, float | str], str]:
+        base_lane = base_lane or self._lane_snapshot()
+        best_lane = base_lane
+        best_water_score = self._lane_water_preference(base_lane)
+        best_adjustment = (0, 0, "water_base")
+
+        yaw_left_score = float(base_lane.get("move_yaw_left_score", 0.0))
+        yaw_right_score = float(base_lane.get("move_yaw_right_score", 0.0))
+        yaw_sign = -1 if yaw_left_score >= yaw_right_score else 1
+        yaw_base_unit = 4
+
+        moved_yaw_total = 0
+        for magnitude in range(1, max(1, self.config.blocked_scan_yaw_steps) + 1):
+            yaw_steps = yaw_sign * yaw_base_unit
+            self._adjust_view(0, yaw_steps)
+            moved_yaw_total += yaw_steps
+            lane = self._lane_snapshot()
+            water_score = self._lane_water_preference(lane)
+            if water_score > best_water_score:
+                best_water_score = water_score
+                best_lane = lane
+                best_adjustment = (
+                    0,
+                    moved_yaw_total,
+                    f"water_yaw_{'left' if yaw_sign < 0 else 'right'}_{magnitude}",
+                )
+        if moved_yaw_total != 0:
+            self._adjust_view(0, -moved_yaw_total)
+
+        pitch_up_score = float(base_lane.get("move_pitch_up_score", 0.0))
+        pitch_down_score = float(base_lane.get("move_pitch_down_score", 0.0))
+        pitch_signs = [1, -1] if pitch_up_score >= pitch_down_score else [-1, 1]
+        pitch_base_unit = 3
+
+        for sign in pitch_signs:
+            moved_pitch_total = 0
+            for magnitude in range(1, max(1, self.config.blocked_scan_pitch_steps) + 1):
+                pitch_steps = sign * pitch_base_unit
+                self._adjust_view(pitch_steps, 0)
+                moved_pitch_total += pitch_steps
+                lane = self._lane_snapshot()
+                water_score = self._lane_water_preference(lane)
+                if water_score > best_water_score:
+                    best_water_score = water_score
+                    best_lane = lane
+                    best_adjustment = (
+                        moved_pitch_total,
+                        0,
+                        f"water_pitch_{'up' if sign > 0 else 'down'}_{magnitude}",
+                    )
+            if moved_pitch_total != 0:
+                self._adjust_view(-moved_pitch_total, 0)
+
+        pitch_steps, yaw_steps, label = best_adjustment
+        if pitch_steps != 0 or yaw_steps != 0:
+            self._adjust_view(pitch_steps, yaw_steps)
+        moved, lane, forward_label = self._forward_after_failed_pitch(best_lane)
+        return moved, lane, f"{label}->{forward_label}"
+
     def _retry_limit_for_lane(self, lane_state: str) -> int:
         if lane_state == "CLEAR":
             return max(0, self.config.clear_retry_limit)
@@ -1347,6 +1464,54 @@ class FishingAgent:
             lane_state = str(lane["lane_state"])
             lane_score = float(lane["clearance_score"])
             retry_limit = self._retry_limit_for_lane(lane_state)
+            is_clear_timeout = (
+                reason_tag in ("no_bite_timeout_no_cast", "no_bite_timeout_casted")
+                and lane_state == "CLEAR"
+            )
+            if not is_clear_timeout:
+                self.clear_casted_timeout_streak = 0
+
+            # Keep good lanes stable: for timeout-based recovery on CLEAR view,
+            # first decide whether timeout happened with/without a cast.
+            if reason_tag in ("no_bite_timeout_no_cast", "no_bite_timeout_casted") and lane_state == "CLEAR":
+                self.clear_casted_timeout_streak += 1
+                recast_limit = max(0, self.config.clear_casted_timeout_recast_limit)
+                if self.clear_casted_timeout_streak <= recast_limit:
+                    casted = self._cast_for_recovery(button)
+                    recover_note = (
+                        "smart_recover(clear_timeout_recast,"
+                        f"reason={reason_tag},"
+                        f"state={lane_state}:{lane_score:.2f},"
+                        f"streak={self.clear_casted_timeout_streak}/{recast_limit},"
+                        f"casted={casted})"
+                    )
+                else:
+                    improved, pitched_lane, pitch_label = self._pitch_up_after_failed_cast(lane)
+                    moved = False
+                    moved_lane = pitched_lane
+                    move_label = "skip_forward"
+                    if not improved:
+                        moved, moved_lane, move_label = self._forward_after_failed_pitch(
+                            pitched_lane
+                        )
+                    casted = self._cast_for_recovery(button)
+                    final_lane = self._lane_snapshot()
+                    final_state = str(final_lane["lane_state"])
+                    final_score = float(final_lane["clearance_score"])
+                    recover_note = (
+                        "smart_recover(clear_timeout_escalate,"
+                        f"reason={reason_tag},"
+                        f"state={lane_state}:{lane_score:.2f},"
+                        f"streak={self.clear_casted_timeout_streak},"
+                        f"pitch={improved}:{pitch_label},"
+                        f"forward={moved}:{move_label},"
+                        f"final={final_state}:{final_score:.2f},"
+                        f"casted={casted})"
+                    )
+                    self.clear_casted_timeout_streak = 0
+                self.recovery_retry_count = 0
+                print(f"[RECOVER] {reason_tag} action={recover_note}")
+                return
 
             if lane_state == "BLOCKED":
                 ready_lane = self._ensure_cast_lane_ready()
@@ -1373,12 +1538,34 @@ class FishingAgent:
                 updated_lane = self._lane_snapshot()
                 self.recovery_retry_count = 0
                 casted = self._cast_for_recovery(button)
-                recover_note = (
-                    "smart_recover(adjust="
-                    f"{label},before={lane_state}:{lane_score:.2f},"
-                    f"after={updated_lane['lane_state']}:{updated_lane['clearance_score']:.2f},"
-                    f"casted={casted})"
-                )
+                post_lane_state = str(updated_lane["lane_state"])
+                post_lane_score = float(updated_lane["clearance_score"])
+
+                # If timeout recovery keeps us in RISKY, nudge forward once and retry cast.
+                if (
+                    reason_tag in ("no_bite_timeout", "no_bite_timeout_casted")
+                    and lane_state == "RISKY"
+                    and post_lane_state == "RISKY"
+                ):
+                    moved, moved_lane, move_label = self._forward_after_failed_pitch(updated_lane)
+                    moved_lane_state = str(moved_lane["lane_state"])
+                    moved_lane_score = float(moved_lane["clearance_score"])
+                    casted_after_move = self._cast_for_recovery(button)
+                    recover_note = (
+                        "smart_recover(adjust="
+                        f"{label},before={lane_state}:{lane_score:.2f},"
+                        f"after={post_lane_state}:{post_lane_score:.2f},"
+                        f"risky_forward={moved}:{move_label},"
+                        f"after_forward={moved_lane_state}:{moved_lane_score:.2f},"
+                        f"casted={casted},casted_after_forward={casted_after_move})"
+                    )
+                else:
+                    recover_note = (
+                        "smart_recover(adjust="
+                        f"{label},before={lane_state}:{lane_score:.2f},"
+                        f"after={post_lane_state}:{post_lane_score:.2f},"
+                        f"casted={casted})"
+                    )
                 self.last_adjustment_note = label
         elif action == "cast_if_idle":
             if not self.rod_casted:
@@ -1405,8 +1592,11 @@ class FishingAgent:
         if now - self.last_no_bite_recover_at < cooldown:
             return
 
-        self._mark_current_angle_failure()
-        self._run_recover_action(self.config.no_bite_timeout_action, "no_bite_timeout")
+        if self.rod_casted:
+            self._mark_current_angle_failure()
+            self._run_recover_action(self.config.no_bite_timeout_action, "no_bite_timeout_casted")
+        else:
+            self._run_recover_action(self.config.no_bite_timeout_action, "no_bite_timeout_no_cast")
         self.last_no_bite_recover_at = now
         self.last_bite_seen_at = now
 

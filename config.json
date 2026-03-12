@@ -16,7 +16,7 @@
     "region":  null,
     "focus_region_ratio":  {
                                "x":  0.58,
-                               "y":  0.66,
+                               "y":  0.62,
                                "width":  0.41,
                                "height":  0.32
                            },
@@ -35,6 +35,7 @@
     "center_lane_clearance_low_threshold":  0.42,
     "center_lane_clearance_high_threshold":  0.62,
     "clear_retry_limit":  0,
+    "clear_casted_timeout_recast_limit":  2,
     "risky_retry_limit":  0,
     "blocked_retry_limit":  0,
     "blocked_adjustment_max_steps":  12,
@@ -57,6 +58,7 @@
     "refinement_max_steps":  2,
     "local_refine_max_steps":  6,
     "failed_cast_pitch_up_steps":  4,
+    "failed_cast_forward_sec":  0.18,
     "viable_water_center_threshold":  0.34,
     "viable_water_direction_threshold":  0.45,
     "refinement_water_target":  0.52,

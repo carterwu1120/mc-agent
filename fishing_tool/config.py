@@ -40,6 +40,7 @@ class FishingConfig:
     center_lane_clearance_low_threshold: float
     center_lane_clearance_high_threshold: float
     clear_retry_limit: int
+    clear_casted_timeout_recast_limit: int
     risky_retry_limit: int
     blocked_retry_limit: int
     blocked_adjustment_max_steps: int
@@ -57,6 +58,7 @@ class FishingConfig:
     refinement_max_steps: int
     local_refine_max_steps: int
     failed_cast_pitch_up_steps: int
+    failed_cast_forward_sec: float
     viable_water_center_threshold: float
     viable_water_direction_threshold: float
     refinement_water_target: float
@@ -110,6 +112,9 @@ class FishingConfig:
                 data.get("center_lane_clearance_high_threshold", 0.62)
             ),
             clear_retry_limit=int(data.get("clear_retry_limit", 0)),
+            clear_casted_timeout_recast_limit=int(
+                data.get("clear_casted_timeout_recast_limit", 2)
+            ),
             risky_retry_limit=int(data.get("risky_retry_limit", 0)),
             blocked_retry_limit=int(data.get("blocked_retry_limit", 0)),
             blocked_adjustment_max_steps=int(data.get("blocked_adjustment_max_steps", 12)),
@@ -129,6 +134,7 @@ class FishingConfig:
             refinement_max_steps=int(data.get("refinement_max_steps", 2)),
             local_refine_max_steps=int(data.get("local_refine_max_steps", 6)),
             failed_cast_pitch_up_steps=int(data.get("failed_cast_pitch_up_steps", 4)),
+            failed_cast_forward_sec=float(data.get("failed_cast_forward_sec", 0.18)),
             viable_water_center_threshold=float(
                 data.get("viable_water_center_threshold", 0.34)
             ),
