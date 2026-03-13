@@ -64,13 +64,6 @@ class FishingConfig:
     refinement_water_target: float
     debug_window: bool
     debug_window_scale: float
-    vision_enabled: bool
-    vision_model: str
-    vision_host: str
-    vision_probe_count: int
-    vision_probe_yaw_pixels: int
-    vision_walk_forward_sec: float
-    vision_extra_push_steps: int
 
     @classmethod
     def from_file(cls, path: str | Path) -> "FishingConfig":
@@ -151,11 +144,4 @@ class FishingConfig:
             refinement_water_target=float(data.get("refinement_water_target", 0.52)),
             debug_window=bool(data.get("debug_window", False)),
             debug_window_scale=float(data.get("debug_window_scale", 0.75)),
-            vision_enabled=bool(data.get("vision_enabled", True)),
-            vision_model=str(data.get("vision_model", "llava:7b")),
-            vision_host=str(data.get("vision_host", "http://localhost:11434")),
-            vision_probe_count=int(data.get("vision_probe_count", 8)),
-            vision_probe_yaw_pixels=int(data.get("vision_probe_yaw_pixels", 300)),
-            vision_walk_forward_sec=float(data.get("vision_walk_forward_sec", 1.5)),
-            vision_extra_push_steps=int(data.get("vision_extra_push_steps", 3)),
         )
