@@ -869,10 +869,45 @@ class FishingAgent:
         time.sleep(max(0.0, self.config.adjustment_settle_sec))
         return True, self._lane_snapshot(), f"failed_forward_w_{hold_sec:.2f}s"
 
+    def _pitch_scan_for_water(
+        self,
+        base_lane: dict[str, float | str],
+        max_steps: int = 2,
+    ) -> tuple[dict[str, float | str], str]:
+        """Scan ±max_steps pitch steps from current angle; stay at best water score."""
+        best_score = self._lane_water_preference(base_lane)
+        best_offset = 0  # relative to entry position
+
+        for sign in (1, -1):  # up first, then down
+            accumulated = 0
+            for _ in range(max_steps):
+                self._adjust_view(sign, 0)
+                accumulated += sign
+                lane = self._lane_snapshot()
+                score = self._lane_water_preference(lane)
+                if score > best_score:
+                    best_score = score
+                    best_offset = accumulated  # absolute from entry
+            if accumulated != 0:
+                self._adjust_view(-accumulated, 0)  # return to entry
+
+        if best_offset != 0:
+            self._adjust_view(best_offset, 0)
+            return self._lane_snapshot(), f"pitch{best_offset:+d}:{best_score:.2f}"
+        return base_lane, "pitch_stay"
+
     def _handle_blocked(
         self, lane: dict[str, float | str]
     ) -> tuple[bool, dict[str, float | str], str]:
-        """BLOCKED path: CV angle sweep, then walk toward most water."""
+        """BLOCKED path: CV angle sweep → walk toward most water.
+
+        After the initial sweep+walk, if the water score keeps improving on
+        each subsequent step (even while still BLOCKED) we keep walking —
+        no need to re-scan.  Only re-scan when a step fails to improve.
+        """
+        MAX_FORWARD_STEPS = 5
+
+        # ── Step 1: CV angle sweep ────────────────────────────────────────────
         improved, scanned_lane, scan_label = self._scan_for_open_lane(lane)
         self.last_adjustment_note = scan_label
         if improved and str(scanned_lane["lane_state"]) != "BLOCKED":
@@ -880,13 +915,60 @@ class FishingAgent:
             self.optimized_angle_key = None
             return True, scanned_lane, scan_label
 
-        # Angle sweep didn't help — walk toward the most-water direction
-        moved, water_lane, water_label = self._scan_for_most_water_and_forward(scanned_lane)
-        self.last_adjustment_note = water_label
-        if moved and str(water_lane["lane_state"]) != "BLOCKED":
+        # ── Step 2: sweep to best-water direction + one forward walk ─────────
+        moved, cur_lane, cur_label = self._scan_for_most_water_and_forward(scanned_lane)
+        self.last_adjustment_note = cur_label
+        if str(cur_lane["lane_state"]) != "BLOCKED":
             self.blocked_streak = 0
             self.optimized_angle_key = None
-        return moved, water_lane, water_label
+            return moved, cur_lane, cur_label
+
+        # ── Step 3: keep walking while water score improves ───────────────────
+        # Compare each new step against the step before it; stop as soon as
+        # one step fails to improve (score ≤ previous).
+        prev_score = self._lane_water_preference(scanned_lane)
+        for step in range(1, MAX_FORWARD_STEPS + 1):
+            cur_score = self._lane_water_preference(cur_lane)
+            if cur_score <= prev_score:
+                # No improvement after walking: try a local pitch water scan
+                # before giving up and doing a full re-scan.
+                pitched_lane, pitch_label = self._pitch_scan_for_water(cur_lane, max_steps=2)
+                pitched_score = self._lane_water_preference(pitched_lane)
+                self.last_adjustment_note = (
+                    f"walk_pitch_probe_{step}:{pitch_label}:{pitched_score:.2f}"
+                )
+                if pitched_score > cur_score + 0.01:
+                    cur_lane = pitched_lane
+                    cur_score = pitched_score
+                    if cur_score > prev_score:
+                        prev_score = cur_score
+                        print(
+                            f"[BLOCKED] pitch improved water ({cur_score:.2f}), walking step {step}"
+                        )
+                        _, cur_lane, _ = self._forward_after_failed_pitch(cur_lane)
+                        if str(cur_lane["lane_state"]) != "BLOCKED":
+                            self.blocked_streak = 0
+                            self.optimized_angle_key = None
+                            return True, cur_lane, f"walk_unblocked_step{step}_after_pitch"
+                        continue
+                break  # still no improvement → fall through to re-scan
+            prev_score = cur_score
+            self.last_adjustment_note = f"walk_improving_{step}:{cur_score:.2f}"
+            print(f"[BLOCKED] water score improving ({cur_score:.2f}), walking step {step}")
+            _, cur_lane, _ = self._forward_after_failed_pitch(cur_lane)
+            if str(cur_lane["lane_state"]) != "BLOCKED":
+                self.blocked_streak = 0
+                self.optimized_angle_key = None
+                return True, cur_lane, f"walk_unblocked_step{step}"
+
+        # ── Step 4: walking stopped improving → re-scan from current pos ─────
+        improved2, scanned2, label2 = self._scan_for_open_lane(cur_lane)
+        self.last_adjustment_note = label2
+        if improved2 and str(scanned2["lane_state"]) != "BLOCKED":
+            self.blocked_streak = 0
+            self.optimized_angle_key = None
+            return True, scanned2, label2
+        return moved, scanned2, label2
 
     def _scan_for_open_lane(
         self, base_lane: Optional[dict[str, float | str]] = None
@@ -1093,8 +1175,11 @@ class FishingAgent:
             label += f"_fine-{fine_steps}({'ok' if found else 'approx'})"
             print(f"[WATER-SCAN] fine done score={fine_best_score:.2f} found={found}")
 
-        moved, lane, forward_label = self._forward_after_failed_pitch(best_lane)
-        return moved, lane, f"{label}->{forward_label}"
+        # Before walking, optimize pitch around current yaw so we don't move
+        # forward with an obviously bad up/down angle.
+        pitched_lane, pitch_label = self._pitch_scan_for_water(best_lane, max_steps=2)
+        moved, lane, forward_label = self._forward_after_failed_pitch(pitched_lane)
+        return moved, lane, f"{label}->{pitch_label}->{forward_label}"
 
     def _retry_limit_for_lane(self, lane_state: str) -> int:
         if lane_state == "CLEAR":
