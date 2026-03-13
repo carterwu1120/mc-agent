@@ -732,6 +732,21 @@ class FishingAgent:
     def _lane_water_preference(self, lane: Optional[dict[str, float | str]] = None) -> float:
         return lane_water_preference(lane or {})
 
+    def _lane_has_min_water_signature(
+        self, lane: Optional[dict[str, float | str]] = None
+    ) -> bool:
+        lane = lane or {}
+        center_water = float(lane.get("center_water_ratio", 0.0))
+        directional_max = max(
+            float(lane.get("upper_water_ratio", 0.0)),
+            float(lane.get("lower_water_ratio", 0.0)),
+            float(lane.get("left_water_ratio", 0.0)),
+            float(lane.get("right_water_ratio", 0.0)),
+        )
+        # Lightweight gate for blocked scanning:
+        # reject views that are effectively "no water" (sky/cobblestone bias).
+        return center_water >= 0.04 or directional_max >= 0.08
+
     def _should_force_pitch_up(self, lane: Optional[dict[str, float | str]] = None) -> bool:
         lane = lane or {}
         lower_nonwater_ratio = float(lane.get("lower_nonwater_ratio", 0.0))
@@ -877,6 +892,7 @@ class FishingAgent:
         """Scan ±max_steps pitch steps from current angle; stay at best water score."""
         best_score = self._lane_water_preference(base_lane)
         best_offset = 0  # relative to entry position
+        best_has_water = self._lane_has_min_water_signature(base_lane)
 
         for sign in (1, -1):  # up first, then down
             accumulated = 0
@@ -885,9 +901,11 @@ class FishingAgent:
                 accumulated += sign
                 lane = self._lane_snapshot()
                 score = self._lane_water_preference(lane)
-                if score > best_score:
+                has_water = self._lane_has_min_water_signature(lane)
+                if (has_water and not best_has_water) or (has_water == best_has_water and score > best_score):
                     best_score = score
                     best_offset = accumulated  # absolute from entry
+                    best_has_water = has_water
             if accumulated != 0:
                 self._adjust_view(-accumulated, 0)  # return to entry
 
@@ -1112,6 +1130,7 @@ class FishingAgent:
         base_lane = base_lane or self._lane_snapshot()
         best_lane = base_lane
         best_water_score = self._lane_water_preference(base_lane)
+        best_has_water = self._lane_has_min_water_signature(base_lane)
 
         yaw_base_unit = 4
         half_steps = max(1, self.config.blocked_scan_yaw_steps)
@@ -1123,16 +1142,20 @@ class FishingAgent:
 
         lane = self._lane_snapshot()
         score = self._lane_water_preference(lane)
-        if score > best_water_score:
+        has_water = self._lane_has_min_water_signature(lane)
+        if (has_water and not best_has_water) or (has_water == best_has_water and score > best_water_score):
             best_water_score, best_lane, best_yaw = score, lane, current_yaw
+            best_has_water = has_water
 
         for _ in range(half_steps * 2):
             self._adjust_view(0, yaw_base_unit)
             current_yaw += yaw_base_unit
             lane = self._lane_snapshot()
             score = self._lane_water_preference(lane)
-            if score > best_water_score:
+            has_water = self._lane_has_min_water_signature(lane)
+            if (has_water and not best_has_water) or (has_water == best_has_water and score > best_water_score):
                 best_water_score, best_lane, best_yaw = score, lane, current_yaw
+                best_has_water = has_water
 
         # Single correction: current (rightmost) → best
         delta_yaw = best_yaw - current_yaw
@@ -1141,7 +1164,10 @@ class FishingAgent:
 
         direction = "left" if best_yaw < 0 else ("right" if best_yaw > 0 else "base")
         label = f"water_yaw_{direction}_off{best_yaw}"
-        print(f"[WATER-SCAN] sweep best={best_water_score:.2f} at offset={best_yaw}")
+        print(
+            f"[WATER-SCAN] sweep best={best_water_score:.2f} "
+            f"at offset={best_yaw} has_water={best_has_water}"
+        )
 
         # ── Phase 2: verify and fine-tune if rotation drifted ────────────────
         verify_lane = self._lane_snapshot()
