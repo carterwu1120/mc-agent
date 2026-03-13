@@ -14,6 +14,13 @@ import pygetwindow as gw
 from paddleocr import PaddleOCR
 
 from .config import FishingConfig
+from .cv import (
+    compute_bobber_features,
+    compute_lane_features,
+    compute_water_features,
+    lane_quality,
+    lane_water_preference,
+)
 
 
 @dataclass
@@ -181,316 +188,20 @@ class FishingAgent:
         return " ".join(texts).strip()
 
     def _compute_water_features(self, img: Optional[np.ndarray]) -> dict[str, float]:
-        if img is None or img.size == 0:
-            return {
-                "water_score": 0.0,
-                "blue_ratio": 0.0,
-                "brightness_std": 0.0,
-                "edge_density": 0.0,
-            }
+        return compute_water_features(img)
 
-        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        lower = np.array([80, 30, 30], dtype=np.uint8)
-        upper = np.array([130, 255, 255], dtype=np.uint8)
-        blue_mask = cv2.inRange(hsv, lower, upper)
-        blue_ratio = float(np.count_nonzero(blue_mask)) / float(blue_mask.size)
-
-        value_channel = hsv[:, :, 2]
-        brightness_std = float(np.std(value_channel))
-
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150)
-        edge_density = float(np.count_nonzero(edges)) / float(edges.size)
-
-        water_score = min(
-            1.0,
-            0.65 * blue_ratio
-            + 0.25 * min(brightness_std / 64.0, 1.0)
-            + 0.10 * min(edge_density / 0.2, 1.0),
+    def _compute_center_lane_features(self, img: Optional[np.ndarray]) -> dict[str, float | str]:
+        return compute_lane_features(
+            img,
+            low_threshold=self.config.center_lane_clearance_low_threshold,
+            high_threshold=self.config.center_lane_clearance_high_threshold,
         )
-
-        return {
-            "water_score": water_score,
-            "blue_ratio": blue_ratio,
-            "brightness_std": brightness_std,
-            "edge_density": edge_density,
-        }
-
-    def _compute_center_lane_features(self, img: Optional[np.ndarray]) -> dict[str, float]:
-        if img is None or img.size == 0:
-            return {
-                "clearance_score": 0.0,
-                "center_water_ratio": 0.0,
-                "center_nonwater_occupancy": 0.0,
-                "connected_block_ratio": 0.0,
-                "upper_open_ratio": 0.0,
-                "upper_water_ratio": 0.0,
-                "upper_nonwater_ratio": 0.0,
-                "lower_water_ratio": 0.0,
-                "lower_nonwater_ratio": 0.0,
-                "left_water_ratio": 0.0,
-                "left_nonwater_ratio": 0.0,
-                "right_water_ratio": 0.0,
-                "right_nonwater_ratio": 0.0,
-                "dominant_block_side": "unknown",
-                "move_pitch_up_score": 0.0,
-                "move_pitch_down_score": 0.0,
-                "move_yaw_left_score": 0.0,
-                "move_yaw_right_score": 0.0,
-                "residual_obstacle_score": 1.0,
-                "edge_density": 0.0,
-                "vertical_edge_ratio": 0.0,
-                "horizontal_edge_ratio": 0.0,
-                "lane_state": "BLOCKED",
-            }
-
-        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # ── 3-class segmentation: water / sky+open / obstacle ────────────────
-        water_lower = np.array([80, 45, 30], dtype=np.uint8)
-        water_upper = np.array([130, 255, 255], dtype=np.uint8)
-        water_mask = cv2.inRange(hsv, water_lower, water_upper)
-        kernel = np.ones((3, 3), dtype=np.uint8)
-        water_mask = cv2.morphologyEx(water_mask, cv2.MORPH_OPEN, kernel)
-        water_mask = cv2.morphologyEx(water_mask, cv2.MORPH_CLOSE, kernel)
-
-        # Sky / open air: bright + desaturated.
-        # V≥170 excludes most solid blocks (cobblestone V≈100-155) while
-        # keeping actual sky/clouds (V≈170-255) and horizon haze.
-        sky_lower = np.array([0, 0, 170], dtype=np.uint8)
-        sky_upper = np.array([180, 60, 255], dtype=np.uint8)
-        sky_mask = cv2.inRange(hsv, sky_lower, sky_upper)
-
-        # Obstacle = neither water nor sky
-        obstacle_mask = cv2.bitwise_not(cv2.bitwise_or(water_mask, sky_mask))
-        # ─────────────────────────────────────────────────────────────────────
-
-        h, w = gray.shape
-        core_x1 = int(w * 0.20)
-        core_x2 = int(w * 0.80)
-        core_y1 = int(h * 0.18)
-        core_y2 = int(h * 0.88)
-        core_water    = water_mask[core_y1:core_y2, core_x1:core_x2]
-        core_sky      = sky_mask[core_y1:core_y2, core_x1:core_x2]
-        core_obstacle = obstacle_mask[core_y1:core_y2, core_x1:core_x2]
-
-        total = float(core_water.size) or 1.0
-        center_water_ratio        = float(np.count_nonzero(core_water))    / total
-        center_sky_ratio          = float(np.count_nonzero(core_sky))      / total
-        center_nonwater_occupancy = float(np.count_nonzero(core_obstacle)) / total  # true obstacle ratio
-
-        # Largest connected obstacle component in core
-        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(core_obstacle, connectivity=8)
-        largest_component = 0
-        for label_idx in range(1, num_labels):
-            largest_component = max(largest_component, int(stats[label_idx, cv2.CC_STAT_AREA]))
-        connected_block_ratio = float(largest_component) / total
-
-        # Band slices (using obstacle_mask so sky ≠ blocked)
-        upper_obs_band   = obstacle_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
-        lower_obs_band   = obstacle_mask[int(h * 0.55) :, core_x1:core_x2]
-        upper_water_band = water_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
-        lower_water_band = water_mask[int(h * 0.55) :, core_x1:core_x2]
-        left_obs_band    = core_obstacle[:, : max(1, core_obstacle.shape[1] // 2)]
-        right_obs_band   = core_obstacle[:, max(1, core_obstacle.shape[1] // 2) :]
-        left_water_band  = core_water[:, : max(1, core_water.shape[1] // 2)]
-        right_water_band = core_water[:, max(1, core_water.shape[1] // 2) :]
-
-        def _r(m: np.ndarray) -> float:
-            return float(np.count_nonzero(m)) / float(m.size) if m.size else 0.0
-
-        upper_open_ratio   = 1.0 - _r(upper_obs_band)   # sky + water in upper = open
-        upper_water_ratio  = _r(upper_water_band)
-        upper_nonwater_ratio = _r(upper_obs_band)        # obstacle in upper band
-        lower_water_ratio  = _r(lower_water_band)
-        lower_nonwater_ratio = _r(lower_obs_band)        # obstacle in lower band
-        left_water_ratio   = _r(left_water_band)
-        left_nonwater_ratio  = _r(left_obs_band)
-        right_water_ratio  = _r(right_water_band)
-        right_nonwater_ratio = _r(right_obs_band)
-
-        directional_blocks = {
-            "lower": lower_nonwater_ratio - 0.6 * lower_water_ratio,
-            "upper": upper_nonwater_ratio - 0.6 * upper_water_ratio,
-            "left":  left_nonwater_ratio  - 0.6 * left_water_ratio,
-            "right": right_nonwater_ratio - 0.6 * right_water_ratio,
-        }
-        dominant_block_side = max(directional_blocks, key=directional_blocks.get)
-
-        move_pitch_up_score = min(
-            1.0,
-            0.50 * upper_water_ratio
-            + 0.30 * upper_open_ratio
-            + 0.20 * lower_nonwater_ratio
-            - 0.20 * upper_nonwater_ratio,
-        )
-        move_pitch_down_score = min(
-            1.0,
-            0.45 * lower_water_ratio
-            + 0.20 * upper_nonwater_ratio
-            - 0.25 * lower_nonwater_ratio,
-        )
-        move_yaw_right_score = min(
-            1.0,
-            0.55 * right_water_ratio
-            + 0.30 * (1.0 - right_nonwater_ratio)
-            + 0.15 * left_nonwater_ratio,
-        )
-        move_yaw_left_score = min(
-            1.0,
-            0.55 * left_water_ratio
-            + 0.30 * (1.0 - left_nonwater_ratio)
-            + 0.15 * right_nonwater_ratio,
-        )
-        residual_obstacle_score = min(
-            1.0,
-            0.45 * lower_nonwater_ratio
-            + 0.30 * left_nonwater_ratio
-            + 0.20 * right_nonwater_ratio
-            + 0.15 * center_nonwater_occupancy
-            - 0.25 * center_water_ratio,
-        )
-
-        edges = cv2.Canny(blurred, 50, 150)
-        edge_density = float(np.count_nonzero(edges)) / float(edges.size)
-
-        grad_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
-        abs_grad_x = np.abs(grad_x)
-        abs_grad_y = np.abs(grad_y)
-
-        grad_energy = float(np.sum(abs_grad_x) + np.sum(abs_grad_y)) + 1e-6
-        vertical_edge_ratio   = float(np.sum(abs_grad_x)) / grad_energy
-        horizontal_edge_ratio = float(np.sum(abs_grad_y)) / grad_energy
-
-        # openness: water is best, open sky also counts as clear
-        openness_score = min(
-            1.0,
-            0.55 * center_water_ratio
-            + 0.25 * center_sky_ratio
-            + 0.20 * upper_open_ratio,
-        )
-        obstacle_score = min(
-            1.0,
-            0.35 * center_nonwater_occupancy
-            + 0.35 * min(connected_block_ratio / 0.30, 1.0)
-            + 0.30 * lower_nonwater_ratio,
-        )
-        orientation_penalty = 0.10 * max(0.0, horizontal_edge_ratio - 0.62)
-        clearance_score = max(
-            0.0,
-            min(1.0, 0.55 * openness_score + 0.45 * (1.0 - obstacle_score) - orientation_penalty),
-        )
-        if clearance_score >= self.config.center_lane_clearance_high_threshold:
-            lane_state = "CLEAR"
-        elif clearance_score >= self.config.center_lane_clearance_low_threshold:
-            lane_state = "RISKY"
-        else:
-            lane_state = "BLOCKED"
-
-        return {
-            "clearance_score": clearance_score,
-            "center_water_ratio": center_water_ratio,
-            "center_nonwater_occupancy": center_nonwater_occupancy,
-            "connected_block_ratio": connected_block_ratio,
-            "upper_open_ratio": upper_open_ratio,
-            "upper_water_ratio": upper_water_ratio,
-            "upper_nonwater_ratio": upper_nonwater_ratio,
-            "lower_water_ratio": lower_water_ratio,
-            "lower_nonwater_ratio": lower_nonwater_ratio,
-            "left_water_ratio": left_water_ratio,
-            "left_nonwater_ratio": left_nonwater_ratio,
-            "right_water_ratio": right_water_ratio,
-            "right_nonwater_ratio": right_nonwater_ratio,
-            "dominant_block_side": dominant_block_side,
-            "move_pitch_up_score": move_pitch_up_score,
-            "move_pitch_down_score": move_pitch_down_score,
-            "move_yaw_left_score": move_yaw_left_score,
-            "move_yaw_right_score": move_yaw_right_score,
-            "residual_obstacle_score": residual_obstacle_score,
-            "edge_density": edge_density,
-            "vertical_edge_ratio": vertical_edge_ratio,
-            "horizontal_edge_ratio": horizontal_edge_ratio,
-            "lane_state": lane_state,
-        }
 
     def _compute_bobber_features(self, img: Optional[np.ndarray]) -> dict[str, float]:
-        if img is None or img.size == 0:
-            return {
-                "bobber_score": 0.0,
-                "bobber_visible": 0.0,
-                "candidate_count": 0.0,
-                "red_white_pair_ratio": 0.0,
-            }
-
-        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-
-        red_mask_1 = cv2.inRange(
-            hsv,
-            np.array([0, 120, 80], dtype=np.uint8),
-            np.array([10, 255, 255], dtype=np.uint8),
-        )
-        red_mask_2 = cv2.inRange(
-            hsv,
-            np.array([170, 120, 80], dtype=np.uint8),
-            np.array([180, 255, 255], dtype=np.uint8),
-        )
-        red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
-        white_mask = cv2.inRange(
-            hsv,
-            np.array([0, 0, 160], dtype=np.uint8),
-            np.array([180, 70, 255], dtype=np.uint8),
-        )
-
-        kernel = np.ones((3, 3), dtype=np.uint8)
-        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
-
-        red_labels, _, red_stats, red_centroids = cv2.connectedComponentsWithStats(
-            red_mask, connectivity=8
-        )
-        white_labels, _, white_stats, white_centroids = cv2.connectedComponentsWithStats(
-            white_mask, connectivity=8
-        )
-
-        candidate_count = 0
-        pair_score = 0.0
-        for r_idx in range(1, red_labels):
-            r_area = int(red_stats[r_idx, cv2.CC_STAT_AREA])
-            if r_area < 1 or r_area > 30:
-                continue
-            rx, ry = red_centroids[r_idx]
-            for w_idx in range(1, white_labels):
-                w_area = int(white_stats[w_idx, cv2.CC_STAT_AREA])
-                if w_area < 1 or w_area > 45:
-                    continue
-                wx, wy = white_centroids[w_idx]
-                distance = float(np.hypot(rx - wx, ry - wy))
-                if distance > 18:
-                    continue
-                candidate_count += 1
-                pair_score = max(
-                    pair_score,
-                    max(0.0, 1.0 - distance / 18.0) * min((r_area + w_area) / 18.0, 1.0),
-                )
-
-        red_white_pair_ratio = min(candidate_count / 3.0, 1.0)
-        bobber_score = min(1.0, 0.7 * pair_score + 0.3 * red_white_pair_ratio)
-        bobber_visible = 1.0 if bobber_score >= self.config.bobber_min_score else 0.0
-        self.last_bobber_visible = bobber_visible >= 0.5
-        self.last_bobber_score = bobber_score
-
-        return {
-            "bobber_score": bobber_score,
-            "bobber_visible": bobber_visible,
-            "candidate_count": float(candidate_count),
-            "red_white_pair_ratio": red_white_pair_ratio,
-        }
+        result = compute_bobber_features(img, bobber_min_score=self.config.bobber_min_score)
+        self.last_bobber_visible = result["bobber_visible"] >= 0.5
+        self.last_bobber_score = result["bobber_score"]
+        return result
 
     def _draw_region_box(
         self,
@@ -760,36 +471,11 @@ class FishingAgent:
         )
 
         if should_broad_scan:
-            improved, scanned_lane, scan_label = self._scan_for_open_lane(lane)
-            self.last_adjustment_note = scan_label
-            lane = scanned_lane
+            # BLOCKED branch: CV angle sweep → walk toward most water
+            _, lane, _ = self._handle_blocked(lane)
             lane_state = str(lane["lane_state"])
-            if improved and lane_state != "BLOCKED":
-                self.blocked_streak = 0
-                self.optimized_angle_key = None
+            if lane_state != "BLOCKED":
                 return lane_state
-
-            # CV sweep failed — unified LLM scan (angle + walk in one pass)
-            if lane_state == "BLOCKED":
-                improved, scanned_lane, scan_label = self._ollama_unified_scan(lane)
-                self.last_adjustment_note = scan_label
-                lane = scanned_lane
-                lane_state = str(lane["lane_state"])
-                if improved:
-                    self.blocked_streak = 0
-                    self.optimized_angle_key = None
-                    return lane_state if lane_state != "BLOCKED" else "RISKY"
-
-            # Ollama walk also failed — last resort CV water walk
-            if lane_state == "BLOCKED":
-                moved, water_lane, water_label = self._scan_for_most_water_and_forward(lane)
-                self.last_adjustment_note = water_label
-                lane = water_lane
-                lane_state = str(lane["lane_state"])
-                if moved and lane_state != "BLOCKED":
-                    self.blocked_streak = 0
-                    self.optimized_angle_key = None
-                    return lane_state
 
         if lane_state != "BLOCKED" and self._current_angle_is_bad():
             improved, pitched_lane, pitch_label = self._pitch_up_after_failed_cast(lane)
@@ -1041,26 +727,10 @@ class FishingAgent:
         )
 
     def _lane_quality(self, lane: Optional[dict[str, float | str]] = None) -> float:
-        lane = lane or {}
-        return (
-            float(lane.get("clearance_score", 0.0))
-            + 0.35 * float(lane.get("center_water_ratio", 0.0))
-            - 0.25 * float(lane.get("residual_obstacle_score", 0.0))
-        )
+        return lane_quality(lane or {})
 
     def _lane_water_preference(self, lane: Optional[dict[str, float | str]] = None) -> float:
-        lane = lane or {}
-        directional_water = max(
-            float(lane.get("upper_water_ratio", 0.0)),
-            float(lane.get("lower_water_ratio", 0.0)),
-            float(lane.get("left_water_ratio", 0.0)),
-            float(lane.get("right_water_ratio", 0.0)),
-        )
-        return (
-            float(lane.get("center_water_ratio", 0.0))
-            + 0.40 * directional_water
-            - 0.20 * float(lane.get("residual_obstacle_score", 0.0))
-        )
+        return lane_water_preference(lane or {})
 
     def _should_force_pitch_up(self, lane: Optional[dict[str, float | str]] = None) -> bool:
         lane = lane or {}
@@ -1199,171 +869,24 @@ class FishingAgent:
         time.sleep(max(0.0, self.config.adjustment_settle_sec))
         return True, self._lane_snapshot(), f"failed_forward_w_{hold_sec:.2f}s"
 
-    def _collect_probe_screenshots(self) -> tuple[list[np.ndarray], int]:
-        """
-        Rotate 360° in equal steps, capture a full-window screenshot at each position.
-        Returns (screenshots, total_pixels_moved_right) so caller can undo the rotation.
-        """
-        count = self.config.vision_probe_count
-        step = self.config.vision_probe_yaw_pixels
-        screenshots: list[np.ndarray] = []
-        total_moved = 0
-
-        for i in range(count):
-            region = self._window_region()
-            img = self._capture_region(region)
-            screenshots.append(img)
-            if i < count - 1:
-                pyautogui.moveRel(step, 0, duration=0)
-                total_moved += step
-                time.sleep(max(0.05, self.config.adjustment_settle_sec))
-
-        return screenshots, total_moved
-
-    def _ollama_unified_scan(
-        self, base_lane: Optional[dict[str, float | str]] = None
+    def _handle_blocked(
+        self, lane: dict[str, float | str]
     ) -> tuple[bool, dict[str, float | str], str]:
-        """
-        Single 360° LLM probe that handles both casting and walking decisions.
-        Per direction: CLEAR/BLOCKED + WATER/NO_WATER.
-        Priority:
-          score 3 (CLEAR+WATER)  → face it, cast immediately (no walk needed)
-          score 2 (BLOCKED+WATER) → face it, walk toward water
-          score 1 (CLEAR+NO_WATER) → face it, try casting anyway
-          score 0 → skip
-        """
-        from .vision import ask_single_probe
-        import cv2 as _cv2
+        """BLOCKED path: CV angle sweep, then walk toward most water."""
+        improved, scanned_lane, scan_label = self._scan_for_open_lane(lane)
+        self.last_adjustment_note = scan_label
+        if improved and str(scanned_lane["lane_state"]) != "BLOCKED":
+            self.blocked_streak = 0
+            self.optimized_angle_key = None
+            return True, scanned_lane, scan_label
 
-        if not self.config.vision_enabled:
-            return False, base_lane or self._lane_snapshot(), "ollama_disabled"
-
-        count = self.config.vision_probe_count
-        step = self.config.vision_probe_yaw_pixels
-        results: list[tuple[bool, bool, int]] = []  # (clear, water, score)
-        total_moved = 0
-        early_exit = False
-
-        if self.config.debug_window:
-            import os
-            os.makedirs("logs/probes", exist_ok=True)
-
-        print("[VISION] unified 360° probe...")
-        for i in range(count):
-            region = self._window_region()
-            img = self._capture_region(region)
-
-            if self.config.debug_window:
-                labeled = img.copy()
-                lbl = str(i + 1)
-                _cv2.putText(labeled, lbl, (8, 36), _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 4, _cv2.LINE_AA)
-                _cv2.putText(labeled, lbl, (8, 36), _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, _cv2.LINE_AA)
-                _cv2.imwrite(f"logs/probes/probe_{i + 1}.jpg", labeled)
-
-            clear, water = ask_single_probe(
-                img, i + 1,
-                model=self.config.vision_model,
-                host=self.config.vision_host,
-            )
-            score = (2 if clear else 0) + (1 if water else 0)
-            results.append((clear, water, score))
-            print(f"[VISION] probe {i + 1}: {'CLEAR' if clear else 'BLOCKED'}, {'WATER' if water else 'NO_WATER'} (score={score})")
-
-            # Best case: can cast here right now
-            if clear and water:
-                print(f"[VISION] probe {i + 1}: CLEAR+WATER, casting from here")
-                early_exit = True
-                break
-
-            if i < count - 1:
-                pyautogui.moveRel(step, 0, duration=0)
-                total_moved += step
-                time.sleep(max(0.05, self.config.adjustment_settle_sec))
-        else:
-            early_exit = False
-
-        best_score = max(r[2] for r in results)
-        if best_score == 0:
-            print("[VISION] no usable direction found")
-            if total_moved > 0:
-                pyautogui.moveRel(-total_moved, 0, duration=0)
-                time.sleep(max(0.05, self.config.adjustment_settle_sec))
-            return False, base_lane or self._lane_snapshot(), "ollama_all_blocked"
-
-        best_idx = next(i for i, r in enumerate(results) if r[2] == best_score)
-        best_clear, best_water, _ = results[best_idx]
-
-        if not early_exit:
-            # Return to origin then rotate to best direction
-            if total_moved > 0:
-                pyautogui.moveRel(-total_moved, 0, duration=0)
-                time.sleep(max(0.05, self.config.adjustment_settle_sec))
-            target_pixels = best_idx * step
-            if target_pixels != 0:
-                pyautogui.moveRel(target_pixels, 0, duration=0)
-                time.sleep(max(0.05, self.config.adjustment_settle_sec))
-        # else: already facing best direction
-
-        # CLEAR+WATER or CLEAR+NO_WATER → just cast, no walking
-        if best_clear:
-            lane = self._lane_snapshot()
-            label = f"ollama_cast_probe_{best_idx + 1}of{count}"
-            print(f"[VISION] facing probe {best_idx + 1}, ready to cast")
-            return True, lane, label
-
-        # BLOCKED+WATER → need to walk toward water
-        pre_walk_lane = self._lane_snapshot()
-        pre_water_score = self._lane_water_preference(pre_walk_lane)
-        pre_clearance = float(pre_walk_lane["clearance_score"])
-        print(f"[VISION] walking toward probe {best_idx + 1} (pre_water={pre_water_score:.2f})...")
-
-        if self.rod_casted:
-            button = self.config.default_button
-            self._reel_once(button)
-            time.sleep(max(0.05, self.config.recast_delay_sec))
-
-        hold_sec = max(0.1, self.config.vision_walk_forward_sec)
-        pyautogui.keyDown("w")
-        try:
-            time.sleep(hold_sec)
-        finally:
-            pyautogui.keyUp("w")
-        time.sleep(max(0.0, self.config.adjustment_settle_sec))
-
-        lane = self._lane_snapshot()
-        post_state = str(lane["lane_state"])
-        post_clearance = float(lane["clearance_score"])
-        post_water_score = self._lane_water_preference(lane)
-
-        # Extra pushes if LLM confirmed water but CV still BLOCKED
-        if post_state == "BLOCKED":
-            for push in range(self.config.vision_extra_push_steps):
-                print(f"[VISION] still BLOCKED, pushing forward (step {push + 1}/{self.config.vision_extra_push_steps})...")
-                pyautogui.keyDown("w")
-                try:
-                    time.sleep(hold_sec)
-                finally:
-                    pyautogui.keyUp("w")
-                time.sleep(max(0.0, self.config.adjustment_settle_sec))
-                lane = self._lane_snapshot()
-                post_state = str(lane["lane_state"])
-                post_clearance = float(lane["clearance_score"])
-                post_water_score = self._lane_water_preference(lane)
-                print(f"[VISION] push {push + 1}: {post_state} clearance={post_clearance:.2f}")
-                if post_state != "BLOCKED":
-                    break
-
-        water_improved = post_water_score > pre_water_score + 0.04
-        clearance_improved = post_clearance > pre_clearance + 0.04
-        moved = post_state != "BLOCKED" or water_improved or clearance_improved or best_water
-
-        label = (
-            f"ollama_walk_{best_idx + 1}of{count}"
-            f"_fwd{hold_sec:.1f}s"
-            f"_water{pre_water_score:.2f}->{post_water_score:.2f}"
-        )
-        print(f"[VISION] after walk: {post_state} clearance={post_clearance:.2f} water={post_water_score:.2f} moved={moved}")
-        return moved, lane, label
+        # Angle sweep didn't help — walk toward the most-water direction
+        moved, water_lane, water_label = self._scan_for_most_water_and_forward(scanned_lane)
+        self.last_adjustment_note = water_label
+        if moved and str(water_lane["lane_state"]) != "BLOCKED":
+            self.blocked_streak = 0
+            self.optimized_angle_key = None
+        return moved, water_lane, water_label
 
     def _scan_for_open_lane(
         self, base_lane: Optional[dict[str, float | str]] = None
