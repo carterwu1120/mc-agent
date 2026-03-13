@@ -50,7 +50,7 @@
                                 "height":  0.20
                             },
     "bobber_min_score":  0.55,
-    "blocked_scan_trigger_count":  2,
+    "blocked_scan_trigger_count":  1,
     "blocked_probe_min_improvement":  0.08,
     "blocked_scan_yaw_steps":  10,
     "blocked_scan_pitch_steps":  4,
@@ -88,5 +88,12 @@
     "ocr_empty_recover_cooldown_sec":  10,
     "smart_recover_probe_wait_sec":  0.35,
     "debug_window":  true,
-    "debug_window_scale":  0.75
+    "debug_window_scale":  0.75,
+    "vision_enabled":  false,
+    "vision_model":  "qwen3.5:9b",
+    "vision_host":  "http://localhost:11434",
+    "vision_probe_count":  6,
+    "vision_probe_yaw_pixels":  400,
+    "vision_walk_forward_sec":  0.5,
+    "vision_extra_push_steps":  1
 }

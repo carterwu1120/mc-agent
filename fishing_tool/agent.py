@@ -70,6 +70,17 @@ class FishingAgent:
         lane = self._compute_center_lane_features(center_lane_img)
         self.last_lane_state = str(lane["lane_state"])
         self.last_lane_score = float(lane["clearance_score"])
+        if self.config.debug_window and center_lane_img is not None:
+            import os, cv2 as _cv2
+            os.makedirs("logs", exist_ok=True)
+            bgr = _cv2.cvtColor(center_lane_img, _cv2.COLOR_BGRA2BGR)
+            info = (f"clearance={lane['clearance_score']:.2f} "
+                    f"water={lane['center_water_ratio']:.2f} "
+                    f"nonwater={lane['center_nonwater_occupancy']:.2f} "
+                    f"{lane['lane_state']}")
+            _cv2.putText(bgr, info, (4, 18), _cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, _cv2.LINE_AA)
+            _cv2.putText(bgr, info, (4, 18), _cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, _cv2.LINE_AA)
+            _cv2.imwrite("logs/debug_center_lane.jpg", bgr)
         return lane
 
     def _capture_region(self, region: dict[str, int]) -> np.ndarray:
@@ -759,6 +770,11 @@ class FishingAgent:
         else:
             self.blocked_streak = 0
 
+        # Already fishing-ready and no known angle issues — skip all adjustments
+        if lane_state == "CLEAR" and not self._current_angle_is_bad():
+            self.optimized_angle_key = self._current_angle_key()
+            return lane_state
+
         should_broad_scan = lane_state == "BLOCKED" and (
             not viable_water
             or self.blocked_streak >= self.config.blocked_scan_trigger_count
@@ -774,6 +790,19 @@ class FishingAgent:
                 self.blocked_streak = 0
                 self.optimized_angle_key = None
                 return lane_state
+
+            # CV sweep failed — unified LLM scan (angle + walk in one pass)
+            if lane_state == "BLOCKED":
+                improved, scanned_lane, scan_label = self._ollama_unified_scan(lane)
+                self.last_adjustment_note = scan_label
+                lane = scanned_lane
+                lane_state = str(lane["lane_state"])
+                if improved:
+                    self.blocked_streak = 0
+                    self.optimized_angle_key = None
+                    return lane_state if lane_state != "BLOCKED" else "RISKY"
+
+            # Ollama walk also failed — last resort CV water walk
             if lane_state == "BLOCKED":
                 moved, water_lane, water_label = self._scan_for_most_water_and_forward(lane)
                 self.last_adjustment_note = water_label
@@ -1191,6 +1220,172 @@ class FishingAgent:
             pyautogui.keyUp("w")
         time.sleep(max(0.0, self.config.adjustment_settle_sec))
         return True, self._lane_snapshot(), f"failed_forward_w_{hold_sec:.2f}s"
+
+    def _collect_probe_screenshots(self) -> tuple[list[np.ndarray], int]:
+        """
+        Rotate 360° in equal steps, capture a full-window screenshot at each position.
+        Returns (screenshots, total_pixels_moved_right) so caller can undo the rotation.
+        """
+        count = self.config.vision_probe_count
+        step = self.config.vision_probe_yaw_pixels
+        screenshots: list[np.ndarray] = []
+        total_moved = 0
+
+        for i in range(count):
+            region = self._window_region()
+            img = self._capture_region(region)
+            screenshots.append(img)
+            if i < count - 1:
+                pyautogui.moveRel(step, 0, duration=0)
+                total_moved += step
+                time.sleep(max(0.05, self.config.adjustment_settle_sec))
+
+        return screenshots, total_moved
+
+    def _ollama_unified_scan(
+        self, base_lane: Optional[dict[str, float | str]] = None
+    ) -> tuple[bool, dict[str, float | str], str]:
+        """
+        Single 360° LLM probe that handles both casting and walking decisions.
+        Per direction: CLEAR/BLOCKED + WATER/NO_WATER.
+        Priority:
+          score 3 (CLEAR+WATER)  → face it, cast immediately (no walk needed)
+          score 2 (BLOCKED+WATER) → face it, walk toward water
+          score 1 (CLEAR+NO_WATER) → face it, try casting anyway
+          score 0 → skip
+        """
+        from .vision import ask_single_probe
+        import cv2 as _cv2
+
+        if not self.config.vision_enabled:
+            return False, base_lane or self._lane_snapshot(), "ollama_disabled"
+
+        count = self.config.vision_probe_count
+        step = self.config.vision_probe_yaw_pixels
+        results: list[tuple[bool, bool, int]] = []  # (clear, water, score)
+        total_moved = 0
+        early_exit = False
+
+        if self.config.debug_window:
+            import os
+            os.makedirs("logs/probes", exist_ok=True)
+
+        print("[VISION] unified 360° probe...")
+        for i in range(count):
+            region = self._window_region()
+            img = self._capture_region(region)
+
+            if self.config.debug_window:
+                labeled = img.copy()
+                lbl = str(i + 1)
+                _cv2.putText(labeled, lbl, (8, 36), _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 4, _cv2.LINE_AA)
+                _cv2.putText(labeled, lbl, (8, 36), _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, _cv2.LINE_AA)
+                _cv2.imwrite(f"logs/probes/probe_{i + 1}.jpg", labeled)
+
+            clear, water = ask_single_probe(
+                img, i + 1,
+                model=self.config.vision_model,
+                host=self.config.vision_host,
+            )
+            score = (2 if clear else 0) + (1 if water else 0)
+            results.append((clear, water, score))
+            print(f"[VISION] probe {i + 1}: {'CLEAR' if clear else 'BLOCKED'}, {'WATER' if water else 'NO_WATER'} (score={score})")
+
+            # Best case: can cast here right now
+            if clear and water:
+                print(f"[VISION] probe {i + 1}: CLEAR+WATER, casting from here")
+                early_exit = True
+                break
+
+            if i < count - 1:
+                pyautogui.moveRel(step, 0, duration=0)
+                total_moved += step
+                time.sleep(max(0.05, self.config.adjustment_settle_sec))
+        else:
+            early_exit = False
+
+        best_score = max(r[2] for r in results)
+        if best_score == 0:
+            print("[VISION] no usable direction found")
+            if total_moved > 0:
+                pyautogui.moveRel(-total_moved, 0, duration=0)
+                time.sleep(max(0.05, self.config.adjustment_settle_sec))
+            return False, base_lane or self._lane_snapshot(), "ollama_all_blocked"
+
+        best_idx = next(i for i, r in enumerate(results) if r[2] == best_score)
+        best_clear, best_water, _ = results[best_idx]
+
+        if not early_exit:
+            # Return to origin then rotate to best direction
+            if total_moved > 0:
+                pyautogui.moveRel(-total_moved, 0, duration=0)
+                time.sleep(max(0.05, self.config.adjustment_settle_sec))
+            target_pixels = best_idx * step
+            if target_pixels != 0:
+                pyautogui.moveRel(target_pixels, 0, duration=0)
+                time.sleep(max(0.05, self.config.adjustment_settle_sec))
+        # else: already facing best direction
+
+        # CLEAR+WATER or CLEAR+NO_WATER → just cast, no walking
+        if best_clear:
+            lane = self._lane_snapshot()
+            label = f"ollama_cast_probe_{best_idx + 1}of{count}"
+            print(f"[VISION] facing probe {best_idx + 1}, ready to cast")
+            return True, lane, label
+
+        # BLOCKED+WATER → need to walk toward water
+        pre_walk_lane = self._lane_snapshot()
+        pre_water_score = self._lane_water_preference(pre_walk_lane)
+        pre_clearance = float(pre_walk_lane["clearance_score"])
+        print(f"[VISION] walking toward probe {best_idx + 1} (pre_water={pre_water_score:.2f})...")
+
+        if self.rod_casted:
+            button = self.config.default_button
+            self._reel_once(button)
+            time.sleep(max(0.05, self.config.recast_delay_sec))
+
+        hold_sec = max(0.1, self.config.vision_walk_forward_sec)
+        pyautogui.keyDown("w")
+        try:
+            time.sleep(hold_sec)
+        finally:
+            pyautogui.keyUp("w")
+        time.sleep(max(0.0, self.config.adjustment_settle_sec))
+
+        lane = self._lane_snapshot()
+        post_state = str(lane["lane_state"])
+        post_clearance = float(lane["clearance_score"])
+        post_water_score = self._lane_water_preference(lane)
+
+        # Extra pushes if LLM confirmed water but CV still BLOCKED
+        if post_state == "BLOCKED":
+            for push in range(self.config.vision_extra_push_steps):
+                print(f"[VISION] still BLOCKED, pushing forward (step {push + 1}/{self.config.vision_extra_push_steps})...")
+                pyautogui.keyDown("w")
+                try:
+                    time.sleep(hold_sec)
+                finally:
+                    pyautogui.keyUp("w")
+                time.sleep(max(0.0, self.config.adjustment_settle_sec))
+                lane = self._lane_snapshot()
+                post_state = str(lane["lane_state"])
+                post_clearance = float(lane["clearance_score"])
+                post_water_score = self._lane_water_preference(lane)
+                print(f"[VISION] push {push + 1}: {post_state} clearance={post_clearance:.2f}")
+                if post_state != "BLOCKED":
+                    break
+
+        water_improved = post_water_score > pre_water_score + 0.04
+        clearance_improved = post_clearance > pre_clearance + 0.04
+        moved = post_state != "BLOCKED" or water_improved or clearance_improved or best_water
+
+        label = (
+            f"ollama_walk_{best_idx + 1}of{count}"
+            f"_fwd{hold_sec:.1f}s"
+            f"_water{pre_water_score:.2f}->{post_water_score:.2f}"
+        )
+        print(f"[VISION] after walk: {post_state} clearance={post_clearance:.2f} water={post_water_score:.2f} moved={moved}")
+        return moved, lane, label
 
     def _scan_for_open_lane(
         self, base_lane: Optional[dict[str, float | str]] = None
