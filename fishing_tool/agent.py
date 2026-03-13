@@ -1490,57 +1490,86 @@ class FishingAgent:
     def _scan_for_most_water_and_forward(
         self, base_lane: Optional[dict[str, float | str]] = None
     ) -> tuple[bool, dict[str, float | str], str]:
+        """
+        Single-pass yaw sweep + drift-corrected walk toward the most-water direction.
+
+        Phase 1 – continuous sweep (leftmost → rightmost, no back-and-forth):
+          only 2 large moves, minimising accumulated reset drift.
+
+        Phase 2 – verify + fine-tune:
+          re-measure score at the target direction after rotating.
+          If actual ≥ 70 % of expected → close enough, walk.
+          Otherwise scan ±FINE_RANGE small steps to correct drift and
+          stop at the first position that meets the threshold.
+        """
+        MATCH_RATIO = 0.80  # accept direction if actual/expected >= this
+
         base_lane = base_lane or self._lane_snapshot()
         best_lane = base_lane
         best_water_score = self._lane_water_preference(base_lane)
-        best_adjustment = (0, 0, "water_base")
 
         yaw_base_unit = 4
+        half_steps = max(1, self.config.blocked_scan_yaw_steps)
 
-        # Sweep both yaw directions to avoid missing water that's left or right
-        for yaw_sign in (-1, 1):
-            moved_yaw_total = 0
-            for magnitude in range(1, max(1, self.config.blocked_scan_yaw_steps) + 1):
-                yaw_steps = yaw_sign * yaw_base_unit
-                self._adjust_view(0, yaw_steps)
-                moved_yaw_total += yaw_steps
+        # ── Phase 1: continuous sweep leftmost → rightmost ────────────────────
+        self._adjust_view(0, -half_steps * yaw_base_unit)
+        current_yaw = -half_steps * yaw_base_unit
+        best_yaw = current_yaw
+
+        lane = self._lane_snapshot()
+        score = self._lane_water_preference(lane)
+        if score > best_water_score:
+            best_water_score, best_lane, best_yaw = score, lane, current_yaw
+
+        for _ in range(half_steps * 2):
+            self._adjust_view(0, yaw_base_unit)
+            current_yaw += yaw_base_unit
+            lane = self._lane_snapshot()
+            score = self._lane_water_preference(lane)
+            if score > best_water_score:
+                best_water_score, best_lane, best_yaw = score, lane, current_yaw
+
+        # Single correction: current (rightmost) → best
+        delta_yaw = best_yaw - current_yaw
+        if delta_yaw != 0:
+            self._adjust_view(0, delta_yaw)
+
+        direction = "left" if best_yaw < 0 else ("right" if best_yaw > 0 else "base")
+        label = f"water_yaw_{direction}_off{best_yaw}"
+        print(f"[WATER-SCAN] sweep best={best_water_score:.2f} at offset={best_yaw}")
+
+        # ── Phase 2: verify and fine-tune if rotation drifted ────────────────
+        verify_lane = self._lane_snapshot()
+        actual_score = self._lane_water_preference(verify_lane)
+        threshold = best_water_score * MATCH_RATIO
+        print(f"[WATER-SCAN] verify actual={actual_score:.2f} threshold={threshold:.2f}")
+
+        if actual_score < threshold and best_water_score > 0.05:
+            # Keep sweeping left one step at a time until score meets threshold.
+            # The sweep already went left→right, so drifting right is the likely
+            # error; continuing left corrects it. Stop at first match.
+            fine_best_score = actual_score
+            fine_best_lane  = verify_lane
+            fine_steps      = 0
+            found           = False
+            max_fine        = half_steps * 2  # don't search more than the full sweep width
+
+            for _ in range(max_fine):
+                self._adjust_view(0, -yaw_base_unit)
+                fine_steps += 1
                 lane = self._lane_snapshot()
-                water_score = self._lane_water_preference(lane)
-                if water_score > best_water_score:
-                    best_water_score = water_score
-                    best_lane = lane
-                    best_adjustment = (
-                        0,
-                        moved_yaw_total,
-                        f"water_yaw_{'left' if yaw_sign < 0 else 'right'}_{magnitude}",
-                    )
-            if moved_yaw_total != 0:
-                self._adjust_view(0, -moved_yaw_total)
+                s = self._lane_water_preference(lane)
+                print(f"[WATER-SCAN] fine left step={fine_steps} score={s:.2f}")
+                if s > fine_best_score:
+                    fine_best_score, fine_best_lane = s, lane
+                if s >= threshold:
+                    found = True
+                    break
 
-        pitch_base_unit = 3
+            best_lane = fine_best_lane
+            label += f"_fine-{fine_steps}({'ok' if found else 'approx'})"
+            print(f"[WATER-SCAN] fine done score={fine_best_score:.2f} found={found}")
 
-        for sign in (1, -1):
-            moved_pitch_total = 0
-            for magnitude in range(1, max(1, self.config.blocked_scan_pitch_steps) + 1):
-                pitch_steps = sign * pitch_base_unit
-                self._adjust_view(pitch_steps, 0)
-                moved_pitch_total += pitch_steps
-                lane = self._lane_snapshot()
-                water_score = self._lane_water_preference(lane)
-                if water_score > best_water_score:
-                    best_water_score = water_score
-                    best_lane = lane
-                    best_adjustment = (
-                        moved_pitch_total,
-                        0,
-                        f"water_pitch_{'up' if sign > 0 else 'down'}_{magnitude}",
-                    )
-            if moved_pitch_total != 0:
-                self._adjust_view(-moved_pitch_total, 0)
-
-        pitch_steps, yaw_steps, label = best_adjustment
-        if pitch_steps != 0 or yaw_steps != 0:
-            self._adjust_view(pitch_steps, yaw_steps)
         moved, lane, forward_label = self._forward_after_failed_pitch(best_lane)
         return moved, lane, f"{label}->{forward_label}"
 

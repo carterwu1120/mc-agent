@@ -52,7 +52,7 @@
     "bobber_min_score":  0.55,
     "blocked_scan_trigger_count":  1,
     "blocked_probe_min_improvement":  0.08,
-    "blocked_scan_yaw_steps":  10,
+    "blocked_scan_yaw_steps":  5,
     "blocked_scan_pitch_steps":  4,
     "refinement_obstacle_threshold":  0.32,
     "refinement_max_steps":  2,
