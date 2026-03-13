@@ -58,7 +58,7 @@
     "refinement_max_steps":  2,
     "local_refine_max_steps":  6,
     "failed_cast_pitch_up_steps":  4,
-    "failed_cast_forward_sec":  0.18,
+    "failed_cast_forward_sec":  0.1,
     "viable_water_center_threshold":  0.34,
     "viable_water_direction_threshold":  0.45,
     "refinement_water_target":  0.52,
