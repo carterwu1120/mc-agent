@@ -16,13 +16,13 @@ Press 'q' to quit, 's' to save a calibration screenshot.
 """
 
 import json
-import sys
-import time
 from pathlib import Path
 
 import cv2
 import mss
 import numpy as np
+
+from fishing_tool.cv import compute_lane_features, compute_water_features
 
 try:
     import pygetwindow as gw
@@ -64,7 +64,7 @@ def capture(region: dict) -> np.ndarray:
     return np.array(shot)
 
 
-# ── tuneable HSV ranges ───────────────────────────────────────────────────────
+# ── visualisation-only HSV ranges (scoring uses fishing_tool.cv) ────────────
 WATER_LOWER = np.array([80, 45, 30], dtype=np.uint8)
 WATER_UPPER = np.array([130, 255, 255], dtype=np.uint8)
 
@@ -135,29 +135,87 @@ def main():
 
         # Draw region boxes
         center_lane_ratio = cfg.get("center_lane_region_ratio")
-        water_ratio       = cfg.get("water_region_ratio")
+        water_ratio = cfg.get("water_region_ratio")
+        low_thr = float(cfg.get("center_lane_clearance_low_threshold", 0.42))
+        high_thr = float(cfg.get("center_lane_clearance_high_threshold", 0.62))
+
+        lane_metrics = None
+        water_metrics = None
+
         if center_lane_ratio:
             cl_region = sub_region(base_region, center_lane_ratio)
             draw_box(display, base_region, cl_region, (0, 255, 255), "Center Lane")
-            # Compute clearance stats for the center lane crop
             x1 = cl_region["left"] - base_region["left"]
             y1 = cl_region["top"]  - base_region["top"]
             x2 = x1 + cl_region["width"]
             y2 = y1 + cl_region["height"]
-            crop_w = water_mask[y1:y2, x1:x2]
-            crop_s = sky_mask[y1:y2, x1:x2]
-            crop_o = obstacle_mask[y1:y2, x1:x2]
-            total  = float(crop_w.size) or 1.0
-            wr = np.count_nonzero(crop_w) / total
-            sr = np.count_nonzero(crop_s) / total
-            obr= np.count_nonzero(crop_o) / total
-            info = f"water={wr:.2f} sky={sr:.2f} obstacle={obr:.2f}"
-            cv2.putText(display, info, (x1, max(18, y1 - 22)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+            crop_lane_bgr = img_bgr[y1:y2, x1:x2]
+            if crop_lane_bgr.size > 0:
+                crop_lane_bgra = cv2.cvtColor(crop_lane_bgr, cv2.COLOR_BGR2BGRA)
+                lane_metrics = compute_lane_features(
+                    crop_lane_bgra,
+                    low_threshold=low_thr,
+                    high_threshold=high_thr,
+                )
 
         if water_ratio:
-            draw_box(display, base_region, sub_region(base_region, water_ratio),
-                     (255, 180, 0), "Water ROI")
+            wr_region = sub_region(base_region, water_ratio)
+            draw_box(display, base_region, wr_region, (255, 180, 0), "Water ROI")
+            x1 = wr_region["left"] - base_region["left"]
+            y1 = wr_region["top"]  - base_region["top"]
+            x2 = x1 + wr_region["width"]
+            y2 = y1 + wr_region["height"]
+            crop_water_bgr = img_bgr[y1:y2, x1:x2]
+            if crop_water_bgr.size > 0:
+                crop_water_bgra = cv2.cvtColor(crop_water_bgr, cv2.COLOR_BGR2BGRA)
+                water_metrics = compute_water_features(crop_water_bgra)
+
+        lines = []
+        if water_metrics is not None:
+            lines.extend(
+                [
+                    f"water_score={water_metrics['water_score']:.2f}",
+                    f"blue_ratio={water_metrics['blue_ratio']:.2f}",
+                    f"brightness_std={water_metrics['brightness_std']:.1f}",
+                    f"water_edge_density={water_metrics['edge_density']:.2f}",
+                ]
+            )
+        if lane_metrics is not None:
+            lines.extend(
+                [
+                    f"lane_state={lane_metrics['lane_state']}",
+                    f"clearance={lane_metrics['clearance_score']:.2f}",
+                    f"center_water_ratio={lane_metrics['center_water_ratio']:.2f}",
+                    f"center_nonwater={lane_metrics['center_nonwater_occupancy']:.2f}",
+                    f"connected_block={lane_metrics['connected_block_ratio']:.2f}",
+                    f"residual_obstacle={lane_metrics['residual_obstacle_score']:.2f}",
+                    f"move_pitch_up={lane_metrics['move_pitch_up_score']:.2f}",
+                    f"move_pitch_down={lane_metrics['move_pitch_down_score']:.2f}",
+                    f"move_yaw_left={lane_metrics['move_yaw_left_score']:.2f}",
+                    f"move_yaw_right={lane_metrics['move_yaw_right_score']:.2f}",
+                ]
+            )
+
+        y_text = 26
+        for line in lines:
+            color = (235, 235, 235)
+            if "lane_state=CLEAR" in line:
+                color = (90, 255, 90)
+            elif "lane_state=RISKY" in line:
+                color = (80, 220, 255)
+            elif "lane_state=BLOCKED" in line:
+                color = (110, 110, 255)
+            cv2.putText(
+                display,
+                line,
+                (16, y_text),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+            y_text += 24
 
         # Handle click inspection
         if clicked_px is not None:
