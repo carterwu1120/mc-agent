@@ -52,6 +52,7 @@ class FishingAgent:
         self.optimized_angle_key: Optional[tuple[int, int]] = None
         self.failed_pitch_forward_used = False
         self.clear_casted_timeout_streak = 0
+        self.last_ocr_text = ""
 
         if self.config.ocr_engine == "easyocr":
             self.reader = easyocr.Reader(config.languages, gpu=False)
@@ -70,17 +71,8 @@ class FishingAgent:
         lane = self._compute_center_lane_features(center_lane_img)
         self.last_lane_state = str(lane["lane_state"])
         self.last_lane_score = float(lane["clearance_score"])
-        if self.config.debug_window and center_lane_img is not None:
-            import os, cv2 as _cv2
-            os.makedirs("logs", exist_ok=True)
-            bgr = _cv2.cvtColor(center_lane_img, _cv2.COLOR_BGRA2BGR)
-            info = (f"clearance={lane['clearance_score']:.2f} "
-                    f"water={lane['center_water_ratio']:.2f} "
-                    f"nonwater={lane['center_nonwater_occupancy']:.2f} "
-                    f"{lane['lane_state']}")
-            _cv2.putText(bgr, info, (4, 18), _cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, _cv2.LINE_AA)
-            _cv2.putText(bgr, info, (4, 18), _cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, _cv2.LINE_AA)
-            _cv2.imwrite("logs/debug_center_lane.jpg", bgr)
+        if self.config.debug_window:
+            self._show_debug_window(self.last_ocr_text)
         return lane
 
     def _capture_region(self, region: dict[str, int]) -> np.ndarray:
@@ -258,89 +250,73 @@ class FishingAgent:
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        water_lower = np.array([80, 25, 25], dtype=np.uint8)
+        # ── 3-class segmentation: water / sky+open / obstacle ────────────────
+        water_lower = np.array([80, 45, 30], dtype=np.uint8)
         water_upper = np.array([130, 255, 255], dtype=np.uint8)
         water_mask = cv2.inRange(hsv, water_lower, water_upper)
         kernel = np.ones((3, 3), dtype=np.uint8)
         water_mask = cv2.morphologyEx(water_mask, cv2.MORPH_OPEN, kernel)
         water_mask = cv2.morphologyEx(water_mask, cv2.MORPH_CLOSE, kernel)
-        nonwater_mask = cv2.bitwise_not(water_mask)
+
+        # Sky / open air: bright + desaturated.
+        # V≥170 excludes most solid blocks (cobblestone V≈100-155) while
+        # keeping actual sky/clouds (V≈170-255) and horizon haze.
+        sky_lower = np.array([0, 0, 170], dtype=np.uint8)
+        sky_upper = np.array([180, 60, 255], dtype=np.uint8)
+        sky_mask = cv2.inRange(hsv, sky_lower, sky_upper)
+
+        # Obstacle = neither water nor sky
+        obstacle_mask = cv2.bitwise_not(cv2.bitwise_or(water_mask, sky_mask))
+        # ─────────────────────────────────────────────────────────────────────
 
         h, w = gray.shape
         core_x1 = int(w * 0.20)
         core_x2 = int(w * 0.80)
         core_y1 = int(h * 0.18)
         core_y2 = int(h * 0.88)
-        core_water = water_mask[core_y1:core_y2, core_x1:core_x2]
-        core_nonwater = nonwater_mask[core_y1:core_y2, core_x1:core_x2]
+        core_water    = water_mask[core_y1:core_y2, core_x1:core_x2]
+        core_sky      = sky_mask[core_y1:core_y2, core_x1:core_x2]
+        core_obstacle = obstacle_mask[core_y1:core_y2, core_x1:core_x2]
 
-        center_water_ratio = float(np.count_nonzero(core_water)) / float(core_water.size)
-        center_nonwater_occupancy = 1.0 - center_water_ratio
+        total = float(core_water.size) or 1.0
+        center_water_ratio        = float(np.count_nonzero(core_water))    / total
+        center_sky_ratio          = float(np.count_nonzero(core_sky))      / total
+        center_nonwater_occupancy = float(np.count_nonzero(core_obstacle)) / total  # true obstacle ratio
 
-        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(core_nonwater, connectivity=8)
+        # Largest connected obstacle component in core
+        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(core_obstacle, connectivity=8)
         largest_component = 0
         for label_idx in range(1, num_labels):
             largest_component = max(largest_component, int(stats[label_idx, cv2.CC_STAT_AREA]))
-        connected_block_ratio = float(largest_component) / float(core_nonwater.size)
+        connected_block_ratio = float(largest_component) / total
 
-        upper_band = nonwater_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
-        lower_band = nonwater_mask[int(h * 0.55) :, core_x1:core_x2]
+        # Band slices (using obstacle_mask so sky ≠ blocked)
+        upper_obs_band   = obstacle_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
+        lower_obs_band   = obstacle_mask[int(h * 0.55) :, core_x1:core_x2]
         upper_water_band = water_mask[: max(1, int(h * 0.30)), core_x1:core_x2]
         lower_water_band = water_mask[int(h * 0.55) :, core_x1:core_x2]
-        left_band = core_nonwater[:, : max(1, core_nonwater.shape[1] // 2)]
-        right_band = core_nonwater[:, max(1, core_nonwater.shape[1] // 2) :]
-        left_water_band = core_water[:, : max(1, core_water.shape[1] // 2)]
+        left_obs_band    = core_obstacle[:, : max(1, core_obstacle.shape[1] // 2)]
+        right_obs_band   = core_obstacle[:, max(1, core_obstacle.shape[1] // 2) :]
+        left_water_band  = core_water[:, : max(1, core_water.shape[1] // 2)]
         right_water_band = core_water[:, max(1, core_water.shape[1] // 2) :]
-        upper_open_ratio = 1.0 - (
-            float(np.count_nonzero(upper_band)) / float(upper_band.size)
-            if upper_band.size
-            else 0.0
-        )
-        upper_water_ratio = (
-            float(np.count_nonzero(upper_water_band)) / float(upper_water_band.size)
-            if upper_water_band.size
-            else 0.0
-        )
-        upper_nonwater_ratio = (
-            float(np.count_nonzero(upper_band)) / float(upper_band.size)
-            if upper_band.size
-            else 0.0
-        )
-        lower_water_ratio = (
-            float(np.count_nonzero(lower_water_band)) / float(lower_water_band.size)
-            if lower_water_band.size
-            else 0.0
-        )
-        lower_nonwater_ratio = (
-            float(np.count_nonzero(lower_band)) / float(lower_band.size)
-            if lower_band.size
-            else 0.0
-        )
-        left_water_ratio = (
-            float(np.count_nonzero(left_water_band)) / float(left_water_band.size)
-            if left_water_band.size
-            else 0.0
-        )
-        left_nonwater_ratio = (
-            float(np.count_nonzero(left_band)) / float(left_band.size)
-            if left_band.size
-            else 0.0
-        )
-        right_water_ratio = (
-            float(np.count_nonzero(right_water_band)) / float(right_water_band.size)
-            if right_water_band.size
-            else 0.0
-        )
-        right_nonwater_ratio = (
-            float(np.count_nonzero(right_band)) / float(right_band.size)
-            if right_band.size
-            else 0.0
-        )
+
+        def _r(m: np.ndarray) -> float:
+            return float(np.count_nonzero(m)) / float(m.size) if m.size else 0.0
+
+        upper_open_ratio   = 1.0 - _r(upper_obs_band)   # sky + water in upper = open
+        upper_water_ratio  = _r(upper_water_band)
+        upper_nonwater_ratio = _r(upper_obs_band)        # obstacle in upper band
+        lower_water_ratio  = _r(lower_water_band)
+        lower_nonwater_ratio = _r(lower_obs_band)        # obstacle in lower band
+        left_water_ratio   = _r(left_water_band)
+        left_nonwater_ratio  = _r(left_obs_band)
+        right_water_ratio  = _r(right_water_band)
+        right_nonwater_ratio = _r(right_obs_band)
 
         directional_blocks = {
             "lower": lower_nonwater_ratio - 0.6 * lower_water_ratio,
             "upper": upper_nonwater_ratio - 0.6 * upper_water_ratio,
-            "left": left_nonwater_ratio - 0.6 * left_water_ratio,
+            "left":  left_nonwater_ratio  - 0.6 * left_water_ratio,
             "right": right_nonwater_ratio - 0.6 * right_water_ratio,
         }
         dominant_block_side = max(directional_blocks, key=directional_blocks.get)
@@ -388,19 +364,21 @@ class FishingAgent:
         abs_grad_y = np.abs(grad_y)
 
         grad_energy = float(np.sum(abs_grad_x) + np.sum(abs_grad_y)) + 1e-6
-        vertical_edge_ratio = float(np.sum(abs_grad_x)) / grad_energy
+        vertical_edge_ratio   = float(np.sum(abs_grad_x)) / grad_energy
         horizontal_edge_ratio = float(np.sum(abs_grad_y)) / grad_energy
 
+        # openness: water is best, open sky also counts as clear
+        openness_score = min(
+            1.0,
+            0.55 * center_water_ratio
+            + 0.25 * center_sky_ratio
+            + 0.20 * upper_open_ratio,
+        )
         obstacle_score = min(
             1.0,
             0.35 * center_nonwater_occupancy
             + 0.35 * min(connected_block_ratio / 0.30, 1.0)
             + 0.30 * lower_nonwater_ratio,
-        )
-        openness_score = min(
-            1.0,
-            0.60 * center_water_ratio
-            + 0.40 * upper_open_ratio,
         )
         orientation_penalty = 0.10 * max(0.0, horizontal_edge_ratio - 0.62)
         clearance_score = max(
@@ -1517,35 +1495,31 @@ class FishingAgent:
         best_water_score = self._lane_water_preference(base_lane)
         best_adjustment = (0, 0, "water_base")
 
-        yaw_left_score = float(base_lane.get("move_yaw_left_score", 0.0))
-        yaw_right_score = float(base_lane.get("move_yaw_right_score", 0.0))
-        yaw_sign = -1 if yaw_left_score >= yaw_right_score else 1
         yaw_base_unit = 4
 
-        moved_yaw_total = 0
-        for magnitude in range(1, max(1, self.config.blocked_scan_yaw_steps) + 1):
-            yaw_steps = yaw_sign * yaw_base_unit
-            self._adjust_view(0, yaw_steps)
-            moved_yaw_total += yaw_steps
-            lane = self._lane_snapshot()
-            water_score = self._lane_water_preference(lane)
-            if water_score > best_water_score:
-                best_water_score = water_score
-                best_lane = lane
-                best_adjustment = (
-                    0,
-                    moved_yaw_total,
-                    f"water_yaw_{'left' if yaw_sign < 0 else 'right'}_{magnitude}",
-                )
-        if moved_yaw_total != 0:
-            self._adjust_view(0, -moved_yaw_total)
+        # Sweep both yaw directions to avoid missing water that's left or right
+        for yaw_sign in (-1, 1):
+            moved_yaw_total = 0
+            for magnitude in range(1, max(1, self.config.blocked_scan_yaw_steps) + 1):
+                yaw_steps = yaw_sign * yaw_base_unit
+                self._adjust_view(0, yaw_steps)
+                moved_yaw_total += yaw_steps
+                lane = self._lane_snapshot()
+                water_score = self._lane_water_preference(lane)
+                if water_score > best_water_score:
+                    best_water_score = water_score
+                    best_lane = lane
+                    best_adjustment = (
+                        0,
+                        moved_yaw_total,
+                        f"water_yaw_{'left' if yaw_sign < 0 else 'right'}_{magnitude}",
+                    )
+            if moved_yaw_total != 0:
+                self._adjust_view(0, -moved_yaw_total)
 
-        pitch_up_score = float(base_lane.get("move_pitch_up_score", 0.0))
-        pitch_down_score = float(base_lane.get("move_pitch_down_score", 0.0))
-        pitch_signs = [1, -1] if pitch_up_score >= pitch_down_score else [-1, 1]
         pitch_base_unit = 3
 
-        for sign in pitch_signs:
+        for sign in (1, -1):
             moved_pitch_total = 0
             for magnitude in range(1, max(1, self.config.blocked_scan_pitch_steps) + 1):
                 pitch_steps = sign * pitch_base_unit
@@ -1816,6 +1790,7 @@ class FishingAgent:
         text = self.capture_text()
         if self.config.print_ocr_text:
             print(f"[OCR] {text}")
+        self.last_ocr_text = text
         self._show_debug_window(text)
 
         if text.strip():
