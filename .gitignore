@@ -7,3 +7,5 @@ logs/
 
 fishing_agent_tool.egg-info/
 logs/
+
+training/dataset/
