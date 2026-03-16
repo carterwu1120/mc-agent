@@ -9,6 +9,7 @@ fishing_agent_tool.egg-info/
 logs/
 
 training/dataset/
+training/datasets/
 training/runs/
 training/dataset/**/data_resolved.yaml
 *.pt
