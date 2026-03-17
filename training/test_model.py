@@ -6,7 +6,7 @@ import cv2
 import pygetwindow as gw
 from ultralytics import YOLO
 
-BEST_PT = Path(__file__).parent / "runs/entity_v1/weights/best.pt"
+BEST_PT = Path(__file__).parent / "runs/entity_v3/weights/best.pt"
 WINDOW_TITLE = "Minecraft"
 CONF = 0.4
 

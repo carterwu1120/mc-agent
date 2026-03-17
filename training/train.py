@@ -17,10 +17,10 @@ def main():
         data=str(MERGED_YAML),
         epochs=100,
         imgsz=640,
-        batch=32,
+        batch=64,
         device=0,
         project=str(RUNS_DIR),
-        name="entity_v2",
+        name="entity_v3",
         exist_ok=True,
         patience=20,
     )
