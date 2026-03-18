@@ -15,12 +15,12 @@ def main():
     model = YOLO("yolov8s.pt")
     model.train(
         data=str(MERGED_YAML),
-        epochs=100,
+        epochs=200,
         imgsz=640,
         batch=64,
         device=0,
         project=str(RUNS_DIR),
-        name="entity_v3",
+        name="entity_v5",
         exist_ok=True,
         patience=20,
     )

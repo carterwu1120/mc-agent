@@ -6,10 +6,10 @@ REMAP = {
     "Character":      None,        # remove
     "Cow":            "cow",
     "Creeper":        "creeper",
-    "Donkey":         "donkey",
+    "Donkey":         None,       # remove - only 4 instances total
     "Duck":           "chicken",
-    "Fish":           "fish",
-    "Horse":          "horse",
+    "Fish":           None,       # remove - too few instances
+    "Horse":          None,       # remove - too few instances
     "Pig":            "pig",
     "Sheep":          "sheep",
     "Skeleton":       "skeleton",

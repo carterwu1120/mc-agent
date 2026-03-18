@@ -8,12 +8,15 @@ Each dataset config in dataset_configs/ defines:
     SOURCE_DIR  - path relative to training/ directory
     REMAP       - dict mapping original class name -> new name (None = remove)
 
-Output: training/datasets/merged/ with unified train/valid/test splits.
+All splits (train/valid/test) from all datasets are pooled together,
+then re-split 85/10/5 to ensure even class distribution in val/test.
 """
 from __future__ import annotations
 
 import importlib
+import random
 import shutil
+from collections import defaultdict
 from pathlib import Path
 
 import yaml
@@ -21,6 +24,12 @@ import yaml
 TRAINING_DIR = Path(__file__).parent
 CONFIGS_DIR = TRAINING_DIR / "dataset_configs"
 OUTPUT_DIR = TRAINING_DIR / "datasets" / "merged"
+
+TRAIN_RATIO = 0.85
+VAL_RATIO = 0.10
+# remainder goes to test
+
+SEED = 42
 
 
 def load_configs() -> list[dict]:
@@ -40,90 +49,101 @@ def load_configs() -> list[dict]:
 
 
 def load_yaml_classes(source_dir: Path) -> list[str]:
-    yaml_path = source_dir / "data.yaml"
-    with open(yaml_path) as f:
-        cfg = yaml.safe_load(f)
-    return cfg["names"]
+    with open(source_dir / "data.yaml") as f:
+        return yaml.safe_load(f)["names"]
 
 
 def build_global_classes(configs: list[dict]) -> list[str]:
-    """Collect all unique output class names across all datasets, sorted."""
     classes = set()
     for cfg in configs:
-        original = load_yaml_classes(cfg["source_dir"])
-        for name in original:
+        for name in load_yaml_classes(cfg["source_dir"]):
             new_name = cfg["remap"].get(name)
             if new_name is not None:
                 classes.add(new_name)
     return sorted(classes)
 
 
-def remap_label_file(
-    src: Path,
-    dst: Path,
-    index_map: dict[int, int],  # old_index -> new_index
-) -> int:
-    """Write remapped label file. Returns number of kept annotations."""
-    lines = src.read_text().splitlines()
+def build_index_map(cfg: dict, global_classes: list[str]) -> dict[int, int | None]:
+    original = load_yaml_classes(cfg["source_dir"])
+    index_map = {}
+    for i, name in enumerate(original):
+        new_name = cfg["remap"].get(name)
+        index_map[i] = global_classes.index(new_name) if new_name is not None else None
+    return index_map
+
+
+def remap_label(src: Path, index_map: dict[int, int | None]) -> list[str]:
     kept = []
-    for line in lines:
+    for line in src.read_text().splitlines():
         if not line.strip():
             continue
         parts = line.split()
-        old_idx = int(parts[0])
-        new_idx = index_map.get(old_idx)
-        if new_idx is None:
-            continue
-        kept.append(f"{new_idx} {' '.join(parts[1:])}")
-    dst.write_text("\n".join(kept) + "\n" if kept else "")
-    return len(kept)
+        new_idx = index_map.get(int(parts[0]))
+        if new_idx is not None:
+            kept.append(f"{new_idx} {' '.join(parts[1:])}")
+    return kept
 
 
-def process_dataset(cfg: dict, global_classes: list[str], split: str) -> tuple[int, int]:
-    source_dir = cfg["source_dir"]
-    remap = cfg["remap"]
-    original_classes = load_yaml_classes(source_dir)
+def collect_all_samples(configs: list[dict], global_classes: list[str]) -> list[dict]:
+    """Collect all image+label pairs from all datasets and splits into one pool."""
+    samples = []
+    for cfg in configs:
+        source_dir = cfg["source_dir"]
+        index_map = build_index_map(cfg, global_classes)
 
-    # old_index -> new_index (None = remove)
-    index_map: dict[int, int | None] = {}
-    for i, name in enumerate(original_classes):
-        new_name = remap.get(name)
-        if new_name is not None:
-            index_map[i] = global_classes.index(new_name)
-        else:
-            index_map[i] = None
+        for split in ("train", "valid", "test"):
+            images_dir = source_dir / split / "images"
+            labels_dir = source_dir / split / "labels"
+            if not images_dir.exists():
+                continue
 
-    images_src = source_dir / split / "images"
-    labels_src = source_dir / split / "labels"
+            for img_path in images_dir.iterdir():
+                label_path = labels_dir / f"{img_path.stem}.txt"
+                lines = remap_label(label_path, index_map) if label_path.exists() else []
+                classes_in_img = {int(l.split()[0]) for l in lines}
+                samples.append({
+                    "img_path": img_path,
+                    "lines": lines,
+                    "classes": classes_in_img,
+                    "stem": f"{cfg['name']}_{img_path.stem}",
+                    "suffix": img_path.suffix,
+                })
+    return samples
+
+
+def stratified_split(samples: list[dict]) -> tuple[list, list, list]:
+    """Split samples by primary class to ensure class balance in val/test."""
+    random.seed(SEED)
+
+    # Group by primary class (first class in label, or -1 for background)
+    groups: dict[int, list] = defaultdict(list)
+    for s in samples:
+        key = min(s["classes"]) if s["classes"] else -1
+        groups[key].append(s)
+
+    train, val, test = [], [], []
+    for group in groups.values():
+        random.shuffle(group)
+        n = len(group)
+        n_val = max(1, round(n * VAL_RATIO))
+        n_test = max(1, round(n * (1 - TRAIN_RATIO - VAL_RATIO)))
+        test.extend(group[:n_test])
+        val.extend(group[n_test:n_test + n_val])
+        train.extend(group[n_test + n_val:])
+
+    return train, val, test
+
+
+def write_split(samples: list[dict], split: str):
     images_dst = OUTPUT_DIR / split / "images"
     labels_dst = OUTPUT_DIR / split / "labels"
     images_dst.mkdir(parents=True, exist_ok=True)
     labels_dst.mkdir(parents=True, exist_ok=True)
 
-    if not images_src.exists():
-        return 0, 0
-
-    copied, skipped = 0, 0
-    for img_path in images_src.iterdir():
-        stem = f"{cfg['name']}_{img_path.stem}"
-        label_src = labels_src / f"{img_path.stem}.txt"
-
-        # Copy image
-        shutil.copy2(img_path, images_dst / f"{stem}{img_path.suffix}")
-
-        # Remap label
-        if label_src.exists():
-            kept = remap_label_file(label_src, labels_dst / f"{stem}.txt", index_map)
-            if kept > 0:
-                copied += 1
-            else:
-                skipped += 1
-        else:
-            # background image — write empty label
-            (labels_dst / f"{stem}.txt").write_text("")
-            copied += 1
-
-    return copied, skipped
+    for s in samples:
+        shutil.copy2(s["img_path"], images_dst / f"{s['stem']}{s['suffix']}")
+        label_dst = labels_dst / f"{s['stem']}.txt"
+        label_dst.write_text("\n".join(s["lines"]) + "\n" if s["lines"] else "")
 
 
 def write_merged_yaml(global_classes: list[str]) -> Path:
@@ -149,13 +169,15 @@ def main():
     global_classes = build_global_classes(configs)
     print(f"Global classes ({len(global_classes)}): {global_classes}")
 
-    for split in ("train", "valid", "test"):
-        total_copied = total_skipped = 0
-        for cfg in configs:
-            copied, skipped = process_dataset(cfg, global_classes, split)
-            total_copied += copied
-            total_skipped += skipped
-        print(f"  {split}: {total_copied} images kept, {total_skipped} images with no annotations")
+    samples = collect_all_samples(configs, global_classes)
+    print(f"Total samples collected: {len(samples)}")
+
+    train, val, test = stratified_split(samples)
+    print(f"Split: train={len(train)}, val={len(val)}, test={len(test)}")
+
+    write_split(train, "train")
+    write_split(val, "valid")
+    write_split(test, "test")
 
     yaml_path = write_merged_yaml(global_classes)
     print(f"\nMerged dataset ready: {OUTPUT_DIR}")
