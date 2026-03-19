@@ -12,6 +12,7 @@
   "dependencies": {
     "minecraft-protocol-forge": "^1.0.0",
     "mineflayer": "^4.35.0",
+    "mineflayer-pathfinder": "^2.4.5",
     "ws": "^8.19.0"
   }
 }

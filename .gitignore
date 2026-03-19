@@ -13,3 +13,4 @@ training/datasets/
 training/runs/
 training/dataset/**/data_resolved.yaml
 *.pt
+.env
