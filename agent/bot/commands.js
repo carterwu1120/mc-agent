@@ -58,6 +58,21 @@ function handle(bot, msg) {
             break
         }
 
+        case 'clear': {
+            const items = bot.inventory.items()
+            if (items.length === 0) {
+                console.log('[Inv] 背包已經是空的')
+                break
+            }
+            ;(async () => {
+                for (const item of items) {
+                    await bot.tossStack(item)
+                }
+                console.log(`[Inv] 丟棄了 ${items.length} 種物品`)
+            })()
+            break
+        }
+
         default:
             console.warn('[Action] 未知指令:', msg.command)
     }

@@ -34,6 +34,51 @@ function findNearestWater(bot, maxRange = 32) {
 }
 
 /**
+ * 找適合釣魚的水方塊（水平距離 3-10 格，且視線無明顯障礙）
+ * 會優先找距離適中、視線清晰的水體
+ * @param {object} bot
+ * @param {number} maxRange
+ * @returns {object|null}
+ */
+function findFishableWater(bot, maxRange = 16) {
+    const waterIds = ['water', 'flowing_water']
+        .map(name => bot.registry.blocksByName[name]?.id)
+        .filter(Boolean)
+
+    if (waterIds.length === 0) return null
+
+    // 收集範圍內所有水方塊
+    const candidates = []
+    const pos = bot.entity.position
+
+    for (let dx = -maxRange; dx <= maxRange; dx++) {
+        for (let dz = -maxRange; dz <= maxRange; dz++) {
+            for (let dy = -4; dy <= 4; dy++) {
+                const checkPos = pos.offset(dx, dy, dz)
+                const block = bot.blockAt(checkPos)
+                if (!block || !waterIds.includes(block.type)) continue
+
+                const horzDist = Math.sqrt(dx * dx + dz * dz)
+                // 水平距離要在 3-10 格之間（太近拋不到，太遠射程不夠）
+                if (horzDist < 3 || horzDist > 10) continue
+
+                candidates.push({ block, horzDist })
+            }
+        }
+    }
+
+    if (candidates.length === 0) return null
+
+    // 優先選距離適中（5-7格）且視線清晰的
+    candidates.sort((a, b) => {
+        const idealDist = 6
+        return Math.abs(a.horzDist - idealDist) - Math.abs(b.horzDist - idealDist)
+    })
+
+    return candidates[0]?.block ?? null
+}
+
+/**
  * 找最近的特定實體
  * @param {object} bot
  * @param {string} entityName - 實體名稱（e.g. 'fishing_bobber', 'cow'）
@@ -62,4 +107,23 @@ function findNearestPlayer(bot) {
         )[0] ?? null
 }
 
-module.exports = { findNearestBlock, findNearestWater, findNearestEntity, findNearestPlayer }
+/**
+ * 檢查某個位置是否是水
+ * @param {object} bot
+ * @param {object} position - Vec3 位置
+ * @returns {boolean}
+ */
+function isWater(bot, position) {
+    const block = bot.blockAt(position)
+    return block?.name === 'water'
+}
+
+
+module.exports = {
+    findNearestBlock,
+    findNearestWater,
+    findFishableWater,
+    findNearestEntity,
+    findNearestPlayer,
+    isWater,
+}
