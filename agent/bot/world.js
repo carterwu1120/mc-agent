@@ -34,8 +34,7 @@ function findNearestWater(bot, maxRange = 32) {
 }
 
 /**
- * 找適合釣魚的水方塊（水平距離 3-10 格，且視線無明顯障礙）
- * 會優先找距離適中、視線清晰的水體
+ * 找適合釣魚的水方塊（水平距離 3-10 格，優先距離約 6 格）
  * @param {object} bot
  * @param {number} maxRange
  * @returns {object|null}
@@ -69,7 +68,6 @@ function findFishableWater(bot, maxRange = 16) {
 
     if (candidates.length === 0) return null
 
-    // 優先選距離適中（5-7格）且視線清晰的
     candidates.sort((a, b) => {
         const idealDist = 6
         return Math.abs(a.horzDist - idealDist) - Math.abs(b.horzDist - idealDist)
@@ -117,7 +115,6 @@ function isWater(bot, position) {
     const block = bot.blockAt(position)
     return block?.name === 'water'
 }
-
 
 module.exports = {
     findNearestBlock,

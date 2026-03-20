@@ -147,10 +147,8 @@ function _waitForBite(bot, bobber, timeoutMs = 30000) {
     })
 }
 
-
-
 // 面向目標位置：先 lookAt 取得正確 yaw，再把 pitch 換成仰角
-// 同一目標重用上次調整過的 pitch，避免每次重置覆蓋掉 _fixCastIssue 的調整
+// 同一目標重用上次調整過的 pitch，避免每次 loop 重置
 async function _faceTarget(bot, targetPos) {
     await bot.lookAt(targetPos)
 
