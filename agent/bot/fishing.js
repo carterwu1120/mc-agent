@@ -1,3 +1,5 @@
+const { findNearestEntity } = require('./world')
+
 let isFishing = false
 
 async function startFishing(bot) {
@@ -36,7 +38,7 @@ async function _loop(bot) {
         await _sleep(1000)
 
         // 找浮標
-        const bobber = _findBobber(bot)
+        const bobber = findNearestEntity(bot, 'fishing_bobber')
         if (!bobber) {
             console.log('[Fish] 找不到浮標，重試')
             continue
@@ -53,13 +55,6 @@ async function _loop(bot) {
 
         await _sleep(500)
     }
-}
-
-function _findBobber(bot) {
-    return Object.values(bot.entities).find(e =>
-        (e.name === 'fishing_bobber' || e.name === 'fishing_hook') &&
-        e.position.distanceTo(bot.entity.position) < 32
-    )
 }
 
 function _waitForBite(bot, bobber, timeoutMs = 30000) {

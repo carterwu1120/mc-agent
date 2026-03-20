@@ -1,5 +1,6 @@
 const { goals } = require('mineflayer-pathfinder')
 const { startFishing, stopFishing } = require('./fishing')
+const { findNearestPlayer } = require('./world')
 
 function handle(bot, msg) {
     console.log('[Action]', JSON.stringify(msg))
@@ -12,7 +13,7 @@ function handle(bot, msg) {
             const caller = msg.args?.[0]
             const player = caller
                 ? bot.players[caller]?.entity
-                : Object.values(bot.entities).find(e => e.type === 'player' && e.id !== bot.entity.id)
+                : findNearestPlayer(bot)
             if (player) {
                 bot.pathfinder.setGoal(new goals.GoalNear(player.position.x, player.position.y, player.position.z, 2))
                 console.log(`[Action] 走向 ${player.username || 'player'}`)
