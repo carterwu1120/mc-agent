@@ -1,4 +1,5 @@
 const { WebSocketServer } = require('ws')
+const { getActivity } = require('./activity')
 
 const wss = new WebSocketServer({ port: 3001 })
 let agentSocket = null
@@ -30,6 +31,7 @@ function sendState(bot, type, extra = {}) {
     if (!agentSocket || agentSocket.readyState !== 1) return
     const state = {
         type,
+        activity: getActivity(),
         pos: bot.entity ? bot.entity.position : null,
         health: bot.health,
         food: bot.food,

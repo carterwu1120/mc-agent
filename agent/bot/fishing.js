@@ -1,6 +1,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { findNearestEntity, findNearestWater, findFishableWater, isWater, scanAreaMap } = require('./world')
 const bridge = require('./bridge')
+const { setActivity } = require('./activity')
 
 let isFishing = false
 let _savedPitch = null   // 目前使用的 pitch（同目標時沿用）
@@ -26,12 +27,14 @@ async function startFishing(bot) {
     console.log('[Fish] 釣竿已裝備，開始釣魚')
 
     isFishing = true
+    setActivity('fishing')
     _loop(bot)
 }
 
 function stopFishing(bot) {
     if (!isFishing) return
     isFishing = false
+    setActivity('idle')
     if (bot.fishing) bot.activateItem()
     console.log('[Fish] 停止釣魚')
 }
@@ -49,6 +52,7 @@ async function _loop(bot) {
         if (!water) {
             console.log('[Fish] 附近沒有水，停止釣魚')
             isFishing = false
+            setActivity('idle')
             break
         }
 
@@ -100,6 +104,7 @@ async function _loop(bot) {
             if (decision.action === 'stop') {
                 console.log('[Fish] LLM 決定停止釣魚')
                 isFishing = false
+                setActivity('idle')
                 break
             }
 
@@ -220,4 +225,8 @@ function applyLLMDecision(decision) {
     _llmDecision = decision
 }
 
-module.exports = { startFishing, stopFishing, applyLLMDecision }
+function isActive() {
+    return isFishing
+}
+
+module.exports = { startFishing, stopFishing, applyLLMDecision, isActive }

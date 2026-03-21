@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 from agent.brain import LLMClient, GeminiClient, OllamaClient
 from agent.skills import fishing as fishing_skill
+from agent.skills import inventory as inventory_skill
 
 load_dotenv()
 
@@ -17,6 +18,7 @@ llm: LLMClient = GeminiClient()
 # ── 各事件對應的 skill handler ────────────────────────────
 HANDLERS = {
     "fishing_stuck": fishing_skill.handle,
+    "inventory_full": inventory_skill.handle,
 }
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
