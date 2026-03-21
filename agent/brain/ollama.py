@@ -22,5 +22,6 @@ class OllamaClient(LLMClient):
         response = await self.client.chat(
             model=self.model,
             messages=all_messages,
+            options={"num_ctx": 4096},
         )
         return response["message"]["content"]

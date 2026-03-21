@@ -1,5 +1,5 @@
 const { goals } = require('mineflayer-pathfinder')
-const { startFishing, stopFishing } = require('./fishing')
+const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
 const { findNearestPlayer } = require('./world')
 
 function handle(bot, msg) {
@@ -46,6 +46,10 @@ function handle(bot, msg) {
 
         case 'stopfish':
             stopFishing(bot)
+            break
+
+        case 'fishing_decision':
+            applyLLMDecision(msg)
             break
 
         case 'inv': {

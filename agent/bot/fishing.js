@@ -1,10 +1,14 @@
 const { goals } = require('mineflayer-pathfinder')
-const { findNearestEntity, findNearestWater, findFishableWater, isWater } = require('./world')
+const { findNearestEntity, findNearestWater, findFishableWater, isWater, scanAreaMap } = require('./world')
+const bridge = require('./bridge')
 
 let isFishing = false
-let _lastWaterKey = null      // 上次目標水面的 key
-let _savedPitch = null        // _faceTarget 使用的 pitch（含臨時調整）
-let _confirmedPitch = null    // 上次成功落水的 pitch（失敗時從此基準計算）
+let _savedPitch = null   // 目前使用的 pitch（同目標時沿用）
+let _lastWaterKey = null
+let _llmDecision = null  // 待處理的 LLM 決策（由 applyLLMDecision 設定）
+
+const PITCH_MIN = -1.0   // ~-57°
+const PITCH_MAX = 0.5    // ~+28°
 
 async function startFishing(bot) {
     if (isFishing) {
@@ -32,12 +36,8 @@ function stopFishing(bot) {
     console.log('[Fish] 停止釣魚')
 }
 
-// pitch 範圍限制（弧度）：Mineflayer 負值=往下看，正值=往上看
-const PITCH_MIN = -1.0   // ~-57°，幾乎垂直往下
-const PITCH_MAX = 0.5    // ~+28°，往上
-
 async function _loop(bot) {
-    let failStreak = 0  // 連續失敗次數
+    let failStreak = 0
 
     while (isFishing) {
         let water = findFishableWater(bot, 16)
@@ -51,11 +51,12 @@ async function _loop(bot) {
             isFishing = false
             break
         }
+
         console.log(`[Fish] 目標水面 (${water.position.x}, ${water.position.y}, ${water.position.z})`)
         await _faceTarget(bot, water.position)
 
         await bot.activateItem()
-        console.log(`[Fish] 拋竿 (yaw=${(bot.entity.yaw * 57.3).toFixed(1)}° pitch=${(bot.entity.pitch * 57.3).toFixed(1)}°)`)
+        console.log(`[Fish] 拋竿 (yaw=${(bot.entity.yaw * 57.3).toFixed(1)}° pitch=${((_savedPitch ?? 0) * 57.3).toFixed(1)}°)`)
 
         await _sleep(2000)
 
@@ -70,35 +71,54 @@ async function _loop(bot) {
             failStreak++
             console.log(`[Fish] 拋竿未落水（第 ${failStreak} 次）`)
 
-            const tooFar = bot.entity.position.distanceTo(water.position) > 8
-            if (failStreak >= 3 || tooFar) {
-                console.log('[Fish] 換位置')
+            // 先嘗試調整角度（最多 3 次）
+            const tryPitch = (_savedPitch ?? 0) + 0.15 * failStreak
+            if (failStreak < 3 && tryPitch <= PITCH_MAX) {
+                console.log(`[Fish] 調整仰角至 ${(tryPitch * 57.3).toFixed(1)}°`)
+                _savedPitch = tryPitch
+                await bot.look(bot.entity.yaw, tryPitch, true)
+                await _sleep(300)
+                continue
+            }
+
+            // 角度試完還是失敗 → 詢問 LLM
+            console.log('[Fish] 角度調整無效，詢問 LLM...')
+            bridge.sendState(bot, 'fishing_stuck', {
+                waterTarget: water.position,
+                areaMap: scanAreaMap(bot, 10),
+            })
+
+            const decision = await _waitForLLMDecision(20000)
+            if (!decision) {
+                console.log('[Fish] LLM 超時，走向水邊')
                 _savedPitch = null
                 await _walkToWater(bot)
                 failStreak = 0
-            } else {
-                // 從上次確認有效的 pitch 往上偏移，不累加
-                const tryPitch = (_confirmedPitch ?? 0) + 0.15 * failStreak
-                if (tryPitch > PITCH_MAX) {
-                    console.log('[Fish] 仰角已到極限，換位置')
-                    _savedPitch = null
-                    _confirmedPitch = null
-                    await _walkToWater(bot)
-                    failStreak = 0
-                } else {
-                    console.log(`[Fish] 調整仰角至 ${(tryPitch * 57.3).toFixed(1)}°`)
-                    _savedPitch = tryPitch  // 讓下次 _faceTarget 使用調整後的角度
-                    await bot.look(bot.entity.yaw, tryPitch, true)
-                    await _sleep(300)
-                }
+                continue
             }
+
+            if (decision.action === 'stop') {
+                console.log('[Fish] LLM 決定停止釣魚')
+                isFishing = false
+                break
+            }
+
+            if (decision.action === 'move') {
+                const pos = bot.entity.position
+                console.log(`[Fish] LLM 決定移動至 (${decision.x}, ${decision.z})`)
+                _savedPitch = null
+                try {
+                    await bot.pathfinder.goto(new goals.GoalNear(decision.x, pos.y, decision.z, 2))
+                } catch (e) { /* 找不到路就算了 */ }
+                await _sleep(500)
+            }
+
+            failStreak = 0
             continue
         }
 
-        // 成功落水，記住這個 pitch 作為基準（用 _savedPitch 而非 bot.entity.pitch，避免伺服器覆蓋）
-        _confirmedPitch = _savedPitch ?? 0
+        // 成功落水
         failStreak = 0
-
         const bitten = await _waitForBite(bot, bobber)
         if (!isFishing) break
 
@@ -127,13 +147,31 @@ async function _loop(bot) {
     }
 }
 
+// 等待 LLM 決策（polling _llmDecision，有 timeout）
+function _waitForLLMDecision(timeoutMs = 20000) {
+    return new Promise((resolve) => {
+        const check = setInterval(() => {
+            if (_llmDecision !== null) {
+                clearInterval(check)
+                clearTimeout(timer)
+                const d = _llmDecision
+                _llmDecision = null
+                resolve(d)
+            }
+        }, 200)
+        const timer = setTimeout(() => {
+            clearInterval(check)
+            resolve(null)
+        }, timeoutMs)
+    })
+}
+
 function _waitForBite(bot, bobber, timeoutMs = 30000) {
     return new Promise((resolve) => {
         const startY = bobber.position.y
 
         const onMove = (entity) => {
             if (entity.id !== bobber.id) return
-            // 下沉 0.3 格以上才算真正魚咬（避免入水晃動誤判）
             if (entity.position.y < startY - 0.3) {
                 cleanup()
                 resolve(true)
@@ -154,23 +192,15 @@ function _waitForBite(bot, bobber, timeoutMs = 30000) {
     })
 }
 
-// 面向目標位置：先 lookAt 取得正確 yaw，再把 pitch 換成仰角
-// 同一目標重用上次調整過的 pitch，避免每次 loop 重置
+// 面向目標水面：lookAt 取得正確 yaw，pitch 同目標時沿用，否則重置
 async function _faceTarget(bot, targetPos) {
     await bot.lookAt(targetPos)
-
     const waterKey = `${Math.floor(targetPos.x)},${Math.floor(targetPos.y)},${Math.floor(targetPos.z)}`
-    let pitch
-    if (_savedPitch !== null && waterKey === _lastWaterKey) {
-        pitch = _savedPitch  // 同目標，沿用上次有效角度
-    } else {
+    if (_lastWaterKey !== waterKey) {
         _lastWaterKey = waterKey
         _savedPitch = null
-        _confirmedPitch = null
-        pitch = 0  // 從水平開始，由 bad_angle recovery 往上調整
     }
-
-    pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, pitch))
+    const pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, _savedPitch ?? 0))
     await bot.look(bot.entity.yaw, pitch, true)
 }
 
@@ -186,4 +216,8 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { startFishing, stopFishing }
+function applyLLMDecision(decision) {
+    _llmDecision = decision
+}
+
+module.exports = { startFishing, stopFishing, applyLLMDecision }

@@ -116,6 +116,47 @@ function isWater(bot, position) {
     return block?.name === 'water'
 }
 
+/**
+ * 掃描 bot 周圍的地形，回傳 ASCII minimap
+ * B=Bot, W=水, .=可走, #=阻擋, ~=懸崖
+ * @param {object} bot
+ * @param {number} radius - 掃描半徑（格數）
+ * @returns {string}
+ */
+function scanAreaMap(bot, radius = 10) {
+    const pos = bot.entity.position
+    const originX = Math.floor(pos.x) - radius
+    const originZ = Math.floor(pos.z) - radius
+    const rows = []
+
+    for (let dz = -radius; dz <= radius; dz++) {
+        let row = ''
+        for (let dx = -radius; dx <= radius; dx++) {
+            if (dx === 0 && dz === 0) {
+                row += 'B'
+                continue
+            }
+
+            const feet  = bot.blockAt(pos.offset(dx, 0, dz))
+            const body  = bot.blockAt(pos.offset(dx, 1, dz))
+            const floor = bot.blockAt(pos.offset(dx, -1, dz))
+
+            if (feet?.name === 'water' || (feet?.name === 'air' && floor?.name === 'water')) {
+                row += 'W'
+            } else if (feet?.name === 'air' && body?.name === 'air' && floor && floor.name !== 'air') {
+                row += '.'
+            } else if (feet && feet.name !== 'air') {
+                row += '#'
+            } else {
+                row += '~'
+            }
+        }
+        rows.push(row)
+    }
+
+    return { grid: rows, originX, originZ, radius }
+}
+
 module.exports = {
     findNearestBlock,
     findNearestWater,
@@ -123,4 +164,5 @@ module.exports = {
     findNearestEntity,
     findNearestPlayer,
     isWater,
+    scanAreaMap,
 }
