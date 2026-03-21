@@ -6,7 +6,7 @@ const FOOD_ITEMS = new Set([
     'cooked_beef', 'beef', 'cooked_chicken', 'chicken',
     'cooked_porkchop', 'porkchop', 'cooked_mutton', 'mutton',
     'cooked_rabbit', 'rabbit', 'cooked_cod', 'cod',
-    'cooked_salmon', 'salmon', 'tropical_fish', 'pufferfish',
+    'cooked_salmon', 'salmon', 'tropical_fish',
     'carrot', 'potato', 'baked_potato', 'beetroot',
     'melon_slice', 'pumpkin_pie', 'cookie',
     'mushroom_stew', 'rabbit_stew', 'suspicious_stew',
@@ -44,15 +44,20 @@ async function _tryEat(bot) {
 }
 
 function startMonitor(bot) {
-    bot.on('health', () => {
+    const check = () => {
         if (bot.health < HEALTH_THRESHOLD && bot.food < 20) {
             _tryEat(bot)
         }
-    })
-    // 上線時立即檢查一次
-    if (bot.health < HEALTH_THRESHOLD && bot.food < 20) {
-        _tryEat(bot)
     }
+
+    bot.on('health', check)
+    // 撿到物品時也檢查（玩家丟食物給 bot）
+    bot.on('playerCollect', (collector) => {
+        if (collector.username === bot.username) check()
+    })
+
+    // 上線時立即檢查一次
+    check()
     console.log('[Eat] 飢餓監控已啟動')
 }
 
