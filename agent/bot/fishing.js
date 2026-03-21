@@ -102,14 +102,21 @@ async function _loop(bot) {
         const bitten = await _waitForBite(bot, bobber)
         if (!isFishing) break
 
-        const before = new Map(bot.inventory.items().map(i => [i.name, i.count]))
+        const before = new Map()
+        for (const item of bot.inventory.items()) {
+            before.set(item.name, (before.get(item.name) ?? 0) + item.count)
+        }
         await bot.activateItem()
 
         if (bitten) {
-            await _sleep(500)
-            const caught = bot.inventory.items()
-                .filter(i => (before.get(i.name) ?? 0) < i.count)
-                .map(i => `${i.name} x${i.count - (before.get(i.name) ?? 0)}`)
+            await _sleep(1000)
+            const after = new Map()
+            for (const item of bot.inventory.items()) {
+                after.set(item.name, (after.get(item.name) ?? 0) + item.count)
+            }
+            const caught = [...after.entries()]
+                .filter(([name, count]) => count > (before.get(name) ?? 0))
+                .map(([name, count]) => `${name} x${count - (before.get(name) ?? 0)}`)
             console.log(caught.length > 0
                 ? `[Fish] 收竿！釣到：${caught.join(', ')}`
                 : '[Fish] 收竿！（物品未進背包）')
