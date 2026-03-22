@@ -1,6 +1,7 @@
 const bridge = require('./bridge')
 const { isActive: isFishing, stopFishing, startFishing } = require('./fishing')
 const { isActive: isChopping, stopChopping, startChopping } = require('./woodcutting')
+const { isActive: isMining, stopMining, startMining } = require('./mining')
 
 const INVENTORY_FULL = 36
 
@@ -8,6 +9,7 @@ let _decision = null
 let _checking = false
 let _wasFishing = false
 let _wasChopping = false
+let _wasMining = false
 
 function applyInventoryDecision(decision) {
     _decision = decision
@@ -20,8 +22,10 @@ async function _handleFull(bot) {
     // 暫停當前行為
     _wasFishing = isFishing()
     _wasChopping = isChopping()
+    _wasMining = isMining()
     if (_wasFishing) stopFishing(bot)
     if (_wasChopping) stopChopping(bot)
+    if (_wasMining) stopMining(bot)
 
     console.log('[Inv] 背包已滿，詢問 LLM...')
 
@@ -50,6 +54,10 @@ async function _handleFull(bot) {
     if (_wasChopping) {
         console.log('[Inv] 恢復砍樹')
         startChopping(bot)
+    }
+    if (_wasMining) {
+        console.log('[Inv] 恢復挖礦')
+        startMining(bot)
     }
 
     _checking = false

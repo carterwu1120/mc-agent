@@ -57,11 +57,22 @@ const TOOL_PRIORITY = {
     _shovel:  ['diamond_shovel',  'iron_shovel',    'stone_shovel',  'wooden_shovel'],
 }
 
-// 通用工具合成：確保背包有指定類型的工具
-async function _ensureTool(bot, toolSuffix) {
-    if (bot.inventory.items().some(i => i.name.endsWith(toolSuffix))) return true
-    const toolName = toolSuffix.slice(1)  // '_axe' → 'axe'
-    console.log(`[Craft] 沒有 ${toolName}，開始合成...`)
+// 通用工具合成：確保背包有指定類型且達到最低等級的工具
+// minTier: e.g. 'iron_pickaxe'（需要鐵稿以上），null 代表任何等級都可以
+async function _ensureTool(bot, toolSuffix, minTier = null) {
+    const priority = TOOL_PRIORITY[toolSuffix] ?? []
+    const minIdx = minTier ? priority.indexOf(minTier) : priority.length - 1
+    // acceptable = priority 裡等級 >= minTier 的選項（index 越小等級越高）
+    const acceptable = minIdx === -1 ? priority : priority.slice(0, minIdx + 1)
+
+    const existing = bot.inventory.items().find(i => acceptable.includes(i.name))
+    if (existing) {
+        await bot.equip(existing, 'hand')
+        return true
+    }
+
+    const toolName = minTier ?? toolSuffix.slice(1)
+    console.log(`[Craft] 需要 ${toolName}，開始合成...`)
 
     await convertLogsToPlanks(bot, 3)
     const table = await ensureCraftingTable(bot)
@@ -71,8 +82,7 @@ async function _ensureTool(bot, toolSuffix) {
         .reduce((s, i) => s + i.count, 0)
     if (stickCount < 2) await _craft(bot, 'stick', null)
 
-    const priority = TOOL_PRIORITY[toolSuffix] ?? []
-    const craftable = priority.filter(name => {
+    const craftable = acceptable.filter(name => {
         const item = bot.registry.itemsByName[name]
         if (!item || !table) return false
         return bot.recipesFor(item.id, null, 1, table).length > 0
@@ -83,19 +93,20 @@ async function _ensureTool(bot, toolSuffix) {
         return false
     }
 
-    const chosen = await chooseCraft(bot, `${toolName}`, craftable)
+    const chosen = await chooseCraft(bot, toolSuffix.slice(1), craftable)
     const ok = await _craft(bot, chosen, table)
     await _reclaimCraftingTable(bot)
     if (ok) {
-        const tool = bot.inventory.items().find(i => i.name.endsWith(toolSuffix))
+        const tool = bot.inventory.items().find(i => acceptable.includes(i.name))
         if (tool) await bot.equip(tool, 'hand')
     }
     return ok
 }
 
-async function ensureAxe(bot)     { return _ensureTool(bot, '_axe') }
-async function ensurePickaxe(bot) { return _ensureTool(bot, '_pickaxe') }
-async function ensureShovel(bot)  { return _ensureTool(bot, '_shovel') }
+async function ensureAxe(bot)                      { return _ensureTool(bot, '_axe') }
+async function ensurePickaxe(bot)                  { return _ensureTool(bot, '_pickaxe') }
+async function ensureShovel(bot)                   { return _ensureTool(bot, '_shovel') }
+async function ensurePickaxeTier(bot, minTier)     { return _ensureTool(bot, '_pickaxe', minTier) }
 
 const _BLOCK_TOOL = [
     ['_shovel',  ['dirt', 'sand', 'gravel', 'grass_block', 'podzol']],
@@ -107,12 +118,13 @@ const _BLOCK_TOOL = [
 async function ensureToolFor(bot, blockName) {
     for (const [suffix, patterns] of _BLOCK_TOOL) {
         if (patterns.some(p => blockName.includes(p))) {
-            await _ensureTool(bot, suffix)
+            const ok = await _ensureTool(bot, suffix)
             const tool = bot.inventory.items().find(i => i.name.endsWith(suffix))
             if (tool) await bot.equip(tool, 'hand')
-            return
+            return ok
         }
     }
+    return true
 }
 
 // 把背包裡的原木轉成木板，maxLogs 限制最多轉幾根（預設全部）
@@ -173,12 +185,31 @@ async function _placeCraftingTable(bot, tableBlockId) {
     const dirs = [[1,0],[0,1],[-1,0],[0,-1]]
 
     for (const [dx, dz] of dirs) {
-        const ground = bot.blockAt(pos.offset(dx, -1, dz))
-        const space  = bot.blockAt(pos.offset(dx,  0, dz))
-        if (!ground || ground.boundingBox !== 'block') continue
-        if (!space  || space.name !== 'air') continue
+        // 往下掃描找實際地板（應對樓梯地形，地板不一定在 y-1）
+        let ground = null
+        for (let dy = -1; dy >= -3; dy--) {
+            const b = bot.blockAt(pos.offset(dx, dy, dz))
+            if (b && b.boundingBox === 'block') { ground = b; break }
+        }
+        if (!ground) continue
+
+        // 地板上方的空間格（放置位置）
+        const spacePos = ground.position.offset(0, 1, 0)
+        let space = bot.blockAt(spacePos)
+
+        // 地下環境：空間格是實心方塊時先挖開
+        if (space && space.name !== 'air' && space.name !== 'cave_air') {
+            if (space.boundingBox !== 'block') continue  // 跳過流體等
+            try { await bot.dig(space) } catch (_) { continue }
+            space = bot.blockAt(spacePos)
+        }
+        if (!space || (space.name !== 'air' && space.name !== 'cave_air')) continue
+
+        // 放置位置需要在 bot 攻擊範圍內（不超過 4 格）
+        if (spacePos.distanceTo(bot.entity.position) > 4) continue
 
         try {
+            await bot.equip(item, 'hand')
             await bot.lookAt(ground.position.offset(0.5, 1, 0.5))
             await bot.placeBlock(ground, new Vec3(0, 1, 0))
             await _sleep(400)
@@ -255,4 +286,4 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, chooseCraft, applyCraftDecision }
+module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, chooseCraft, applyCraftDecision }
