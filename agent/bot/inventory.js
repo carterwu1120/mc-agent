@@ -1,11 +1,13 @@
 const bridge = require('./bridge')
 const { isActive: isFishing, stopFishing, startFishing } = require('./fishing')
+const { isActive: isChopping, stopChopping, startChopping } = require('./woodcutting')
 
 const INVENTORY_FULL = 36
 
 let _decision = null
 let _checking = false
 let _wasFishing = false
+let _wasChopping = false
 
 function applyInventoryDecision(decision) {
     _decision = decision
@@ -17,7 +19,9 @@ async function _handleFull(bot) {
 
     // 暫停當前行為
     _wasFishing = isFishing()
+    _wasChopping = isChopping()
     if (_wasFishing) stopFishing(bot)
+    if (_wasChopping) stopChopping(bot)
 
     console.log('[Inv] 背包已滿，詢問 LLM...')
 
@@ -42,6 +46,10 @@ async function _handleFull(bot) {
     if (_wasFishing) {
         console.log('[Inv] 恢復釣魚')
         startFishing(bot)
+    }
+    if (_wasChopping) {
+        console.log('[Inv] 恢復砍樹')
+        startChopping(bot)
     }
 
     _checking = false

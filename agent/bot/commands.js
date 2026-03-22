@@ -1,6 +1,8 @@
 const { goals } = require('mineflayer-pathfinder')
 const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
 const { applyInventoryDecision } = require('./inventory')
+const { startChopping, stopChopping } = require('./woodcutting')
+const { applyCraftDecision } = require('./crafting')
 const { findNearestPlayer } = require('./world')
 
 function handle(bot, msg) {
@@ -49,12 +51,24 @@ function handle(bot, msg) {
             stopFishing(bot)
             break
 
+        case 'chop':
+            startChopping(bot)
+            break
+
+        case 'stopchop':
+            stopChopping(bot)
+            break
+
         case 'fishing_decision':
             applyLLMDecision(msg)
             break
 
         case 'inventory_decision':
             applyInventoryDecision(msg)
+            break
+
+        case 'craft_decision':
+            applyCraftDecision(msg)
             break
 
         case 'inv': {
