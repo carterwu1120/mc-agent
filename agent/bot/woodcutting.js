@@ -110,6 +110,10 @@ async function _loop(bot, goal = {}) {
             movements.canDig = true
             bot.pathfinder.setMovements(movements)
 
+            // 走路前先換斧頭，避免 pathfinder 用疊腳材料挖路
+            const axeBefore = bot.inventory.items().find(i => i.name.endsWith('_axe'))
+            if (axeBefore) await bot.equip(axeBefore, 'hand')
+
             // 先水平走近（不疊方塊）
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(pos.x, bot.entity.position.y, pos.z, 3))

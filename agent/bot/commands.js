@@ -3,6 +3,7 @@ const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
 const { applyInventoryDecision } = require('./inventory')
 const { startChopping, stopChopping } = require('./woodcutting')
 const { startMining, stopMining } = require('./mining')
+const { startSmelting, stopSmelting } = require('./smelting')
 const { applyCraftDecision } = require('./crafting')
 const { findNearestPlayer } = require('./world')
 
@@ -66,6 +67,14 @@ function handle(bot, msg) {
 
         case 'stopmine':
             stopMining(bot)
+            break
+
+        case 'smelt':
+            startSmelting(bot, msg.goal ?? _parseSmeltGoal(msg.args))
+            break
+
+        case 'stopsmelt':
+            stopSmelting(bot)
             break
 
         case 'fishing_decision':
@@ -149,6 +158,14 @@ function _parseMineGoal(args) {
     if (args[0] === 'duration' && args[1]) return { duration: parseInt(args[1], 10) }
     if (args.length >= 2) return { target: args[0], count: parseInt(args[1], 10) }
     return {}
+}
+
+// smelt 的 goal 格式：['iron', '20'] → { target: 'iron', count: 20 }，['duration', '300'] → { duration: 300 }，['iron'] → { target: 'iron' }
+function _parseSmeltGoal(args) {
+    if (!args || args.length === 0) return {}
+    if (args[0] === 'duration' && args[1]) return { duration: parseInt(args[1], 10) }
+    if (args.length >= 2) return { target: args[0], count: parseInt(args[1], 10) }
+    return { target: args[0] }
 }
 
 module.exports = { handle }
