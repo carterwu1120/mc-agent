@@ -1,7 +1,7 @@
 const { goals, Movements } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { setActivity } = require('./activity')
-const { ensureAxe } = require('./crafting')
+const { ensureAxe, ensureToolFor } = require('./crafting')
 const bridge = require('./bridge')
 
 let isChopping = false
@@ -256,7 +256,7 @@ async function _reclaimScaffold(bot, groundY) {
         const below = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0))
         if (!below || !SCAFFOLD_BLOCKS.has(below.name)) break
         try {
-            _equipBestTool(bot, below.name)
+            await ensureToolFor(bot, below.name)
             await bot.dig(below)
             console.log(`[Wood] 回收 ${below.name}`)
             await _sleep(300)
@@ -267,21 +267,6 @@ async function _reclaimScaffold(bot, groundY) {
     // 挖完疊腳方塊後換回斧頭
     const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
     if (axe) await bot.equip(axe, 'hand')
-}
-
-// 根據方塊類型選最佳工具
-function _equipBestTool(bot, blockName) {
-    let toolSuffix = null
-    if (['dirt', 'sand', 'gravel', 'grass_block', 'podzol'].some(t => blockName.includes(t))) {
-        toolSuffix = '_shovel'
-    } else if (['cobblestone', 'stone'].some(t => blockName.includes(t))) {
-        toolSuffix = '_pickaxe'
-    } else if (blockName.includes('planks')) {
-        toolSuffix = '_axe'
-    }
-    if (!toolSuffix) return
-    const tool = bot.inventory.items().find(i => i.name.endsWith(toolSuffix))
-    if (tool) bot.equip(tool, 'hand').catch(() => {})
 }
 
 // 撿起附近掉落的物品

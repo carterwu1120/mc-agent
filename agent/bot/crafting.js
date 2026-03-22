@@ -97,6 +97,24 @@ async function ensureAxe(bot)     { return _ensureTool(bot, '_axe') }
 async function ensurePickaxe(bot) { return _ensureTool(bot, '_pickaxe') }
 async function ensureShovel(bot)  { return _ensureTool(bot, '_shovel') }
 
+const _BLOCK_TOOL = [
+    ['_shovel',  ['dirt', 'sand', 'gravel', 'grass_block', 'podzol']],
+    ['_pickaxe', ['cobblestone', 'stone', 'ore', 'deepslate']],
+    ['_axe',     ['log', 'planks', 'wood', 'crafting_table']],
+]
+
+// 根據方塊類型確保有對應工具（不夠就合成），並裝備到手上
+async function ensureToolFor(bot, blockName) {
+    for (const [suffix, patterns] of _BLOCK_TOOL) {
+        if (patterns.some(p => blockName.includes(p))) {
+            await _ensureTool(bot, suffix)
+            const tool = bot.inventory.items().find(i => i.name.endsWith(suffix))
+            if (tool) await bot.equip(tool, 'hand')
+            return
+        }
+    }
+}
+
 // 把背包裡的原木轉成木板，maxLogs 限制最多轉幾根（預設全部）
 async function convertLogsToPlanks(bot, maxLogs = Infinity) {
     for (const [log, plank] of Object.entries(LOG_TO_PLANK)) {
@@ -237,4 +255,4 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { ensureAxe, ensurePickaxe, ensureShovel, convertLogsToPlanks, ensureCraftingTable, chooseCraft, applyCraftDecision }
+module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, chooseCraft, applyCraftDecision }
