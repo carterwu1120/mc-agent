@@ -44,7 +44,7 @@ function handle(bot, msg) {
         }
 
         case 'fish':
-            startFishing(bot)
+            startFishing(bot, msg.goal ?? _parseGoal(msg.args, ['catches', 'duration']))
             break
 
         case 'stopfish':
@@ -52,7 +52,7 @@ function handle(bot, msg) {
             break
 
         case 'chop':
-            startChopping(bot)
+            startChopping(bot, msg.goal ?? _parseGoal(msg.args, ['logs', 'duration']))
             break
 
         case 'stopchop':
@@ -99,6 +99,15 @@ function handle(bot, msg) {
         default:
             console.warn('[Action] 未知指令:', msg.command)
     }
+}
+
+// 從 chat args 解析 goal，e.g. ['logs', '20'] → { logs: 20 }
+function _parseGoal(args, validKeys) {
+    if (!args || args.length < 2) return {}
+    const key = args[0]
+    const val = parseInt(args[1], 10)
+    if (validKeys.includes(key) && !isNaN(val)) return { [key]: val }
+    return {}
 }
 
 module.exports = { handle }

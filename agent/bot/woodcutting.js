@@ -2,6 +2,7 @@ const { goals, Movements } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { setActivity } = require('./activity')
 const { ensureAxe } = require('./crafting')
+const bridge = require('./bridge')
 
 let isChopping = false
 
@@ -22,7 +23,7 @@ const LOG_TO_SAPLING = {
     mangrove_log: 'mangrove_propagule',
 }
 
-async function startChopping(bot) {
+async function startChopping(bot, goal = {}) {
     if (isChopping) {
         console.log('[Wood] 已在砍樹中')
         return
@@ -30,7 +31,7 @@ async function startChopping(bot) {
     isChopping = true
     setActivity('chopping')
     console.log('[Wood] 開始砍樹')
-    _loop(bot)
+    _loop(bot, goal)
 }
 
 function stopChopping(bot) {
@@ -40,10 +41,26 @@ function stopChopping(bot) {
     console.log('[Wood] 停止砍樹')
 }
 
-async function _loop(bot) {
+async function _loop(bot, goal = {}) {
     const skipped = new Set()  // 完全無法到達的樹根位置
+    let logsCollected = 0
+    const startTime = Date.now()
 
     while (isChopping) {
+        if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
+            console.log(`[Wood] 達到時間目標 ${goal.duration}s，停止`)
+            isChopping = false
+            setActivity('idle')
+            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
+            break
+        }
+        if (goal.logs && logsCollected >= goal.logs) {
+            console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
+            isChopping = false
+            setActivity('idle')
+            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
+            break
+        }
         // 每次迴圈檢查斧頭（斧頭壞掉或第一次有材料時自動合成）
         if (!bot.inventory.items().some(i => i.name.endsWith('_axe'))) {
             const ok = await ensureAxe(bot)
@@ -80,6 +97,7 @@ async function _loop(bot) {
         const treeLogName = bot.blockAt(treeBlocks[0])?.name ?? null
         console.log(`[Wood] 找到樹（${treeLogName}），共 ${treeBlocks.length} 個木頭`)
 
+        const groundY = Math.floor(bot.entity.position.y)
         let reachedAny = false
 
         for (const pos of treeBlocks) {
@@ -92,8 +110,6 @@ async function _loop(bot) {
             movements.canDig = true
             bot.pathfinder.setMovements(movements)
 
-            const groundY = Math.floor(bot.entity.position.y)
-
             // 先水平走近（不疊方塊）
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(pos.x, bot.entity.position.y, pos.z, 3))
@@ -105,7 +121,7 @@ async function _loop(bot) {
                 await _pillarUp(bot, pos.y, pos)
             }
 
-            reachedAny = true  // 疊完就算到了，不再 pathfind（避免原地跳）
+            reachedAny = true
 
             if (!isChopping) return
 
@@ -118,31 +134,13 @@ async function _loop(bot) {
 
             try {
                 await bot.dig(fresh)
-                console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}`)
+                logsCollected++
+                console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}（共 ${logsCollected} 根）`)
                 await _sleep(500)
-                await _collectNearby(bot, pos, 4)  // 撿起掉落的木頭
+                await _collectNearby(bot, pos, 4)
             } catch (e) {
                 console.log('[Wood] 砍樹失敗:', e.message)
                 await _sleep(400)
-            }
-
-            // 如果有爬高，把疊腳方塊挖回來，再安全下來
-            if (Math.floor(bot.entity.position.y) > groundY) {
-                await _reclaimScaffold(bot, groundY)
-            }
-            // 如果還在高處（疊腳是 dirt/cobble 等不挖），用 pathfinder 安全下來
-            if (Math.floor(bot.entity.position.y) > groundY) {
-                const downMovements = new Movements(bot)
-                downMovements.canDig = true
-                bot.pathfinder.setMovements(downMovements)
-                const botPos = bot.entity.position
-                try {
-                    await bot.pathfinder.goto(
-                        new goals.GoalNear(Math.floor(botPos.x), groundY, Math.floor(botPos.z), 2)
-                    )
-                } catch (e) {
-                    console.log('[Wood] 無法安全下來，繼續')
-                }
             }
         }
 
@@ -152,7 +150,25 @@ async function _loop(bot) {
             continue
         }
 
-        // 砍完後：撿附近掉落物、回收疊腳方塊、種樹苗
+        // 整棵樹砍完後才回收疊腳方塊、安全下來
+        if (Math.floor(bot.entity.position.y) > groundY) {
+            await _reclaimScaffold(bot, groundY)
+        }
+        if (Math.floor(bot.entity.position.y) > groundY) {
+            const downMovements = new Movements(bot)
+            downMovements.canDig = true
+            bot.pathfinder.setMovements(downMovements)
+            const botPos = bot.entity.position
+            try {
+                await bot.pathfinder.goto(
+                    new goals.GoalNear(Math.floor(botPos.x), groundY, Math.floor(botPos.z), 2)
+                )
+            } catch (e) {
+                console.log('[Wood] 無法安全下來，繼續')
+            }
+        }
+
+        // 砍完後：撿附近掉落物、種樹苗
         await _collectNearby(bot, rootPos, 8)
         await _plantSapling(bot, rootPos, treeLogName)
     }
