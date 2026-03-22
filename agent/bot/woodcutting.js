@@ -1,4 +1,5 @@
 const { goals, Movements } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const { setActivity } = require('./activity')
 const { ensureAxe } = require('./crafting')
 
@@ -76,18 +77,22 @@ async function _loop(bot) {
 
             const movements = new Movements(bot)
             movements.canDig = true
-            movements.scafoldingBlocks = _getScaffoldIds(bot)
             bot.pathfinder.setMovements(movements)
 
             const groundY = Math.floor(bot.entity.position.y)
 
+            // 先水平走近（不疊方塊）
             try {
-                await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3))
-                reachedAny = true
-            } catch (e) {
-                console.log(`[Wood] 無法到達 (${pos.x},${pos.y},${pos.z})，跳過`)
-                continue
+                await bot.pathfinder.goto(new goals.GoalNear(pos.x, bot.entity.position.y, pos.z, 3))
+            } catch (e) { /* 走不到也繼續，試試疊方塊 */ }
+
+            // 如果目標比現在高超過 2 格，手動疊方塊上去
+            const heightDiff = pos.y - Math.floor(bot.entity.position.y)
+            if (heightDiff > 2) {
+                await _pillarUp(bot, pos.y, pos)
             }
+
+            reachedAny = true  // 疊完就算到了，不再 pathfind（避免原地跳）
 
             if (!isChopping) return
 
@@ -161,11 +166,52 @@ function _findTreeLogs(bot, rootPos) {
     return result.sort((a, b) => a.y - b.y)
 }
 
-function _getScaffoldIds(bot) {
-    return bot.inventory.items()
-        .filter(i => SCAFFOLD_BLOCKS.has(i.name))
-        .map(i => bot.registry.itemsByName[i.name]?.id)
-        .filter(id => id !== undefined)
+// 疊方塊往上：看下 → 跳 → 馬上放方塊，連續動作不需要確認時機
+async function _pillarUp(bot, targetY, targetPos) {
+    while (Math.floor(bot.entity.position.y) < targetY - 1) {
+        if (!isChopping) return
+        const scaffold = bot.inventory.items().find(i => SCAFFOLD_BLOCKS.has(i.name))
+        if (!scaffold) { console.log('[Wood] 沒有疊腳材料'); break }
+
+        await bot.equip(scaffold, 'hand')
+        await bot.look(bot.entity.yaw, Math.PI / 2, true)  // 看正下方
+
+        const below = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0))
+        if (!below || below.name === 'air') break
+
+        // 疊腳目標位置（bot 腳底的那格）必須是空氣才能放
+        const placeTarget = bot.blockAt(below.position.offset(0, 1, 0))
+        if (placeTarget && placeTarget.name !== 'air') {
+            if (placeTarget.name.includes('leaves')) {
+                try { await bot.dig(placeTarget) } catch (_) {}  // 樹葉先挖掉
+            } else {
+                break  // 木頭或其他實心方塊，已夠近，停止疊腳
+            }
+        }
+
+        // 確認頭上有空間可以跳（bot 高 2 格，需要 +2 格是空的）
+        const headBlock = bot.blockAt(bot.entity.position.floored().offset(0, 2, 0))
+        if (headBlock && headBlock.name !== 'air') {
+            if (headBlock.name.includes('leaves')) {
+                try { await bot.dig(headBlock) } catch (_) {}
+            } else {
+                break  // 頭上有實心方塊，跳不起來
+            }
+        }
+
+        const beforeY = bot.entity.position.y
+
+        bot.setControlState('jump', true)
+        try { await bot.placeBlock(below, new Vec3(0, 1, 0)) } catch (_) {}
+        bot.setControlState('jump', false)
+
+        await _sleep(400)
+
+        // 放方塊失敗（位置沒變），不要繼續跳
+        if (bot.entity.position.y <= beforeY + 0.1) break
+        // 目標已在攻擊範圍內，不需再疊
+        if (targetPos && bot.entity.position.distanceTo(targetPos) <= 4.5) break
+    }
 }
 
 // 挖回有價值的疊腳方塊（木板），dirt/cobble 等留著不管
