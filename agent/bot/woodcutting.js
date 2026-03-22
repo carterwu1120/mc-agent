@@ -10,6 +10,18 @@ const SCAFFOLD_BLOCKS = new Set([
     'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks',
 ])
 
+const VALID_SOIL = new Set(['dirt', 'grass_block', 'podzol', 'mycelium', 'rooted_dirt'])
+
+const LOG_TO_SAPLING = {
+    oak_log:      'oak_sapling',
+    spruce_log:   'spruce_sapling',
+    birch_log:    'birch_sapling',
+    jungle_log:   'jungle_sapling',
+    acacia_log:   'acacia_sapling',
+    dark_oak_log: 'dark_oak_sapling',
+    mangrove_log: 'mangrove_propagule',
+}
+
 async function startChopping(bot) {
     if (isChopping) {
         console.log('[Wood] 已在砍樹中')
@@ -65,7 +77,8 @@ async function _loop(bot) {
 
         // BFS 找整棵樹的所有 log，由下往上排
         const treeBlocks = _findTreeLogs(bot, rootPos)
-        console.log(`[Wood] 找到樹，共 ${treeBlocks.length} 個木頭`)
+        const treeLogName = bot.blockAt(treeBlocks[0])?.name ?? null
+        console.log(`[Wood] 找到樹（${treeLogName}），共 ${treeBlocks.length} 個木頭`)
 
         let reachedAny = false
 
@@ -106,18 +119,19 @@ async function _loop(bot) {
             try {
                 await bot.dig(fresh)
                 console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}`)
+                await _sleep(500)
+                await _collectNearby(bot, pos, 4)  // 撿起掉落的木頭
             } catch (e) {
                 console.log('[Wood] 砍樹失敗:', e.message)
+                await _sleep(400)
             }
 
-            await _sleep(400)
-
-            // 如果有爬高，把有價值的疊腳方塊挖回來，再安全下來
-            if (Math.floor(bot.entity.position.y) > groundY + 1) {
+            // 如果有爬高，把疊腳方塊挖回來，再安全下來
+            if (Math.floor(bot.entity.position.y) > groundY) {
                 await _reclaimScaffold(bot, groundY)
             }
-            // 如果還在高處（非木板疊腳 / 未完全回收），用 pathfinder 安全下來
-            if (Math.floor(bot.entity.position.y) > groundY + 1) {
+            // 如果還在高處（疊腳是 dirt/cobble 等不挖），用 pathfinder 安全下來
+            if (Math.floor(bot.entity.position.y) > groundY) {
                 const downMovements = new Movements(bot)
                 downMovements.canDig = true
                 bot.pathfinder.setMovements(downMovements)
@@ -135,7 +149,12 @@ async function _loop(bot) {
         // 整棵樹一個都到不了，才把 rootPos 標記為跳過
         if (!reachedAny) {
             skipped.add(_posKey(rootPos))
+            continue
         }
+
+        // 砍完後：撿附近掉落物、回收疊腳方塊、種樹苗
+        await _collectNearby(bot, rootPos, 8)
+        await _plantSapling(bot, rootPos, treeLogName)
     }
 }
 
@@ -214,20 +233,82 @@ async function _pillarUp(bot, targetY, targetPos) {
     }
 }
 
-// 挖回有價值的疊腳方塊（木板），dirt/cobble 等留著不管
+// 挖回所有疊腳方塊（SCAFFOLD_BLOCKS 都回收）
 async function _reclaimScaffold(bot, groundY) {
-    const RECLAIM = /^[a-z_]+_planks$/
     while (true) {
-        if (Math.floor(bot.entity.position.y) <= groundY + 1) break
+        if (Math.floor(bot.entity.position.y) <= groundY) break
         const below = bot.blockAt(bot.entity.position.floored().offset(0, -1, 0))
-        if (!below || !RECLAIM.test(below.name)) break
+        if (!below || !SCAFFOLD_BLOCKS.has(below.name)) break
         try {
+            _equipBestTool(bot, below.name)
             await bot.dig(below)
             console.log(`[Wood] 回收 ${below.name}`)
             await _sleep(300)
         } catch (e) {
             break
         }
+    }
+    // 挖完疊腳方塊後換回斧頭
+    const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
+    if (axe) await bot.equip(axe, 'hand')
+}
+
+// 根據方塊類型選最佳工具
+function _equipBestTool(bot, blockName) {
+    let toolSuffix = null
+    if (['dirt', 'sand', 'gravel', 'grass_block', 'podzol'].some(t => blockName.includes(t))) {
+        toolSuffix = '_shovel'
+    } else if (['cobblestone', 'stone'].some(t => blockName.includes(t))) {
+        toolSuffix = '_pickaxe'
+    } else if (blockName.includes('planks')) {
+        toolSuffix = '_axe'
+    }
+    if (!toolSuffix) return
+    const tool = bot.inventory.items().find(i => i.name.endsWith(toolSuffix))
+    if (tool) bot.equip(tool, 'hand').catch(() => {})
+}
+
+// 撿起附近掉落的物品
+async function _collectNearby(bot, nearPos, maxDistance) {
+    const items = Object.values(bot.entities).filter(
+        e => e.name === 'item' && e.position.distanceTo(nearPos) < maxDistance
+    )
+    for (const e of items) {
+        if (!isChopping) return
+        try {
+            await bot.pathfinder.goto(
+                new goals.GoalNear(e.position.x, e.position.y, e.position.z, 1)
+            )
+            await _sleep(150)
+        } catch (_) {}
+    }
+}
+
+// 在砍完的樹根位置種樹苗
+async function _plantSapling(bot, rootPos, logName) {
+    if (!logName) return
+    const saplingName = LOG_TO_SAPLING[logName]
+    if (!saplingName) return
+    const sapling = bot.inventory.items().find(i => i.name === saplingName)
+    if (!sapling) return
+
+    // 樹根最底層往下一格應該是泥土/草地
+    const groundBlock = bot.blockAt(rootPos.offset(0, -1, 0))
+    if (!groundBlock || !VALID_SOIL.has(groundBlock.name)) return
+
+    // 種植位置（rootPos）需要是空氣
+    const plantSpot = bot.blockAt(rootPos)
+    if (!plantSpot || plantSpot.name !== 'air') return
+
+    try {
+        await bot.pathfinder.goto(
+            new goals.GoalNear(rootPos.x, groundBlock.position.y, rootPos.z, 2)
+        )
+        await bot.equip(sapling, 'hand')
+        await bot.placeBlock(groundBlock, new Vec3(0, 1, 0))
+        console.log(`[Wood] 種下 ${saplingName}`)
+    } catch (e) {
+        console.log(`[Wood] 種樹苗失敗: ${e.message}`)
     }
 }
 

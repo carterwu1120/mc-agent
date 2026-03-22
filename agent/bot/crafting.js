@@ -3,6 +3,7 @@ const { Vec3 } = require('vec3')
 const bridge = require('./bridge')
 
 let _craftDecision = null
+let _placedTablePos = null
 
 function applyCraftDecision(decision) {
     _craftDecision = decision
@@ -50,45 +51,51 @@ const LOG_TO_PLANK = {
     mangrove_log: 'mangrove_planks',
 }
 
-const AXE_PRIORITY = ['diamond_axe', 'golden_axe', 'iron_axe', 'stone_axe', 'wooden_axe']
+const TOOL_PRIORITY = {
+    _axe:     ['diamond_axe',     'golden_axe',     'iron_axe',     'stone_axe',     'wooden_axe'],
+    _pickaxe: ['diamond_pickaxe', 'iron_pickaxe',   'stone_pickaxe', 'wooden_pickaxe'],
+    _shovel:  ['diamond_shovel',  'iron_shovel',    'stone_shovel',  'wooden_shovel'],
+}
 
-// 確保有斧頭，按材料優先順序合成最好的
-async function ensureAxe(bot) {
-    if (bot.inventory.items().some(i => i.name.endsWith('_axe'))) return true
-    console.log('[Craft] 沒有斧頭，開始合成...')
+// 通用工具合成：確保背包有指定類型的工具
+async function _ensureTool(bot, toolSuffix) {
+    if (bot.inventory.items().some(i => i.name.endsWith(toolSuffix))) return true
+    const toolName = toolSuffix.slice(1)  // '_axe' → 'axe'
+    console.log(`[Craft] 沒有 ${toolName}，開始合成...`)
 
-    // 先轉一些原木成木板（工作檯 + 木斧備用）
     await convertLogsToPlanks(bot, 3)
-
     const table = await ensureCraftingTable(bot)
 
-    // 確保有木棒（所有斧頭都需要）
     const stickCount = bot.inventory.items()
         .filter(i => i.name === 'stick')
         .reduce((s, i) => s + i.count, 0)
     if (stickCount < 2) await _craft(bot, 'stick', null)
 
-    // 找出目前背包材料夠用的所有斧頭選項
-    const craftable = AXE_PRIORITY.filter(axeName => {
-        const item = bot.registry.itemsByName[axeName]
+    const priority = TOOL_PRIORITY[toolSuffix] ?? []
+    const craftable = priority.filter(name => {
+        const item = bot.registry.itemsByName[name]
         if (!item || !table) return false
         return bot.recipesFor(item.id, null, 1, table).length > 0
     })
 
     if (craftable.length === 0) {
-        console.log('[Craft] 材料不足，無法合成斧頭')
+        console.log(`[Craft] 材料不足，無法合成 ${toolName}`)
         return false
     }
 
-    // 多種選項時問 LLM，只有一種就直接做
-    const chosen = await chooseCraft(bot, '斧頭 (axe)', craftable)
+    const chosen = await chooseCraft(bot, `${toolName}`, craftable)
     const ok = await _craft(bot, chosen, table)
+    await _reclaimCraftingTable(bot)
     if (ok) {
-        const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
-        if (axe) await bot.equip(axe, 'hand')
+        const tool = bot.inventory.items().find(i => i.name.endsWith(toolSuffix))
+        if (tool) await bot.equip(tool, 'hand')
     }
     return ok
 }
+
+async function ensureAxe(bot)     { return _ensureTool(bot, '_axe') }
+async function ensurePickaxe(bot) { return _ensureTool(bot, '_pickaxe') }
+async function ensureShovel(bot)  { return _ensureTool(bot, '_shovel') }
 
 // 把背包裡的原木轉成木板，maxLogs 限制最多轉幾根（預設全部）
 async function convertLogsToPlanks(bot, maxLogs = Infinity) {
@@ -160,6 +167,7 @@ async function _placeCraftingTable(bot, tableBlockId) {
             const placed = bot.findBlock({ matching: tableBlockId, maxDistance: 4 })
             if (placed) {
                 console.log('[Craft] 放置工作檯')
+                _placedTablePos = placed.position.clone()
                 return placed
             }
         } catch (e) {
@@ -169,6 +177,22 @@ async function _placeCraftingTable(bot, tableBlockId) {
 
     console.log('[Craft] 找不到放置位置')
     return null
+}
+
+async function _reclaimCraftingTable(bot) {
+    if (!_placedTablePos) return
+    const pos = _placedTablePos
+    _placedTablePos = null
+    const block = bot.blockAt(pos)
+    if (!block || block.name !== 'crafting_table') return
+    try {
+        const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
+        if (axe) await bot.equip(axe, 'hand')
+        await bot.dig(block)
+        console.log('[Craft] 回收工作檯')
+    } catch (e) {
+        console.log('[Craft] 回收工作檯失敗:', e.message)
+    }
 }
 
 async function _craft(bot, itemName, craftingTable) {
@@ -213,4 +237,4 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { ensureAxe, convertLogsToPlanks, ensureCraftingTable, chooseCraft, applyCraftDecision }
+module.exports = { ensureAxe, ensurePickaxe, ensureShovel, convertLogsToPlanks, ensureCraftingTable, chooseCraft, applyCraftDecision }
