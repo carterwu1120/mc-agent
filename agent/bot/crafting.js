@@ -184,8 +184,9 @@ async function _placeCraftingTable(bot, tableBlockId) {
     const pos = bot.entity.position.floored()
     const dirs = [[1,0],[0,1],[-1,0],[0,-1]]
 
+    // 先找不需要挖的位置，再找需要挖的
+    const candidates = []
     for (const [dx, dz] of dirs) {
-        // 往下掃描找實際地板（應對樓梯地形，地板不一定在 y-1）
         let ground = null
         for (let dy = -1; dy >= -3; dy--) {
             const b = bot.blockAt(pos.offset(dx, dy, dz))
@@ -193,20 +194,24 @@ async function _placeCraftingTable(bot, tableBlockId) {
         }
         if (!ground) continue
 
-        // 地板上方的空間格（放置位置）
         const spacePos = ground.position.offset(0, 1, 0)
-        let space = bot.blockAt(spacePos)
-
-        // 地下環境：空間格是實心方塊時先挖開
-        if (space && space.name !== 'air' && space.name !== 'cave_air') {
-            if (space.boundingBox !== 'block') continue  // 跳過流體等
-            try { await bot.dig(space) } catch (_) { continue }
-            space = bot.blockAt(spacePos)
-        }
-        if (!space || (space.name !== 'air' && space.name !== 'cave_air')) continue
-
-        // 放置位置需要在 bot 攻擊範圍內（不超過 4 格）
         if (spacePos.distanceTo(bot.entity.position) > 4) continue
+
+        const space = bot.blockAt(spacePos)
+        const isOpen = space && (space.name === 'air' || space.name === 'cave_air')
+        candidates.push({ ground, spacePos, needDig: !isOpen, space })
+    }
+
+    // 已是空氣的優先，其次才是需要挖的
+    candidates.sort((a, b) => a.needDig - b.needDig)
+
+    for (const { ground, spacePos, needDig, space } of candidates) {
+        if (needDig) {
+            if (!space || space.boundingBox !== 'block') continue
+            try { await bot.dig(space) } catch (_) { continue }
+            const fresh = bot.blockAt(spacePos)
+            if (!fresh || (fresh.name !== 'air' && fresh.name !== 'cave_air')) continue
+        }
 
         try {
             await bot.equip(item, 'hand')

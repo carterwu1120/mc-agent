@@ -14,9 +14,12 @@ const FOOD_ITEMS = new Set([
 ])
 
 let _isEating = false
+let _lastEatTime = 0
+const EAT_COOLDOWN = 4000  // 吃完後 4 秒內不再觸發
 
 async function _tryEat(bot) {
     if (_isEating) return
+    if (Date.now() - _lastEatTime < EAT_COOLDOWN) return
 
     const food = bot.inventory.items().find(i => FOOD_ITEMS.has(i.name))
     if (!food) {
@@ -29,6 +32,7 @@ async function _tryEat(bot) {
     try {
         await bot.equip(food, 'hand')
         await bot.consume()
+        _lastEatTime = Date.now()
         console.log(`[Eat] 吃了 ${food.name}，食物：${bot.food}/20`)
 
         // 吃完後恢復原本手持物品（如釣竿）

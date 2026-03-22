@@ -112,8 +112,8 @@ async function _loop(bot, goal = {}) {
             await _stepDown(bot, bestY, tunnelYaw)
             if (!isMining) return
 
-            // 順手：挖階梯時旁邊看到的礦（5 格內）
-            const nearbyOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 5, count: 20 })
+            // 順手：挖階梯時旁邊看到的礦（8 格內）
+            const nearbyOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 8, count: 20 })
                 .filter(p => _isExposed(bot, p))
                 .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
 
@@ -211,10 +211,11 @@ async function _stairDown(bot, yaw, steps) {
         const feet = bot.entity.position.floored()
 
         // 挖前方 2 格（腳 + 頭）
+        await ensureToolFor(bot, 'stone')  // 確保稿子在手
         for (const off of [[dx, 0, dz], [dx, 1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
             if (b && b.boundingBox === 'block') {
-                try { await ensureToolFor(bot, b.name); await bot.dig(b) } catch (_) {}
+                try { await bot.dig(b) } catch (_) {}
             }
         }
 
@@ -227,10 +228,11 @@ async function _stairDown(bot, yaw, steps) {
         await _sleep(100)
 
         // 挖腳下的格，往下掉一格
+        await ensureToolFor(bot, 'stone')  // pathfinder 可能換了手持物品，重新裝備
         const newFeet = bot.entity.position.floored()
         const below = bot.blockAt(newFeet.offset(0, -1, 0))
         if (below && below.boundingBox === 'block') {
-            try { await ensureToolFor(bot, below.name); await bot.dig(below) } catch (_) { break }
+            try { await bot.dig(below) } catch (_) { break }
         }
 
         await _sleep(300)  // 等掉落
