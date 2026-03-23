@@ -123,6 +123,24 @@ function handle(bot, msg) {
             break
         }
 
+        case 'bury': {
+            const { buryItems } = require('./inventory')
+            // 解析 args：'cobblestone 32 diorite' → Map { cobblestone→32, diorite→null }
+            const items = new Map()
+            const args = msg.args ?? []
+            for (let i = 0; i < args.length; i++) {
+                const count = parseInt(args[i + 1], 10)
+                if (!isNaN(count)) {
+                    items.set(args[i], count)
+                    i++
+                } else {
+                    items.set(args[i], null)
+                }
+            }
+            buryItems(bot, items)
+            break
+        }
+
         case 'clear': {
             const items = bot.inventory.items()
             if (items.length === 0) {

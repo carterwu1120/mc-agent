@@ -12,20 +12,45 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的合成決策助手。
 - 選擇材料最充裕的選項，避免把珍貴資源用在可以用普通材料替代的地方
 - 考慮整體資源分配：某種材料如果只夠做一件東西，要想清楚這件東西是否最重要
 - 只能從 options 列表裡選一個，回傳 item 的英文名稱
+- 如果背包有可燒製的原礦（raw_iron 等），考慮是否先燒成錠再合成更好的工具
 """
+
+SMELTABLE = {
+    'raw_iron': 'iron_ingot', 'iron_ore': 'iron_ingot', 'deepslate_iron_ore': 'iron_ingot',
+    'raw_gold': 'gold_ingot', 'gold_ore': 'gold_ingot', 'deepslate_gold_ore': 'gold_ingot',
+    'raw_copper': 'copper_ingot', 'copper_ore': 'copper_ingot', 'deepslate_copper_ore': 'copper_ingot',
+    'sand': 'glass', 'cobblestone': 'stone',
+}
 
 
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     inventory = state.get("inventory", [])
     goal = state.get("goal", "物品")
     options = state.get("options", [])
+    activity = state.get("activity", "idle")
+    pos = state.get("pos") or {}
+    health = state.get("health", "?")
+    food = state.get("food", "?")
+    y = round(pos.get("y", 0))
+
+    inv_map = {i['name']: i['count'] for i in inventory}
+    smeltable_lines = [
+        f"- {name} x{inv_map[name]} → {out}"
+        for name, out in SMELTABLE.items() if name in inv_map
+    ]
+    smeltable_section = (
+        "可燒製的原料（可先用 !smelt 指令處理）：\n" + "\n".join(smeltable_lines)
+        if smeltable_lines else "（無可燒製原料）"
+    )
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory)
     prompt = (
         f"機器人需要合成：{goal}\n"
         f"目前可合成的選項：{', '.join(options)}\n\n"
+        f"當前狀態：活動={activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
         f"背包內容：\n{inv_summary}\n\n"
-        f"請從選項中選出最適合的一個。"
+        f"{smeltable_section}\n\n"
+        f"請從選項中選出最適合的一個，必要時考慮是否先燒製原料能讓合成更好的工具。"
     )
 
     response = None

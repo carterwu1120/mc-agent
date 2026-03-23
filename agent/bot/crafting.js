@@ -89,6 +89,26 @@ async function _ensureTool(bot, toolSuffix, minTier = null) {
     })
 
     if (craftable.length === 0) {
+        // 嘗試燒製原礦後重試
+        const smelted = await _smeltIfNeeded(bot, toolSuffix)
+        if (smelted) {
+            const table2 = await ensureCraftingTable(bot)
+            const craftable2 = acceptable.filter(name => {
+                const item = bot.registry.itemsByName[name]
+                if (!item || !table2) return false
+                return bot.recipesFor(item.id, null, 1, table2).length > 0
+            })
+            if (craftable2.length > 0) {
+                const chosen2 = await chooseCraft(bot, toolSuffix.slice(1), craftable2)
+                const ok2 = await _craft(bot, chosen2, table2)
+                await _reclaimCraftingTable(bot)
+                if (ok2) {
+                    const tool = bot.inventory.items().find(i => acceptable.includes(i.name))
+                    if (tool) await bot.equip(tool, 'hand')
+                }
+                return ok2
+            }
+        }
         console.log(`[Craft] 材料不足，無法合成 ${toolName}`)
         return false
     }
@@ -110,7 +130,7 @@ async function ensurePickaxeTier(bot, minTier)     { return _ensureTool(bot, '_p
 
 const _BLOCK_TOOL = [
     ['_shovel',  ['dirt', 'sand', 'gravel', 'grass_block', 'podzol']],
-    ['_pickaxe', ['cobblestone', 'stone', 'ore', 'deepslate']],
+    ['_pickaxe', ['cobblestone', 'stone', 'ore', 'deepslate', 'tuff']],
     ['_axe',     ['log', 'planks', 'wood', 'crafting_table']],
 ]
 
@@ -247,6 +267,47 @@ async function _reclaimCraftingTable(bot) {
     } catch (e) {
         console.log('[Craft] 回收工作檯失敗:', e.message)
     }
+}
+
+const _ORE_TO_INGOT = {
+    raw_iron: 'iron_ingot',         iron_ore: 'iron_ingot',         deepslate_iron_ore: 'iron_ingot',
+    raw_gold: 'gold_ingot',         gold_ore: 'gold_ingot',         deepslate_gold_ore: 'gold_ingot',
+    raw_copper: 'copper_ingot',     copper_ore: 'copper_ingot',     deepslate_copper_ore: 'copper_ingot',
+}
+const _TOOL_INGOT = { _pickaxe: 'iron_ingot', _axe: 'iron_ingot', _shovel: 'iron_ingot' }
+
+// 若工具合成缺鐵錠但背包有原礦，自動燒製所需數量後回傳 true
+async function _smeltIfNeeded(bot, toolSuffix) {
+    const neededIngot = _TOOL_INGOT[toolSuffix]
+    if (!neededIngot) return false
+
+    const oreEntry = bot.inventory.items().find(i => _ORE_TO_INGOT[i.name] === neededIngot)
+    if (!oreEntry) return false
+
+    const needed = toolSuffix === '_shovel' ? 1 : 3
+    const target = oreEntry.name.includes('iron') ? 'iron'
+                 : oreEntry.name.includes('gold') ? 'gold' : 'copper'
+
+    console.log(`[Craft] 有 ${oreEntry.name}，先燒製 ${needed} 個 ${neededIngot}...`)
+    const { startSmelting, stopSmelting } = require('./smelting')
+    const { resumeMining } = require('./mining')
+    startSmelting(bot, { target, count: needed })  // 內部會停 mining
+
+    const deadline = Date.now() + 120000  // 最多等 2 分鐘
+    while (Date.now() < deadline) {
+        await _sleep(3000)
+        const ingotCount = bot.inventory.items()
+            .filter(i => i.name === neededIngot)
+            .reduce((s, i) => s + i.count, 0)
+        if (ingotCount >= needed) {
+            stopSmelting(bot)
+            resumeMining()  // 還原 flag，讓 suspended mining loop 繼續
+            return true
+        }
+    }
+    stopSmelting(bot)
+    resumeMining()
+    return false
 }
 
 async function _craft(bot, itemName, craftingTable) {

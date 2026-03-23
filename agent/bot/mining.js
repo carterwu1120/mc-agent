@@ -2,6 +2,7 @@ const { goals, Movements } = require('mineflayer-pathfinder')
 const { setActivity } = require('./activity')
 const { ensureToolFor, ensurePickaxeTier } = require('./crafting')
 const bridge = require('./bridge')
+const { isBuried } = require('./buried')
 
 let isMining = false
 
@@ -68,6 +69,8 @@ async function startMining(bot, goal = {}) {
         console.log('[Mine] 已在挖礦中')
         return
     }
+    const { isActive: isSmeltingActive, stopSmelting } = require('./smelting')
+    if (isSmeltingActive()) stopSmelting(bot)
     isMining = true
     setActivity('mining')
     console.log('[Mine] 開始挖礦')
@@ -89,8 +92,19 @@ async function _loop(bot, goal = {}) {
     let lastDescentY = null
     let stuckCount = 0
     let tunnelFailCount = 0
+    const unavailablePickaxe = new Set()  // 本輪無法取得的稿子等級，跳過需要它的礦
 
     while (isMining) {
+        // 每輪檢查：若之前因材料不足跳過某等級，看背包現在是否已有足夠材料可解除
+        if (unavailablePickaxe.size > 0) {
+            const ironIngots = bot.inventory.items().filter(i => i.name === 'iron_ingot').reduce((s, i) => s + i.count, 0)
+            const rawIron    = bot.inventory.items().some(i => ['raw_iron','iron_ore','deepslate_iron_ore'].includes(i.name))
+            if (ironIngots >= 3 || rawIron) {
+                console.log('[Mine] 已有足夠鐵礦/鐵錠，解除稿子限制')
+                unavailablePickaxe.clear()
+            }
+        }
+
         // 停止條件
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Mine] 達到時間目標 ${goal.duration}s，停止`)
@@ -175,7 +189,15 @@ async function _loop(bot, goal = {}) {
                 ? b => b.name.endsWith('_ore')
                 : _isMineable
             const allExposed = bot.findBlocks({ matching: oreMatcher, maxDistance: 16, count: 50 })
-                .filter(p => _isExposed(bot, p) && (bestY === null || Math.abs(p.y - bestY) <= 1))
+                .filter(p => {
+                    if (!_isExposed(bot, p)) return false
+                    if (bestY !== null && Math.abs(p.y - bestY) > 1) return false
+                    if (unavailablePickaxe.size > 0) {
+                        const req = _requiredPickaxe(bot.blockAt(p)?.name)
+                        if (unavailablePickaxe.has(req)) return false
+                    }
+                    return true
+                })
                 .sort((a, b) =>
                     _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name) ||
                     a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position)
@@ -201,9 +223,11 @@ async function _loop(bot, goal = {}) {
                     const required = _requiredPickaxe(fresh.name)
                     const ok = await ensurePickaxeTier(bot, required)
                     if (!ok) {
-                        console.log(`[Mine] 材料不足無法取得 ${required}，跳過 ${fresh.name}`)
+                        console.log(`[Mine] 材料不足無法取得 ${required}，跳過需要它的礦`)
+                        unavailablePickaxe.add(required)
                         continue
                     }
+                    unavailablePickaxe.delete(required)  // 成功取得，解除跳過
                     await bot.dig(fresh)
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) targetCount++
@@ -309,6 +333,7 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
         const headPos2 = feetPos2.offset(0, 1, 0)
 
         for (const pos of [feetPos, headPos, feetPos2, headPos2]) {
+            if (isBuried(pos)) continue
             const b = bot.blockAt(pos)
             if (!b || b.name === 'air' || b.name === 'cave_air') continue
             try {
@@ -329,9 +354,14 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
 }
 
 async function _collectNearby(bot, nearPos, maxDistance) {
-    const items = Object.values(bot.entities).filter(
-        e => e.name === 'item' && e.position.distanceTo(nearPos) < maxDistance
-    )
+    const items = Object.values(bot.entities).filter(e => {
+        if (e.name !== 'item') return false
+        if (e.position.distanceTo(nearPos) >= maxDistance) return false
+        // 跳過被埋起來的物品（位置本身或上方一格有封口標記）
+        if (isBuried(e.position.floored())) return false
+        if (isBuried(e.position.floored().offset(0, 1, 0))) return false
+        return true
+    })
     for (const e of items) {
         if (!isMining) return
         try {
@@ -349,4 +379,9 @@ function isActive() {
     return isMining
 }
 
-module.exports = { startMining, stopMining, isActive }
+// 還原 flag 讓 suspended loop 繼續，不啟動新 loop
+function resumeMining() {
+    isMining = true
+}
+
+module.exports = { startMining, stopMining, isActive, resumeMining }

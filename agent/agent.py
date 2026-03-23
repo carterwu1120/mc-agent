@@ -7,6 +7,7 @@ from agent.brain import LLMClient, GeminiClient, OllamaClient
 from agent.skills import fishing as fishing_skill
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
+from agent.skills import activity_done as activity_done_skill
 
 load_dotenv()
 
@@ -21,6 +22,7 @@ HANDLERS = {
     "fishing_stuck": fishing_skill.handle,
     "inventory_full": inventory_skill.handle,
     "craft_decision": craft_decision_skill.handle,
+    "activity_done": activity_done_skill.handle,
 }
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
@@ -33,8 +35,10 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         action = await handler(state, llm)
         if action:
-            print(f"[Agent] 送出決策: {action}")
-            await ws.send(json.dumps(action))
+            actions = action if isinstance(action, list) else [action]
+            for a in actions:
+                print(f"[Agent] 送出決策: {a}")
+                await ws.send(json.dumps(a))
     except Exception as e:
         print(f"[Agent] {event_type} 處理失敗: {e}")
     finally:
