@@ -10,8 +10,7 @@ let _currentGoal = {}
 
 const ORE_PRIORITY = [
     'diamond', 'emerald', 'ancient_debris',
-    'gold', 'iron', 'copper',
-    'lapis', 'redstone', 'coal',
+    'gold', 'iron','lapis', 'coal',
 ]
 
 
