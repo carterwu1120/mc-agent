@@ -5,6 +5,7 @@ const { startChopping, stopChopping } = require('./woodcutting')
 const { startMining, stopMining } = require('./mining')
 const { startSmelting, stopSmelting } = require('./smelting')
 const { applyCraftDecision } = require('./crafting')
+const { equipBestLoadout, equipSpecific, unequipAll, unequipSpecific } = require('./equipment')
 const { findNearestPlayer } = require('./world')
 
 function handle(bot, msg) {
@@ -131,6 +132,30 @@ function handle(bot, msg) {
             }
             break
         }
+
+        case 'equip':
+            ;(async () => {
+                const target = msg.args?.[0]
+                if (target) {
+                    const equipped = await equipSpecific(bot, target)
+                    console.log(`[Equip] 單件裝備結果：${equipped ?? '無'}`)
+                    return
+                }
+
+                const result = await equipBestLoadout(bot)
+                console.log(`[Equip] 完成裝備：武器=${result.weapon ?? '無'}，護甲=${result.armor?.join(', ') || '無'}`)
+            })()
+            break
+
+        case 'unequip':
+            ;(async () => {
+                const target = msg.args?.[0]
+                const removed = target
+                    ? await unequipSpecific(bot, target)
+                    : await unequipAll(bot)
+                console.log(`[Equip] 完成卸裝：${removed.join(', ') || '無'}`)
+            })()
+            break
 
         case 'tp': {
             const args = msg.args ?? []
