@@ -11,7 +11,7 @@ function handle(bot, msg) {
     console.log('[Action]', JSON.stringify(msg))
     switch (msg.command) {
         case 'chat':
-            bot.chat(msg.text)
+            if (msg.text) bot.chat(msg.text)
             break
 
         case 'come': {

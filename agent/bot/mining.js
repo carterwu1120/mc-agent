@@ -69,6 +69,7 @@ async function startMining(bot, goal = {}) {
         console.log('[Mine] 已在挖礦中')
         return
     }
+    if (goal.count !== undefined && !Number.isFinite(goal.count)) delete goal.count
     const { isActive: isSmeltingActive, stopSmelting } = require('./smelting')
     if (isSmeltingActive()) stopSmelting(bot)
     isMining = true
