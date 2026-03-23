@@ -84,8 +84,11 @@ function stopMining(bot) {
 async function _loop(bot, goal = {}) {
     const startTime = Date.now()
     let targetCount = 0
-    const tunnelYaw = bot.entity.yaw
+    let tunnelYaw = bot.entity.yaw
     const bestY = goal.target ? (ORE_BEST_Y[goal.target] ?? null) : null
+    let lastDescentY = null
+    let stuckCount = 0
+    let tunnelFailCount = 0
 
     while (isMining) {
         // 停止條件
@@ -106,11 +109,37 @@ async function _loop(bot, goal = {}) {
 
         const currentY = Math.floor(bot.entity.position.y)
         const needDescend = bestY !== null && currentY - bestY > 5
+        const needAscend  = bestY !== null && bestY - currentY > 5
 
-        if (needDescend) {
+        if (needAscend) {
+            console.log(`[Mine] 位置過深 Y=${currentY}，回到目標高度 Y=${bestY}`)
+            _setMovements(bot)
+            try {
+                await bot.pathfinder.goto(new goals.GoalNear(
+                    Math.floor(bot.entity.position.x), bestY,
+                    Math.floor(bot.entity.position.z), 3
+                ))
+            } catch (e) {
+                console.log('[Mine] 無法上升到目標高度:', e.message)
+            }
+        } else if (needDescend) {
             // 主動作：挖階梯往下
             await _stepDown(bot, bestY, tunnelYaw)
             if (!isMining) return
+
+            // 偵測卡住：Y 沒有下降就累計，超過 3 次換方向
+            const afterY = Math.floor(bot.entity.position.y)
+            if (lastDescentY !== null && afterY >= lastDescentY) {
+                stuckCount++
+                if (stuckCount >= 3) {
+                    tunnelYaw += Math.PI / 2
+                    stuckCount = 0
+                    console.log('[Mine] 下潛方向受阻，旋轉 90° 繼續')
+                }
+            } else {
+                stuckCount = 0
+            }
+            lastDescentY = afterY
 
             // 順手：挖階梯時旁邊看到的礦（8 格內）
             const nearbyOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 8, count: 20 })
@@ -122,16 +151,15 @@ async function _loop(bot, goal = {}) {
                 const block = bot.blockAt(orePos)
                 if (!block || !block.name.endsWith('_ore')) continue
 
-                const required = _requiredPickaxe(block.name)
-                const ok = await ensurePickaxeTier(bot, required)
-                if (!ok) continue
-
                 _setMovements(bot)
                 try {
                     await bot.pathfinder.goto(new goals.GoalNear(orePos.x, orePos.y, orePos.z, 2))
                     if (!isMining) return
                     const fresh = bot.blockAt(orePos)
                     if (!fresh || !fresh.name.endsWith('_ore')) continue
+                    const required = _requiredPickaxe(fresh.name)
+                    const ok = await ensurePickaxeTier(bot, required)
+                    if (!ok) continue
                     await bot.dig(fresh)
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) targetCount++
@@ -141,10 +169,13 @@ async function _loop(bot, goal = {}) {
                 } catch (_) {}
             }
 
-        } else {
-            // 已到目標深度：找所有暴露方塊挖，沒有就挖隧道
-            const allExposed = bot.findBlocks({ matching: _isMineable, maxDistance: 16, count: 50 })
-                .filter(p => _isExposed(bot, p))
+        } else if (!needAscend) {
+            // 已到目標深度：找附近礦石挖（嚴格限制在 bestY ±1），沒有就挖隧道
+            const oreMatcher = bestY !== null
+                ? b => b.name.endsWith('_ore')
+                : _isMineable
+            const allExposed = bot.findBlocks({ matching: oreMatcher, maxDistance: 16, count: 50 })
+                .filter(p => _isExposed(bot, p) && (bestY === null || Math.abs(p.y - bestY) <= 1))
                 .sort((a, b) =>
                     _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name) ||
                     a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position)
@@ -185,14 +216,21 @@ async function _loop(bot, goal = {}) {
                 }
 
             } else {
-                console.log('[Mine] 附近沒有暴露方塊，挖隧道繼續')
-                const tunneled = await _digTunnel(bot, tunnelYaw, 8)
+                console.log('[Mine] 附近沒有礦石，挖隧道繼續')
+                const tunneled = await _digTunnel(bot, tunnelYaw, 8, bestY)
                 if (!tunneled) {
-                    console.log('[Mine] 隧道無法繼續，停止')
-                    isMining = false
-                    setActivity('idle')
-                    bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
-                    break
+                    tunnelFailCount++
+                    tunnelYaw += Math.PI / 2
+                    console.log(`[Mine] 隧道受阻，旋轉方向繼續 (${tunnelFailCount}/4)`)
+                    if (tunnelFailCount >= 4) {
+                        console.log('[Mine] 四個方向都無法繼續，停止')
+                        isMining = false
+                        setActivity('idle')
+                        bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
+                        break
+                    }
+                } else {
+                    tunnelFailCount = 0
                 }
             }
         }
@@ -252,19 +290,27 @@ async function _stepDown(bot, targetY, yaw) {
     await _stairDown(bot, yaw, steps)
 }
 
-// 挖 1×2 隧道往前，回傳是否有成功挖進去
-async function _digTunnel(bot, yaw, length = 8) {
+// 挖 2×2 隧道往前，回傳是否有成功挖進去
+async function _digTunnel(bot, yaw, length = 8, targetY = null) {
     let dug = false
+    const dx = Math.round(-Math.sin(yaw))
+    const dz = Math.round(-Math.cos(yaw))
+    // 垂直於前進方向的側邊偏移
+    const perpX = dz
+    const perpZ = -dx
+
     for (let i = 0; i < length; i++) {
         if (!isMining) return false
-        const dx = -Math.sin(yaw)
-        const dz = -Math.cos(yaw)
-        const feetPos = bot.entity.position.floored().offset(Math.round(dx), 0, Math.round(dz))
-        const headPos = feetPos.offset(0, 1, 0)
+        const base = bot.entity.position.floored()
+        const baseY = targetY !== null ? targetY : base.y
+        const feetPos  = base.offset(dx, baseY - base.y, dz)
+        const headPos  = feetPos.offset(0, 1, 0)
+        const feetPos2 = feetPos.offset(perpX, 0, perpZ)
+        const headPos2 = feetPos2.offset(0, 1, 0)
 
-        for (const pos of [feetPos, headPos]) {
+        for (const pos of [feetPos, headPos, feetPos2, headPos2]) {
             const b = bot.blockAt(pos)
-            if (!b || b.name === 'air') continue
+            if (!b || b.name === 'air' || b.name === 'cave_air') continue
             try {
                 await ensureToolFor(bot, b.name)
                 await bot.dig(b)

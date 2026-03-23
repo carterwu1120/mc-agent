@@ -107,14 +107,10 @@ async function _loop(bot, goal = {}) {
             if (!block || !block.name.endsWith('_log')) continue
 
             const movements = new Movements(bot)
-            movements.canDig = true
+            movements.canDig = false
             bot.pathfinder.setMovements(movements)
 
-            // 走路前先換斧頭，避免 pathfinder 用疊腳材料挖路
-            const axeBefore = bot.inventory.items().find(i => i.name.endsWith('_axe'))
-            if (axeBefore) await bot.equip(axeBefore, 'hand')
-
-            // 先水平走近（不疊方塊）
+            // 先水平走近（不挖掘，避免拿錯工具挖礦）
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(pos.x, bot.entity.position.y, pos.z, 3))
             } catch (e) { /* 走不到也繼續，試試疊方塊 */ }
@@ -129,12 +125,10 @@ async function _loop(bot, goal = {}) {
 
             if (!isChopping) return
 
-            // 疊方塊爬上去後重新裝備斧頭
-            const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
-            if (axe) await bot.equip(axe, 'hand')
-
             const fresh = bot.blockAt(pos)
             if (!fresh || !fresh.name.endsWith('_log')) continue
+
+            await ensureToolFor(bot, fresh.name)
 
             try {
                 await bot.dig(fresh)
@@ -160,7 +154,7 @@ async function _loop(bot, goal = {}) {
         }
         if (Math.floor(bot.entity.position.y) > groundY) {
             const downMovements = new Movements(bot)
-            downMovements.canDig = true
+            downMovements.canDig = false
             bot.pathfinder.setMovements(downMovements)
             const botPos = bot.entity.position
             try {

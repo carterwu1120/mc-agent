@@ -1,4 +1,4 @@
-const HEALTH_THRESHOLD = 20  // 血量低於此值就吃東西（補血）
+const FOOD_THRESHOLD = 18  // 食物低於此值就吃東西
 
 // Minecraft 可食用物品
 const FOOD_ITEMS = new Set([
@@ -49,7 +49,7 @@ async function _tryEat(bot) {
 
 function startMonitor(bot) {
     const check = () => {
-        if (bot.health < HEALTH_THRESHOLD && bot.food < 20) {
+        if (bot.food < FOOD_THRESHOLD) {
             _tryEat(bot)
         }
     }

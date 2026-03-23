@@ -16,7 +16,7 @@ const SMELTABLE = {
 const FUEL_PRIORITY = [
     'coal', 'charcoal',
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log',
-    'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks', 'dark_oak_planks',
+    'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks',
 ]
 
 async function startSmelting(bot, goal = {}) {
@@ -119,7 +119,7 @@ async function _loop(bot, goal = {}) {
                 break
             }
 
-            // 加燃料（fuel slot 空或剩餘量不足時補充）
+            // 加燃料（fuel slot 空時補充）
             if (!furnace.fuel) {
                 const fuelItem = bot.inventory.items().find(i => FUEL_PRIORITY.includes(i.name))
                 if (fuelItem) {
@@ -213,7 +213,6 @@ async function _placeFurnace(bot, furnaceId) {
     const pos = bot.entity.position.floored()
     const dirs = [[1,0],[0,1],[-1,0],[0,-1]]
 
-    // 收集候選放置位置，優先選已有空氣的
     const candidates = []
     for (const [dx, dz] of dirs) {
         let ground = null
