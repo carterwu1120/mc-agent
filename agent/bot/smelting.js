@@ -28,7 +28,7 @@ async function startSmelting(bot, goal = {}) {
     if (isMiningActive()) stopMining(bot)
     isSmelting = true
     setActivity('smelting')
-    console.log('[Smelt] 開始燒製')
+    console.log(`[Smelt] 開始燒製 goal=${JSON.stringify(goal)}`)
     _loop(bot, goal)
 }
 
@@ -98,24 +98,24 @@ async function _loop(bot, goal = {}) {
         }
 
         try {
-            // 取出已完成產物（單獨 try，失敗就跳過留給下次）
-            if (furnace.output) {
+            // 若熔爐有遺留的成品先取出（slots[2] = output slot）
+            const prevOut = furnace.slots[2]
+            if (prevOut) {
                 try {
-                    const out = furnace.output
                     await furnace.takeOutput()
-                    smeltedCount += out.count
-                    inputPending = false
-                    console.log(`[Smelt] 取出 ${out.name} x${out.count}（共 ${smeltedCount}）`)
+                    smeltedCount += prevOut.count
+                    inputPending = !!furnace.slots[0]
+                    console.log(`[Smelt] 取出遺留產物 ${prevOut.name} x${prevOut.count}（共 ${smeltedCount}）`)
                 } catch (e) {
-                    const slots = bot.inventory.items().length
-                    console.log(`[Smelt] takeOutput 失敗: ${e.message}（背包 ${slots}/36，output=${JSON.stringify(furnace.output)}）`)
-                    if (slots >= 36) {
+                    const invSlots = bot.inventory.items().length
+                    if (invSlots >= 36) {
                         console.log('[Smelt] 背包已滿，執行整理...')
                         furnace.close()
                         const { handleFull } = require('./inventory')
                         await handleFull(bot)
                         return
                     }
+                    console.log(`[Smelt] takeOutput 失敗（${invSlots}/36）: ${e.message}`)
                 }
             }
 
@@ -126,8 +126,8 @@ async function _loop(bot, goal = {}) {
                 return true
             })
 
-            // 沒材料且 input slot 也空 → 停止
-            if (smeltableItems.length === 0 && !furnace.input) {
+            // 沒材料且沒有在燒 → 停止
+            if (smeltableItems.length === 0 && !inputPending) {
                 console.log('[Smelt] 背包沒有可燒的材料，停止')
                 furnace.close()
                 isSmelting = false
@@ -136,10 +136,8 @@ async function _loop(bot, goal = {}) {
                 break
             }
 
-            console.log(`[Smelt] 熔爐狀態 output=${furnace.output?.name} fuel=${furnace.fuel?.name} input=${furnace.input?.name} slots=${bot.inventory.items().length}/36`)
-
-            // 加燃料（fuel slot 空時補充）
-            if (!furnace.fuel) {
+            // 加燃料（fuel 是進度值 0-1；為 0 且 slots[1] 無煤才補）
+            if (!furnace.fuel && !furnace.slots[1]) {
                 const fuelItem = bot.inventory.items().find(i => FUEL_PRIORITY.includes(i.name))
                 if (fuelItem) {
                     const fuelCount = Math.min(fuelItem.count, 64)
@@ -148,54 +146,113 @@ async function _loop(bot, goal = {}) {
                         console.log(`[Smelt] 放入燃料 ${fuelItem.name} x${fuelCount}`)
                     } catch (e) {
                         if (!e.message?.includes('destination full')) throw e
-                        console.log('[Smelt] fuel slot 已有燃料（sync 延遲），跳過')
+                        console.log('[Smelt] fuel slot 已有燃料，跳過')
                     }
                 } else {
                     console.log('[Smelt] 沒有燃料，等待中...')
                 }
             }
 
-            // 放入材料（input slot 空時才放，且上一批尚未燒完不重複放）
-            if (!inputPending && !furnace.input && smeltableItems.length > 0) {
+            // 放入材料（未放過才放）
+            if (!inputPending && smeltableItems.length > 0) {
                 const inputItem = smeltableItems[0]
-                let count = inputItem.count
+                const totalAvail = smeltableItems
+                    .filter(i => i.name === inputItem.name)
+                    .reduce((s, i) => s + i.count, 0)
+                let count = totalAvail
                 if (goal.count) count = Math.min(count, goal.count - smeltedCount)
                 count = Math.min(count, 64)
                 if (count > 0) {
                     try {
                         await furnace.putInput(inputItem.type, null, count)
                         inputPending = true
-                        console.log(`[Smelt] 放入 ${inputItem.name} x${count}`)
+                        console.log(`[Smelt] 放入 ${inputItem.name} x${count}（背包共 ${totalAvail}${goal.count ? `，目標剩 ${goal.count - smeltedCount}` : ''}）`)
                     } catch (e) {
                         if (!e.message?.includes('destination full')) throw e
-                        inputPending = true  // slot 已有材料，視為 pending
-                        console.log('[Smelt] input slot 已有材料（sync 延遲），跳過')
+                        inputPending = true
+                        console.log('[Smelt] input slot 已有材料，等待燒製完成...')
                     }
                 }
             }
 
             furnace.close()
+
+            // 每 10 秒重開熔爐，輪詢 slots[2] 有無產物，直到爐膛清空或達到目標
+            let pollTries = 0
+            while (inputPending && isSmelting) {
+                for (let i = 0; i < 10 && isSmelting; i++) await _sleep(1000)
+                if (!isSmelting) break
+                if (++pollTries > 18) {
+                    console.log('[Smelt] 輪詢超時，放棄本批')
+                    inputPending = false
+                    break
+                }
+
+                try {
+                    furnace = await bot.openFurnace(furnaceBlock)
+                    await _sleep(300)
+                } catch (e) {
+                    console.log('[Smelt] 重開熔爐失敗:', e.message)
+                    break
+                }
+
+                const outputItem = furnace.slots[2]
+                if (outputItem) {
+                    try {
+                        await furnace.takeOutput()
+                        smeltedCount += outputItem.count
+                        inputPending = !!furnace.slots[0]
+                        console.log(`[Smelt] 取出 ${outputItem.name} x${outputItem.count}（共 ${smeltedCount}，爐膛剩餘: ${furnace.slots[0]?.count ?? 0}）`)
+                    } catch (e) {
+                        const invSlots = bot.inventory.items().length
+                        if (invSlots >= 36) {
+                            furnace.close()
+                            const { handleFull } = require('./inventory')
+                            await handleFull(bot)
+                            return
+                        }
+                        console.log(`[Smelt] takeOutput 失敗（${invSlots}/36）: ${e.message}`)
+                    }
+                } else {
+                    console.log(`[Smelt] 燒製中... (${pollTries * 10}s)`)
+                }
+
+                if (goal.target && goal.count && smeltedCount >= goal.count) {
+                    inputPending = false
+                    break
+                }
+
+                furnace.close()
+            }
+
+            // 本批完成，回收燃料
+            if (!inputPending) {
+                try {
+                    furnace = await bot.openFurnace(furnaceBlock)
+                    await _sleep(300)
+                    if (furnace.slots[1]) {
+                        await furnace.takeFuel()
+                        console.log('[Smelt] 回收燃料')
+                    }
+                    furnace.close()
+                } catch (_) {}
+            } else {
+                try { furnace.close() } catch (_) {}
+            }
         } catch (e) {
             console.log('[Smelt] 燒製操作失敗:', e.message)
             try { furnace.close() } catch (_) {}
             if (e.message?.includes('destination full')) {
                 const slots = bot.inventory.items().length
                 if (slots >= 36) {
-                    console.log('[Smelt] 背包確認已滿，執行整理...')
                     const { handleFull } = require('./inventory')
                     await handleFull(bot)
                     return
                 }
-                // slots < 36：熔爐 slot desync，重開熔爐強制同步
-                console.log(`[Smelt] 熔爐 slot desync（背包 ${slots}/36），重新開啟熔爐...`)
                 await _sleep(500)
                 continue
             }
         }
-
-        // 等待燒製進度（每 5 秒檢查一次）
-        console.log('[Smelt] 等待燒製...')
-        await _sleep(5000)
     }
 }
 

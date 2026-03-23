@@ -77,6 +77,39 @@ function handle(bot, msg) {
             stopSmelting(bot)
             break
 
+        case 'smeltout': {
+            // 測試用：找最近的熔爐，印出 slot 狀態，嘗試取出
+            ;(async () => {
+                const furnaceId    = bot.registry.blocksByName['furnace']?.id
+                const litFurnaceId = bot.registry.blocksByName['lit_furnace']?.id
+                const block = bot.findBlock({
+                    matching: b => b.type === furnaceId || (litFurnaceId && b.type === litFurnaceId),
+                    maxDistance: 8,
+                })
+                if (!block) { console.log('[SmeltOut] 找不到熔爐'); return }
+                console.log(`[SmeltOut] 找到熔爐 at ${block.position}`)
+                let furnace
+                try {
+                    furnace = await bot.openFurnace(block)
+                    await new Promise(r => setTimeout(r, 500))
+                } catch (e) { console.log('[SmeltOut] openFurnace 失敗:', e.message); return }
+                console.log(`[SmeltOut] fuel(progress)=${furnace.fuel} slots[0]=${JSON.stringify(furnace.slots[0]?.name)} slots[1]=${JSON.stringify(furnace.slots[1]?.name)} slots[2]=${JSON.stringify(furnace.slots[2]?.name)}`)
+                const outputItem = furnace.slots[2]
+                if (outputItem) {
+                    try {
+                        await furnace.takeOutput()
+                        console.log(`[SmeltOut] 取出成功: ${outputItem.name} x${outputItem.count}`)
+                    } catch (e) {
+                        console.log('[SmeltOut] takeOutput 失敗:', e.message)
+                    }
+                } else {
+                    console.log('[SmeltOut] slots[2] 是空的')
+                }
+                furnace.close()
+            })()
+            break
+        }
+
         case 'fishing_decision':
             applyLLMDecision(msg)
             break

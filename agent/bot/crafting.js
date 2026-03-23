@@ -324,6 +324,11 @@ async function _craft(bot, itemName, craftingTable) {
         return true
     } catch (e) {
         console.log(`[Craft] 合成 ${itemName} 失敗: ${e.message}`)
+        if (bot.inventory.items().length >= 36) {
+            console.log('[Craft] 背包已滿，執行整理...')
+            const { handleFull } = require('./inventory')
+            await handleFull(bot)
+        }
         return false
     }
 }
