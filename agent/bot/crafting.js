@@ -51,6 +51,17 @@ const LOG_TO_PLANK = {
     mangrove_log: 'mangrove_planks',
 }
 
+const COMPACTABLE_ITEMS = {
+    redstone: 'redstone_block',
+    coal: 'coal_block',
+    lapis_lazuli: 'lapis_block',
+    iron_ingot: 'iron_block',
+    gold_ingot: 'gold_block',
+    diamond: 'diamond_block',
+    emerald: 'emerald_block',
+    copper_ingot: 'copper_block',
+}
+
 const TOOL_PRIORITY = {
     _axe:     ['diamond_axe',     'golden_axe',     'iron_axe',     'stone_axe',     'wooden_axe'],
     _pickaxe: ['diamond_pickaxe', 'iron_pickaxe',   'stone_pickaxe', 'wooden_pickaxe'],
@@ -194,6 +205,61 @@ async function ensureCraftingTable(bot) {
     }
 
     return await _placeCraftingTable(bot, tableBlockId)
+}
+
+async function compactCompressibleItems(bot) {
+    const craftPlan = []
+    for (const [itemName, blockName] of Object.entries(COMPACTABLE_ITEMS)) {
+        const total = bot.inventory.items()
+            .filter(i => i.name === itemName)
+            .reduce((sum, i) => sum + i.count, 0)
+        const craftCount = Math.floor(total / 9)
+        if (craftCount <= 0) continue
+
+        const blockItem = bot.registry.itemsByName[blockName]
+        if (!blockItem) continue
+        craftPlan.push({ itemName, blockName, craftCount, blockItem })
+    }
+
+    if (craftPlan.length === 0) return 0
+
+    const table = await ensureCraftingTable(bot)
+    if (!table) {
+        console.log('[Craft] 無法取得工作檯，略過資源壓縮')
+        return 0
+    }
+
+    let craftedTotal = 0
+    try {
+        for (const plan of craftPlan) {
+            const recipe = bot.recipesFor(plan.blockItem.id, null, 1, table)[0]
+            if (!recipe) {
+                console.log(`[Craft] 找不到 ${plan.blockName} 的配方，略過`)
+                continue
+            }
+
+            let craftedThisItem = 0
+            for (let i = 0; i < plan.craftCount; i++) {
+                try {
+                    await bot.craft(recipe, 1, table)
+                    craftedThisItem++
+                    craftedTotal++
+                    await _sleep(250)
+                } catch (e) {
+                    console.log(`[Craft] 壓縮 ${plan.itemName} 失敗: ${e.message}`)
+                    break
+                }
+            }
+
+            if (craftedThisItem > 0) {
+                console.log(`[Craft] 壓縮 ${plan.itemName} x${craftedThisItem * 9} → ${plan.blockName} x${craftedThisItem}`)
+            }
+        }
+    } finally {
+        await _reclaimCraftingTable(bot)
+    }
+
+    return craftedTotal
 }
 
 async function _placeCraftingTable(bot, tableBlockId) {
@@ -357,4 +423,4 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, chooseCraft, applyCraftDecision }
+module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, compactCompressibleItems, chooseCraft, applyCraftDecision }

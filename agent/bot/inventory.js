@@ -1,6 +1,7 @@
 const { Vec3 } = require('vec3')
 const bridge = require('./bridge')
 const { ensureToolFor } = require('./crafting')
+const { compactCompressibleItems } = require('./crafting')
 const { markBuried } = require('./buried')
 const { isActive: isFishing, stopFishing, startFishing } = require('./fishing')
 const { isActive: isChopping, stopChopping, startChopping } = require('./woodcutting')
@@ -22,6 +23,10 @@ function applyInventoryDecision(decision) {
 }
 
 async function _handleFull(bot) {
+    return _tidyInventory(bot, { forceLlm: true })
+}
+
+async function _tidyInventory(bot, { forceLlm = false } = {}) {
     if (_checking) return
     _checking = true
 
@@ -34,6 +39,19 @@ async function _handleFull(bot) {
     if (_wasChopping) stopChopping(bot)
     if (_wasMining) { _savedMiningGoal = getMiningGoal(); stopMining(bot) }
     if (_wasSmelting) stopSmelting(bot)
+
+    const beforeSlots = bot.inventory.items().length
+    const compacted = await compactCompressibleItems(bot)
+    const afterSlots = bot.inventory.items().length
+    if (compacted > 0) {
+        console.log(`[Inv] 已壓縮 ${compacted} 組資源方塊，背包格數 ${beforeSlots} -> ${afterSlots}`)
+    }
+    if (!forceLlm || afterSlots < INVENTORY_FULL) {
+        console.log('[Inv] 壓縮後背包已有空間，不需丟棄物品')
+        _resumePreviousActivity(bot)
+        _checking = false
+        return
+    }
 
     console.log('[Inv] 背包已滿，詢問 LLM...')
 
@@ -51,6 +69,11 @@ async function _handleFull(bot) {
     }
 
     // 恢復之前的行為
+    _resumePreviousActivity(bot)
+    _checking = false
+}
+
+function _resumePreviousActivity(bot) {
     if (_wasFishing) {
         console.log('[Inv] 恢復釣魚')
         startFishing(bot)
@@ -67,8 +90,6 @@ async function _handleFull(bot) {
         console.log('[Inv] 恢復燒製')
         startSmelting(bot)
     }
-
-    _checking = false
 }
 
 async function _buryItems(bot, itemsMap) {
@@ -214,4 +235,10 @@ function startMonitor(bot) {
     console.log('[Inv] 背包監控已啟動')
 }
 
-module.exports = { startMonitor, applyInventoryDecision, buryItems: _buryItems, handleFull: _handleFull }
+module.exports = {
+    startMonitor,
+    applyInventoryDecision,
+    buryItems: _buryItems,
+    tidyInventory: _tidyInventory,
+    handleFull: _handleFull,
+}

@@ -174,6 +174,12 @@ function handle(bot, msg) {
             break
         }
 
+        case 'tidy': {
+            const { tidyInventory } = require('./inventory')
+            tidyInventory(bot)
+            break
+        }
+
         case 'clear': {
             const items = bot.inventory.items()
             if (items.length === 0) {
