@@ -58,6 +58,16 @@ function _setMovements(bot) {
     bot.pathfinder.setMovements(movements)
 }
 
+function _setEscapeMovements(bot) {
+    const movements = new Movements(bot)
+    movements.canDig = true
+    const scaffoldNames = ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'gravel', 'sand']
+    movements.scafoldingBlocks = scaffoldNames
+        .map(n => bot.registry.blocksByName[n]?.id)
+        .filter(id => id !== undefined)
+    bot.pathfinder.setMovements(movements)
+}
+
 async function startMining(bot, goal = {}) {
     if (isMining) {
         console.log('[Mine] 已在挖礦中')
@@ -118,12 +128,12 @@ async function _loop(bot, goal = {}) {
         }
 
         const currentY = Math.floor(bot.entity.position.y)
-        const needDescend = bestY !== null && currentY - bestY > 5
-        const needAscend  = bestY !== null && bestY - currentY > 5
+        const needDescend = bestY !== null && currentY - bestY > 3
+        const needAscend  = bestY !== null && bestY - currentY > 3
 
         if (needAscend) {
             console.log(`[Mine] 位置過深 Y=${currentY}，回到目標高度 Y=${bestY}`)
-            _setMovements(bot)
+            _setEscapeMovements(bot)
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(
                     Math.floor(bot.entity.position.x), bestY,
@@ -131,6 +141,15 @@ async function _loop(bot, goal = {}) {
                 ))
             } catch (e) {
                 console.log('[Mine] 無法上升到目標高度:', e.message)
+            }
+            _setMovements(bot)
+            if (Math.floor(bot.entity.position.y) < bestY - 3) {
+                console.log('[Mine] 上升失敗（仍遠離目標高度），向上挖掘逃脫...')
+                await _digEscape(bot)
+                isMining = false
+                setActivity('idle')
+                bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
+                break
             }
         } else if (needDescend) {
             // 主動作：挖階梯往下
@@ -240,19 +259,8 @@ async function _loop(bot, goal = {}) {
                     tunnelYaw += Math.PI / 2
                     console.log(`[Mine] 隧道受阻，旋轉方向繼續 (${tunnelFailCount}/4)`)
                     if (tunnelFailCount >= 4) {
-                        console.log('[Mine] 四個方向都無法繼續，嘗試往上逃脫...')
-                        _setMovements(bot)
-                        try {
-                            await bot.pathfinder.goto(new goals.GoalNear(
-                                Math.floor(bot.entity.position.x),
-                                64,
-                                Math.floor(bot.entity.position.z),
-                                10
-                            ))
-                            console.log('[Mine] 已往上移動')
-                        } catch (e) {
-                            console.log('[Mine] 無法往上移動:', e.message)
-                        }
+                        console.log('[Mine] 四個方向都無法繼續，向上挖掘逃脫...')
+                        await _digEscape(bot)
                         isMining = false
                         setActivity('idle')
                         bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
@@ -374,6 +382,38 @@ async function _collectNearby(bot, nearPos, maxDistance) {
             await _sleep(150)
         } catch (_) {}
     }
+}
+
+async function _digEscape(bot) {
+    let lastY = Math.floor(bot.entity.position.y)
+    let stuckTicks = 0
+
+    for (let i = 0; i < 120 && Math.floor(bot.entity.position.y) < 60; i++) {
+        const feet = bot.entity.position.floored()
+
+        for (const dy of [2, 1]) {
+            const b = bot.blockAt(feet.offset(0, dy, 0))
+            if (!b || b.hardness < 0 || b.boundingBox !== 'block') continue
+            try { await ensureToolFor(bot, b.name); await bot.dig(b) } catch (_) {}
+        }
+
+        _setEscapeMovements(bot)
+        try {
+            await bot.pathfinder.goto(new goals.GoalBlock(feet.x, feet.y + 1, feet.z))
+        } catch (_) {}
+
+        await _sleep(150)
+
+        const nowY = Math.floor(bot.entity.position.y)
+        if (nowY <= lastY) {
+            if (++stuckTicks >= 6) {
+                console.log('[Mine] 被基岩困住，請求協助')
+                bot.chat('我被困在基岩裡了，請用 /tp 把我傳出去！')
+                return
+            }
+        } else { stuckTicks = 0; lastY = nowY }
+    }
+    console.log(`[Mine] 逃脫到 Y=${Math.floor(bot.entity.position.y)}`)
 }
 
 function _sleep(ms) {
