@@ -178,12 +178,13 @@ async function _loop(bot, goal = {}) {
             furnace.close()
 
             // 每 10 秒重開熔爐，輪詢 slots[2] 有無產物，直到爐膛清空或達到目標
-            let pollTries = 0
+            // timeout 以「距上次取出產物的時間」計算，避免大批材料被誤判為超時
+            let lastProgressAt = Date.now()
             while (inputPending && isSmelting) {
                 for (let i = 0; i < 10 && isSmelting; i++) await _sleep(1000)
                 if (!isSmelting) break
-                if (++pollTries > 18) {
-                    console.log('[Smelt] 輪詢超時，放棄本批')
+                if (Date.now() - lastProgressAt > 60000) {
+                    console.log('[Smelt] 60s 無進度，放棄本批')
                     inputPending = false
                     break
                 }
@@ -202,6 +203,7 @@ async function _loop(bot, goal = {}) {
                         await furnace.takeOutput()
                         smeltedCount += outputItem.count
                         inputPending = !!furnace.slots[0]
+                        lastProgressAt = Date.now()
                         console.log(`[Smelt] 取出 ${outputItem.name} x${outputItem.count}（共 ${smeltedCount}，爐膛剩餘: ${furnace.slots[0]?.count ?? 0}）`)
                     } catch (e) {
                         const invSlots = bot.inventory.items().length
