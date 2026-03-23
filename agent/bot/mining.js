@@ -13,10 +13,6 @@ const ORE_PRIORITY = [
     'lapis', 'redstone', 'coal',
 ]
 
-const STONE_NAMES = new Set([
-    'stone', 'cobblestone', 'deepslate', 'cobbled_deepslate',
-    'andesite', 'diorite', 'granite',
-])
 
 const ORE_BEST_Y = {
     coal: 96, iron: 16, copper: 48,
@@ -41,9 +37,6 @@ function _requiredPickaxe(blockName) {
     return 'wooden_pickaxe'
 }
 
-function _isMineable(b) {
-    return b.name.endsWith('_ore') || STONE_NAMES.has(b.name)
-}
 
 function _isExposed(bot, pos) {
     const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
@@ -188,10 +181,7 @@ async function _loop(bot, goal = {}) {
 
         } else if (!needAscend) {
             // 已到目標深度：找附近礦石挖（嚴格限制在 bestY ±1），沒有就挖隧道
-            const oreMatcher = bestY !== null
-                ? b => b.name.endsWith('_ore')
-                : _isMineable
-            const allExposed = bot.findBlocks({ matching: oreMatcher, maxDistance: 16, count: 50 })
+            const allExposed = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 16, count: 50 })
                 .filter(p => {
                     if (!_isExposed(bot, p)) return false
                     if (bestY !== null && Math.abs(p.y - bestY) > 1) return false
@@ -220,7 +210,7 @@ async function _loop(bot, goal = {}) {
                 if (!isMining) return
 
                 const fresh = bot.blockAt(pos)
-                if (!fresh || !_isMineable(fresh)) continue
+                if (!fresh || !fresh.name.endsWith('_ore')) continue
 
                 try {
                     const required = _requiredPickaxe(fresh.name)
