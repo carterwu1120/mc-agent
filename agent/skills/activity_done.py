@@ -14,6 +14,7 @@ SYSTEM_PROMPTS = {
 {"command": "idle", "text": "...理由..."}
 
 決策原則：
+- 若原因為「四個方向都被基岩或不可挖方塊阻擋，機器人可能被困住」→ 一律回覆 idle，不要嘗試燒製
 - 若有 raw_iron / iron_ore / deepslate_iron_ore → 回覆 smelt iron
 - 若有 raw_gold / gold_ore / deepslate_gold_ore → 回覆 smelt gold
 - 若有 raw_copper / copper_ore / deepslate_copper_ore → 回覆 smelt copper
@@ -83,6 +84,13 @@ SMELTABLE = {
 }
 
 
+REASON_DESC = {
+    'goal_reached': '已達到目標',
+    'no_blocks':    '四個方向都被基岩或不可挖方塊阻擋，機器人可能被困住',
+    'no_input':     '背包中沒有可燒製的原料',
+}
+
+
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     inventory = state.get("inventory", [])
     activity = state.get("activity_name", state.get("activity", "unknown"))
@@ -103,9 +111,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     )
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
+    reason_desc = REASON_DESC.get(reason, reason)
 
     prompt = (
-        f"機器人剛完成活動：{activity}（原因：{reason}）\n"
+        f"機器人剛完成活動：{activity}（原因：{reason_desc}）\n"
         f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
         f"背包內容：\n{inv_summary}\n\n"
         f"{smeltable_section}\n\n"

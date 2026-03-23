@@ -240,7 +240,19 @@ async function _loop(bot, goal = {}) {
                     tunnelYaw += Math.PI / 2
                     console.log(`[Mine] 隧道受阻，旋轉方向繼續 (${tunnelFailCount}/4)`)
                     if (tunnelFailCount >= 4) {
-                        console.log('[Mine] 四個方向都無法繼續，停止')
+                        console.log('[Mine] 四個方向都無法繼續，嘗試往上逃脫...')
+                        _setMovements(bot)
+                        try {
+                            await bot.pathfinder.goto(new goals.GoalNear(
+                                Math.floor(bot.entity.position.x),
+                                64,
+                                Math.floor(bot.entity.position.z),
+                                10
+                            ))
+                            console.log('[Mine] 已往上移動')
+                        } catch (e) {
+                            console.log('[Mine] 無法往上移動:', e.message)
+                        }
                         isMining = false
                         setActivity('idle')
                         bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
