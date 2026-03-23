@@ -5,6 +5,7 @@ const bridge = require('./bridge')
 const { isBuried } = require('./buried')
 
 let isMining = false
+let _currentGoal = {}
 
 const ORE_PRIORITY = [
     'diamond', 'emerald', 'ancient_debris',
@@ -70,6 +71,7 @@ async function startMining(bot, goal = {}) {
         return
     }
     if (goal.count !== undefined && !Number.isFinite(goal.count)) delete goal.count
+    _currentGoal = goal
     const { isActive: isSmeltingActive, stopSmelting } = require('./smelting')
     if (isSmeltingActive()) stopSmelting(bot)
     isMining = true
@@ -385,4 +387,6 @@ function resumeMining() {
     isMining = true
 }
 
-module.exports = { startMining, stopMining, isActive, resumeMining }
+function getGoal() { return _currentGoal }
+
+module.exports = { startMining, stopMining, isActive, resumeMining, getGoal }
