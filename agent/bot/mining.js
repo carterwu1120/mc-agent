@@ -3,6 +3,7 @@ const { setActivity } = require('./activity')
 const { ensureToolFor, ensurePickaxeTier } = require('./crafting')
 const bridge = require('./bridge')
 const { isBuried } = require('./buried')
+const eating = require('./eating')
 
 let isMining = false
 let _currentGoal = {}
@@ -103,6 +104,11 @@ async function _loop(bot, goal = {}) {
     const unavailablePickaxe = new Set()  // 本輪無法取得的稿子等級，跳過需要它的礦
 
     while (isMining) {
+        if (eating.isEating()) {
+            await _sleep(250)
+            continue
+        }
+
         // 每輪檢查：若之前因材料不足跳過某等級，看背包現在是否已有足夠材料可解除
         if (unavailablePickaxe.size > 0) {
             const ironIngots = bot.inventory.items().filter(i => i.name === 'iron_ingot').reduce((s, i) => s + i.count, 0)
@@ -179,6 +185,10 @@ async function _loop(bot, goal = {}) {
 
             for (const orePos of nearbyOres) {
                 if (!isMining) return
+                if (eating.isEating()) {
+                    await _sleep(250)
+                    continue
+                }
                 const block = bot.blockAt(orePos)
                 if (!block || !block.name.endsWith('_ore')) continue
 
@@ -221,6 +231,10 @@ async function _loop(bot, goal = {}) {
                 const pos = allExposed[0]
                 const block = bot.blockAt(pos)
                 if (!block) continue
+                if (eating.isEating()) {
+                    await _sleep(250)
+                    continue
+                }
 
                 console.log(`[Mine] 目標 ${block.name} at y=${pos.y}`)
                 _setMovements(bot)
@@ -353,6 +367,10 @@ async function _stairDown(bot, yaw, steps) {
 
     for (let i = 0; i < steps; i++) {
         if (!isMining) return
+        if (eating.isEating()) {
+            await _sleep(250)
+            continue
+        }
 
         const feet = bot.entity.position.floored()
 
@@ -409,6 +427,10 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
 
     for (let i = 0; i < length; i++) {
         if (!isMining) return false
+        if (eating.isEating()) {
+            await _sleep(250)
+            continue
+        }
         const base = bot.entity.position.floored()
         const baseY = targetY !== null ? targetY : base.y
         const feetPos  = base.offset(dx, baseY - base.y, dz)
@@ -451,6 +473,10 @@ async function _collectNearby(bot, nearPos, maxDistance) {
     })
     for (const e of items) {
         if (!isMining) return
+        if (eating.isEating()) {
+            await _sleep(250)
+            continue
+        }
         try {
             await bot.pathfinder.goto(new goals.GoalNear(e.position.x, e.position.y, e.position.z, 1))
             await _sleep(150)
@@ -472,6 +498,10 @@ async function _digEscape(bot, stopY = 60) {
     let stuckTicks = 0
 
     for (let i = 0; i < 120 && Math.floor(bot.entity.position.y) < stopY; i++) {
+        if (eating.isEating()) {
+            await _sleep(250)
+            continue
+        }
         if (_canMoveHorizontally(bot)) {
             console.log(`[Mine] 逃脫到可移動區域 Y=${Math.floor(bot.entity.position.y)}`)
             return

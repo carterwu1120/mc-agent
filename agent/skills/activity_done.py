@@ -92,6 +92,12 @@ REASON_DESC = {
 
 
 async def handle(state: dict, llm: LLMClient) -> dict | None:
+    activity = state.get("activity_name", state.get("activity", "unknown"))
+    reason = state.get("reason", "unknown")
+    print(f"[Skill/activity_done] {activity} 結束（reason={reason}），依設定直接 idle，不送 LLM")
+    return None
+
+    # 保留以下舊邏輯作為未來如果要恢復自動規劃時的參考。
     inventory = state.get("inventory", [])
     activity = state.get("activity_name", state.get("activity", "unknown"))
     reason = state.get("reason", "unknown")
