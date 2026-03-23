@@ -55,6 +55,7 @@ function _priority(name) {
 function _setMovements(bot) {
     const movements = new Movements(bot)
     movements.canDig = true
+    movements.maxDropDown = 8
     bot.pathfinder.setMovements(movements)
 }
 
@@ -94,6 +95,7 @@ async function _loop(bot, goal = {}) {
     const startTime = Date.now()
     let targetCount = 0
     let tunnelYaw = bot.entity.yaw
+    let wallNavAttempts = 0
     const bestY = goal.target ? (ORE_BEST_Y[goal.target] ?? null) : null
     let lastDescentY = null
     let stuckCount = 0
@@ -145,7 +147,7 @@ async function _loop(bot, goal = {}) {
             _setMovements(bot)
             if (Math.floor(bot.entity.position.y) < bestY - 3) {
                 console.log('[Mine] 上升失敗（仍遠離目標高度），向上挖掘逃脫...')
-                await _digEscape(bot)
+                await _digEscape(bot, bestY)
                 isMining = false
                 setActivity('idle')
                 bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
@@ -203,7 +205,7 @@ async function _loop(bot, goal = {}) {
             const allExposed = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 16, count: 50 })
                 .filter(p => {
                     if (!_isExposed(bot, p)) return false
-                    if (bestY !== null && Math.abs(p.y - bestY) > 1) return false
+                    if (bestY !== null && Math.abs(p.y - bestY) > 5) return false
                     if (unavailablePickaxe.size > 0) {
                         const req = _requiredPickaxe(bot.blockAt(p)?.name)
                         if (unavailablePickaxe.has(req)) return false
@@ -252,6 +254,22 @@ async function _loop(bot, goal = {}) {
                 }
 
             } else {
+                // 先嘗試沿洞穴導航到更遠的礦石（不限 Y），讓 pathfinder 自然走進洞穴
+                const wideOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 32, count: 20 })
+                    .filter(p => _isExposed(bot, p))
+                    .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
+                if (wideOres.length > 0) {
+                    const wp = wideOres[0]
+                    console.log(`[Mine] 廣域搜尋到 ${bot.blockAt(wp)?.name} at y=${wp.y}，嘗試導航`)
+                    _setMovements(bot)
+                    try {
+                        await bot.pathfinder.goto(new goals.GoalNear(wp.x, wp.y, wp.z, 2))
+                        tunnelFailCount = 0
+                        continue
+                    } catch (_) {
+                        console.log('[Mine] 廣域導航失敗，改挖隧道')
+                    }
+                }
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
                 const tunneled = await _digTunnel(bot, tunnelYaw, 8, bestY)
                 if (!tunneled) {
@@ -259,8 +277,61 @@ async function _loop(bot, goal = {}) {
                     tunnelYaw += Math.PI / 2
                     console.log(`[Mine] 隧道受阻，旋轉方向繼續 (${tunnelFailCount}/4)`)
                     if (tunnelFailCount >= 4) {
+                        if (_canMoveHorizontally(bot)) {
+                            // 開放空間：找最近的牆壁走過去，疊方塊也可以
+                            const wall = bot.findBlock({
+                                matching: b => b.boundingBox === 'block' && b.hardness >= 0
+                                    && b.position && !b.name.includes('bedrock') && !isBuried(b.position),
+                                maxDistance: 32,
+                            })
+                            if (wall && wallNavAttempts < 3) {
+                                wallNavAttempts++
+                                console.log(`[Mine] 開放空間，疊方塊導航到牆壁 ${wall.name} at ${wall.position}`)
+                                _setEscapeMovements(bot)
+                                let reached = false
+                                try {
+                                    await bot.pathfinder.goto(new goals.GoalNear(wall.position.x, wall.position.y, wall.position.z, 2))
+                                    reached = true
+                                } catch (_) {}
+                                _setMovements(bot)
+                                if (reached) {
+                                    const dx = wall.position.x - bot.entity.position.x
+                                    const dz = wall.position.z - bot.entity.position.z
+                                    tunnelYaw = Math.atan2(-dx, -dz)
+                                    tunnelFailCount = 0
+                                    wallNavAttempts = 0
+                                    continue
+                                }
+                            }
+                            // 走不到任何牆壁，往 tunnelYaw 方向強制移動探索
+                            console.log('[Mine] 無法到達牆壁，往前強制探索...')
+                            _setEscapeMovements(bot)
+                            const edx = Math.round(-Math.sin(tunnelYaw))
+                            const edz = Math.round(-Math.cos(tunnelYaw))
+                            try {
+                                await bot.pathfinder.goto(new goals.GoalNear(
+                                    Math.floor(bot.entity.position.x) + edx * 10,
+                                    Math.floor(bot.entity.position.y),
+                                    Math.floor(bot.entity.position.z) + edz * 10,
+                                    3
+                                ))
+                            } catch (_) {}
+                            _setMovements(bot)
+                            tunnelYaw += Math.PI / 2
+                            tunnelFailCount = 0
+                            wallNavAttempts = 0
+                            continue
+                        }
+                        // 真的被困（四周都是實心塊）：若在 bestY 以下先疊上去
+                        if (bestY !== null && Math.floor(bot.entity.position.y) < bestY) {
+                            console.log('[Mine] 低於目標高度且四周受阻，疊回 bestY...')
+                            await _digEscape(bot, bestY)
+                            tunnelFailCount = 0
+                            tunnelYaw = bot.entity.yaw
+                            continue
+                        }
                         console.log('[Mine] 四個方向都無法繼續，向上挖掘逃脫...')
-                        await _digEscape(bot)
+                        await _digEscape(bot, Math.floor(bot.entity.position.y) + 20)
                         isMining = false
                         setActivity('idle')
                         bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
@@ -327,9 +398,9 @@ async function _stepDown(bot, targetY, yaw) {
     await _stairDown(bot, yaw, steps)
 }
 
-// 挖 2×2 隧道往前，回傳是否有成功挖進去
+// 挖 2×2 隧道往前，回傳是否有成功前進（挖到方塊 或 實際移動）
 async function _digTunnel(bot, yaw, length = 8, targetY = null) {
-    let dug = false
+    let progressed = false
     const dx = Math.round(-Math.sin(yaw))
     const dz = Math.round(-Math.cos(yaw))
     // 垂直於前進方向的側邊偏移
@@ -346,24 +417,27 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
         const headPos2 = feetPos2.offset(0, 1, 0)
 
         for (const pos of [feetPos, headPos, feetPos2, headPos2]) {
-            if (isBuried(pos)) continue
+            if (isBuried(pos)) { console.log(`[Tunnel] 跳過 buried ${pos}`); continue }
             const b = bot.blockAt(pos)
             if (!b || b.name === 'air' || b.name === 'cave_air') continue
+            if (b.hardness < 0) { console.log(`[Tunnel] 跳過基岩 ${pos}`); continue }
             try {
                 await ensureToolFor(bot, b.name)
                 await bot.dig(b)
-                dug = true
-            } catch (_) {}
+                progressed = true
+            } catch (e) { console.log(`[Tunnel] dig ${b.name} 失敗: ${e.message}`) }
         }
 
         _setMovements(bot)
+        const prevPos = bot.entity.position.clone()
         try {
             await bot.pathfinder.goto(new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z))
-        } catch (_) { break }
+            if (bot.entity.position.distanceTo(prevPos) > 0.5) progressed = true
+        } catch (e) { console.log(`[Tunnel] GoalBlock 失敗: ${e.message}`); break }
 
         await _sleep(200)
     }
-    return dug
+    return progressed
 }
 
 async function _collectNearby(bot, nearPos, maxDistance) {
@@ -384,11 +458,24 @@ async function _collectNearby(bot, nearPos, maxDistance) {
     }
 }
 
-async function _digEscape(bot) {
+function _canMoveHorizontally(bot) {
+    const feet = bot.entity.position.floored()
+    return [[1,0,0],[-1,0,0],[0,0,1],[0,0,-1]].some(([dx,,dz]) => {
+        const b1 = bot.blockAt(feet.offset(dx, 0, dz))
+        const b2 = bot.blockAt(feet.offset(dx, 1, dz))
+        return (!b1 || b1.boundingBox !== 'block') && (!b2 || b2.boundingBox !== 'block')
+    })
+}
+
+async function _digEscape(bot, stopY = 60) {
     let lastY = Math.floor(bot.entity.position.y)
     let stuckTicks = 0
 
-    for (let i = 0; i < 120 && Math.floor(bot.entity.position.y) < 60; i++) {
+    for (let i = 0; i < 120 && Math.floor(bot.entity.position.y) < stopY; i++) {
+        if (_canMoveHorizontally(bot)) {
+            console.log(`[Mine] 逃脫到可移動區域 Y=${Math.floor(bot.entity.position.y)}`)
+            return
+        }
         const feet = bot.entity.position.floored()
 
         for (const dy of [2, 1]) {
