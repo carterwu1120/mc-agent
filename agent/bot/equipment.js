@@ -10,12 +10,27 @@ const ARMOR_PRIORITY = {
     feet: ['diamond_boots', 'iron_boots', 'chainmail_boots', 'golden_boots', 'leather_boots'],
 }
 
-const EQUIP_SLOTS = ['hand', 'head', 'torso', 'legs', 'feet']
+const EQUIP_SLOTS = ['hand', 'off-hand', 'head', 'torso', 'legs', 'feet']
+const SLOT_ALIASES = {
+    offhand: 'off-hand',
+    off_hand: 'off-hand',
+    shield: 'off-hand',
+    chest: 'torso',
+    chestplate: 'torso',
+    helmet: 'head',
+    leggings: 'legs',
+    boots: 'feet',
+}
 
 function _findBestItem(bot, names) {
     return names
         .map(name => bot.inventory.items().find(i => i.name === name))
         .find(Boolean) ?? null
+}
+
+function _normalizeSlot(target) {
+    if (!target) return null
+    return SLOT_ALIASES[target] ?? target
 }
 
 async function equipBestWeapon(bot) {
@@ -31,6 +46,23 @@ async function equipBestWeapon(bot) {
         return weapon.name
     } catch (e) {
         console.log(`[Equip] 裝備武器失敗: ${e.message}`)
+        return null
+    }
+}
+
+async function equipShield(bot) {
+    const shield = bot.inventory.items().find(i => i.name === 'shield')
+    if (!shield) {
+        console.log('[Equip] 背包裡沒有盾牌')
+        return null
+    }
+
+    try {
+        await bot.equip(shield, 'off-hand')
+        console.log('[Equip] 裝備盾牌到 off-hand')
+        return shield.name
+    } catch (e) {
+        console.log(`[Equip] 裝備盾牌失敗: ${e.message}`)
         return null
     }
 }
@@ -65,6 +97,7 @@ async function equipBestLoadout(bot) {
 
 function _slotForItemName(itemName) {
     if (!itemName) return null
+    if (itemName === 'shield') return 'off-hand'
     if (itemName.endsWith('_helmet')) return 'head'
     if (itemName.endsWith('_chestplate')) return 'torso'
     if (itemName.endsWith('_leggings')) return 'legs'
@@ -81,9 +114,13 @@ function _getEquippedItem(bot, slot) {
 
 async function equipSpecific(bot, target) {
     if (!target) return null
+    target = _normalizeSlot(target)
 
     if (target === 'hand') {
         return await equipBestWeapon(bot)
+    }
+    if (target === 'off-hand') {
+        return await equipShield(bot)
     }
     if (Object.prototype.hasOwnProperty.call(ARMOR_PRIORITY, target)) {
         const armor = _findBestItem(bot, ARMOR_PRIORITY[target])
@@ -147,6 +184,7 @@ async function unequipAll(bot) {
 
 async function unequipSpecific(bot, target) {
     if (!target) return []
+    target = _normalizeSlot(target)
 
     const slot = EQUIP_SLOTS.includes(target)
         ? target
@@ -178,4 +216,4 @@ async function unequipSpecific(bot, target) {
     }
 }
 
-module.exports = { equipBestArmor, equipBestWeapon, equipBestLoadout, equipSpecific, unequipAll, unequipSpecific }
+module.exports = { equipBestArmor, equipBestWeapon, equipBestLoadout, equipShield, equipSpecific, unequipAll, unequipSpecific }
