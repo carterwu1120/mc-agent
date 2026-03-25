@@ -1,5 +1,10 @@
 # Minecraft Bot Agent — Architecture Guide
 
+## Maintenance Rule
+
+**When making architectural changes, update this file.**
+If you add a new activity module, new event type, new skill handler, or change any core pattern — update the relevant section here before finishing the task.
+
 ## Project Scope
 
 **Active codebase: `agent/` only.**
