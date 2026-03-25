@@ -193,8 +193,13 @@ function startMonitor(bot) {
     bot.on('health', () => {
         if (_lastHealth === null) { _lastHealth = bot.health; return }
         if (bot.health < _lastHealth - 0.5 && !isCombating) {
-            console.log(`[Combat] 受到攻擊！血量 ${_lastHealth} → ${bot.health}，開始反擊`)
-            startCombat(bot)
+            const target = _findTarget(bot)
+            if (target) {
+                console.log(`[Combat] 受到攻擊！血量 ${_lastHealth} → ${bot.health}，反擊 ${target.name}`)
+                startCombat(bot)
+            } else {
+                console.log(`[Combat] 血量下降 ${_lastHealth} → ${bot.health}，附近無敵對生物（環境傷害），忽略`)
+            }
         }
         _lastHealth = bot.health
     })
