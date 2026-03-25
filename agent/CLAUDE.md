@@ -5,6 +5,8 @@
 **When making architectural changes, update this file.**
 If you add a new activity module, new event type, new skill handler, or change any core pattern — update the relevant section here before finishing the task.
 
+**Never commit after making changes** unless the user explicitly asks you to commit.
+
 ## Project Scope
 
 **Active codebase: `agent/` only.**
