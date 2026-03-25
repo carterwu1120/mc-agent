@@ -132,7 +132,7 @@ async function _loop(bot, goal = {}) {
                 furnace.close()
                 isSmelting = false
                 setActivity('idle')
-                bridge.sendState(bot, 'activity_done', { activity: 'smelting', reason: 'no_input' })
+                bridge.sendState(bot, 'activity_stuck', { activity: 'smelting', reason: 'no_input' })
                 break
             }
 

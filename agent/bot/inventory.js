@@ -7,6 +7,7 @@ const { isActive: isFishing, stopFishing, startFishing } = require('./fishing')
 const { isActive: isChopping, stopChopping, startChopping } = require('./woodcutting')
 const { isActive: isMining, stopMining, startMining, getGoal: getMiningGoal } = require('./mining')
 const { isActive: isSmelting, stopSmelting, startSmelting } = require('./smelting')
+const { isActive: isCombating, stopCombat, startCombat } = require('./combat')
 
 const INVENTORY_FULL = 36
 
@@ -16,6 +17,7 @@ let _wasFishing = false
 let _wasChopping = false
 let _wasMining = false
 let _wasSmelting = false
+let _wasCombating = false
 let _savedMiningGoal = {}
 
 function applyInventoryDecision(decision) {
@@ -35,10 +37,12 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
     _wasChopping = isChopping()
     _wasMining = isMining()
     _wasSmelting = isSmelting()
+    _wasCombating = isCombating()
     if (_wasFishing) stopFishing(bot)
     if (_wasChopping) stopChopping(bot)
     if (_wasMining) { _savedMiningGoal = getMiningGoal(); stopMining(bot) }
     if (_wasSmelting) stopSmelting(bot)
+    if (_wasCombating) stopCombat(bot)
 
     const beforeSlots = bot.inventory.items().length
     const compacted = await compactCompressibleItems(bot)
@@ -89,6 +93,10 @@ function _resumePreviousActivity(bot) {
     if (_wasSmelting) {
         console.log('[Inv] 恢復燒製')
         startSmelting(bot)
+    }
+    if (_wasCombating) {
+        console.log('[Inv] 恢復戰鬥')
+        startCombat(bot)
     }
 }
 

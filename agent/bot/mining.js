@@ -123,14 +123,14 @@ async function _loop(bot, goal = {}) {
             console.log(`[Mine] 達到時間目標 ${goal.duration}s，停止`)
             isMining = false
             setActivity('idle')
-            bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached' })
+            bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached', goal_target: goal.target ?? 'general' })
             break
         }
         if (goal.target && goal.count && targetCount >= goal.count) {
             console.log(`[Mine] 達到目標 ${goal.target} x${goal.count}，停止`)
             isMining = false
             setActivity('idle')
-            bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached' })
+            bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached', goal_target: goal.target ?? 'general' })
             break
         }
 
@@ -155,7 +155,7 @@ async function _loop(bot, goal = {}) {
                 await _digEscape(bot, bestY)
                 isMining = false
                 setActivity('idle')
-                bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
+                bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
                 break
             }
         } else if (needDescend) {
@@ -347,7 +347,7 @@ async function _loop(bot, goal = {}) {
                         await _digEscape(bot, Math.floor(bot.entity.position.y) + 20)
                         isMining = false
                         setActivity('idle')
-                        bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'no_blocks' })
+                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
                         break
                     }
                 } else {

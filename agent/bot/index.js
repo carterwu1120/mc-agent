@@ -5,6 +5,7 @@ const bridge = require('./bridge')
 const { handle } = require('./commands')
 const eating = require('./eating')
 const inventory = require('./inventory')
+const combat = require('./combat')
 
 const bot = mineflayer.createBot({
     host: 'localhost',
@@ -25,6 +26,8 @@ bot.once('spawn', () => {
     bridge.init(bot, (msg) => handle(bot, msg))
     eating.startMonitor(bot)
     inventory.startMonitor(bot)
+    combat.startMonitor(bot)
+    ;(async () => { await combat.equipArmor(bot); await combat.equipWeapon(bot) })()
 
     setInterval(() => bridge.sendState(bot, 'tick'), 2000)
 })

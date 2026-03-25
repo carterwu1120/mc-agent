@@ -6,6 +6,7 @@ const { startMining, stopMining } = require('./mining')
 const { startSmelting, stopSmelting } = require('./smelting')
 const { applyCraftDecision } = require('./crafting')
 const { equipBestLoadout, equipSpecific, unequipAll, unequipSpecific } = require('./equipment')
+const { startCombat, stopCombat } = require('./combat')
 const { findNearestPlayer } = require('./world')
 
 function handle(bot, msg) {
@@ -76,6 +77,14 @@ function handle(bot, msg) {
 
         case 'stopsmelt':
             stopSmelting(bot)
+            break
+
+        case 'combat':
+            startCombat(bot, msg.goal ?? _parseGoal(msg.args, ['duration']))
+            break
+
+        case 'stopcombat':
+            stopCombat(bot)
             break
 
         case 'smeltout': {
