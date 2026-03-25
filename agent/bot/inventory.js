@@ -148,7 +148,7 @@ async function _buryItems(bot, itemsMap) {
 
     // 4. 丟垃圾進洞（稍微仰角讓物品拋物線落入洞中）
     //    封口材料（cobblestone 等）至少預留 1 個，避免丟完沒東西封口
-    const FILL_BLOCKS = ['cobblestone', 'dirt', 'sand', 'gravel', 'netherrack', 'stone']
+    const FILL_BLOCKS = ['cobblestone', 'dirt', 'sand', 'netherrack', 'stone']
     await bot.look(backYaw, -0.3)
     for (const item of bot.inventory.items()) {
         if (!itemsMap.has(item.name)) continue

@@ -66,11 +66,12 @@ const TOOL_PRIORITY = {
     _axe:     ['diamond_axe',     'golden_axe',     'iron_axe',     'stone_axe',     'wooden_axe'],
     _pickaxe: ['diamond_pickaxe', 'iron_pickaxe',   'stone_pickaxe', 'wooden_pickaxe'],
     _shovel:  ['diamond_shovel',  'iron_shovel',    'stone_shovel',  'wooden_shovel'],
+    _sword:   ['diamond_sword',   'iron_sword',     'stone_sword',   'golden_sword',  'wooden_sword'],
 }
 
 // 通用工具合成：確保背包有指定類型且達到最低等級的工具
 // minTier: e.g. 'iron_pickaxe'（需要鐵稿以上），null 代表任何等級都可以
-async function _ensureTool(bot, toolSuffix, minTier = null) {
+async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false) {
     const priority = TOOL_PRIORITY[toolSuffix] ?? []
     const minIdx = minTier ? priority.indexOf(minTier) : priority.length - 1
     // acceptable = priority 裡等級 >= minTier 的選項（index 越小等級越高）
@@ -110,7 +111,7 @@ async function _ensureTool(bot, toolSuffix, minTier = null) {
                 return bot.recipesFor(item.id, null, 1, table2).length > 0
             })
             if (craftable2.length > 0) {
-                const chosen2 = await chooseCraft(bot, toolSuffix.slice(1), craftable2)
+                const chosen2 = autoChoose ? craftable2[0] : await chooseCraft(bot, toolSuffix.slice(1), craftable2)
                 const ok2 = await _craft(bot, chosen2, table2)
                 await _reclaimCraftingTable(bot)
                 if (ok2) {
@@ -131,7 +132,7 @@ async function _ensureTool(bot, toolSuffix, minTier = null) {
                 return bot.recipesFor(item.id, null, 1, table2).length > 0
             })
             if (craftable2.length > 0) {
-                const chosen2 = await chooseCraft(bot, toolSuffix.slice(1), craftable2)
+                const chosen2 = autoChoose ? craftable2[0] : await chooseCraft(bot, toolSuffix.slice(1), craftable2)
                 const ok2 = await _craft(bot, chosen2, table2)
                 await _reclaimCraftingTable(bot)
                 if (ok2) {
@@ -145,7 +146,7 @@ async function _ensureTool(bot, toolSuffix, minTier = null) {
         return false
     }
 
-    const chosen = await chooseCraft(bot, toolSuffix.slice(1), craftable)
+    const chosen = autoChoose ? craftable[0] : await chooseCraft(bot, toolSuffix.slice(1), craftable)
     const ok = await _craft(bot, chosen, table)
     await _reclaimCraftingTable(bot)
     if (ok) {
@@ -158,6 +159,7 @@ async function _ensureTool(bot, toolSuffix, minTier = null) {
 async function ensureAxe(bot)                      { return _ensureTool(bot, '_axe') }
 async function ensurePickaxe(bot)                  { return _ensureTool(bot, '_pickaxe') }
 async function ensureShovel(bot)                   { return _ensureTool(bot, '_shovel') }
+async function ensureSword(bot)                    { return _ensureTool(bot, '_sword', null, true) }
 async function ensurePickaxeTier(bot, minTier)     { return _ensureTool(bot, '_pickaxe', minTier) }
 
 const _BLOCK_TOOL = [
@@ -361,7 +363,7 @@ const _ORE_TO_INGOT = {
     raw_gold: 'gold_ingot',         gold_ore: 'gold_ingot',         deepslate_gold_ore: 'gold_ingot',
     raw_copper: 'copper_ingot',     copper_ore: 'copper_ingot',     deepslate_copper_ore: 'copper_ingot',
 }
-const _TOOL_INGOT = { _pickaxe: 'iron_ingot', _axe: 'iron_ingot', _shovel: 'iron_ingot' }
+const _TOOL_INGOT = { _pickaxe: 'iron_ingot', _axe: 'iron_ingot', _shovel: 'iron_ingot', _sword: 'iron_ingot' }
 
 // 若工具合成缺鐵錠但背包有原礦，自動燒製所需數量後回傳 true
 async function _smeltIfNeeded(bot, toolSuffix) {
@@ -481,4 +483,4 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, compactCompressibleItems, chooseCraft, applyCraftDecision }
+module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensureSword, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, compactCompressibleItems, chooseCraft, applyCraftDecision }

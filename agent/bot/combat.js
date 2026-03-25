@@ -1,6 +1,5 @@
 const { goals } = require('mineflayer-pathfinder')
 const { setActivity } = require('./activity')
-const bridge = require('./bridge')
 
 const HOSTILE_MOBS = new Set([
     'zombie', 'skeleton', 'creeper', 'spider', 'cave_spider', 'witch',
@@ -58,18 +57,31 @@ async function equipArmor(bot) {
 }
 
 async function equipWeapon(bot) {
-    for (const name of WEAPON_PRIORITY) {
+    const SWORDS = WEAPON_PRIORITY.filter(n => n.endsWith('_sword'))
+    const AXES   = WEAPON_PRIORITY.filter(n => n.endsWith('_axe') || n === 'trident')
+
+    const _tryEquip = async (name) => {
         const item = bot.inventory.items().find(i => i.name === name)
-        if (item) {
-            try {
-                await bot.equip(item, 'hand')
-                console.log(`[Combat] 武器 ${item.name}`)
-                return true
-            } catch (e) {
-                console.log(`[Combat] 武器裝備失敗 ${item.name}: ${e.message}`)
-            }
-        }
+        if (!item) return false
+        try { await bot.equip(item, 'hand'); console.log(`[Combat] 武器 ${item.name}`); return true } catch (_) { return false }
     }
+
+    // 1. 找劍
+    for (const name of SWORDS) { if (await _tryEquip(name)) return true }
+
+    // 2. 沒劍 → 嘗試合成
+    console.log('[Combat] 背包無劍，嘗試合成...')
+    const { ensureSword } = require('./crafting')
+    const crafted = await ensureSword(bot)
+    if (crafted) {
+        for (const name of SWORDS) { if (await _tryEquip(name)) return true }
+    }
+
+    // 3. 合成失敗 → 找斧頭
+    for (const name of AXES) { if (await _tryEquip(name)) return true }
+
+    // 4. 什麼都沒有 → 空手
+    try { await bot.unequip('hand') } catch (_) {}
     return false
 }
 
@@ -126,13 +138,11 @@ function isActive() {
 async function _loop(bot, goal = {}) {
     const startTime = Date.now()
     let weaponEquipped = false
+    let noTargetTicks = 0
 
     while (isCombating) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Combat] 達到時間目標 ${goal.duration}s，停止`)
-            isCombating = false
-            setActivity('idle')
-            bridge.sendState(bot, 'activity_done', { activity: 'combat', reason: 'goal_reached' })
             break
         }
 
@@ -143,9 +153,15 @@ async function _loop(bot, goal = {}) {
 
         const target = _findTarget(bot, goal.target)
         if (!target || !target.isValid) {
+            noTargetTicks++
+            if (noTargetTicks >= 4) {
+                console.log('[Combat] 附近無敵對生物，結束戰鬥')
+                break
+            }
             await _sleep(500)
             continue
         }
+        noTargetTicks = 0
 
         const dist = target.position.distanceTo(bot.entity.position)
         if (dist > 3) {
@@ -167,6 +183,8 @@ async function _loop(bot, goal = {}) {
 
         await _sleep(600)
     }
+
+    if (isCombating) stopCombat(bot)
 }
 
 function _findTarget(bot, preferType) {
