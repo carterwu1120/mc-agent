@@ -284,7 +284,7 @@ async function _loop(bot, goal = {}) {
                     }
                 }
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
-                const tunneled = await _digTunnel(bot, tunnelYaw, 8, bestY)
+                const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY)
                 if (!tunneled) {
                     tunnelFailCount++
                     tunnelYaw += Math.PI / 2
