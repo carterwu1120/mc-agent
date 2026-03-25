@@ -100,6 +100,27 @@ async function _ensureTool(bot, toolSuffix, minTier = null) {
     })
 
     if (craftable.length === 0) {
+        // 先嘗試解壓縮方塊（e.g. diamond_block → 9 diamonds）
+        const decompressed = await _decompressIfNeeded(bot, acceptable)
+        if (decompressed) {
+            const table2 = await ensureCraftingTable(bot)
+            const craftable2 = acceptable.filter(name => {
+                const item = bot.registry.itemsByName[name]
+                if (!item || !table2) return false
+                return bot.recipesFor(item.id, null, 1, table2).length > 0
+            })
+            if (craftable2.length > 0) {
+                const chosen2 = await chooseCraft(bot, toolSuffix.slice(1), craftable2)
+                const ok2 = await _craft(bot, chosen2, table2)
+                await _reclaimCraftingTable(bot)
+                if (ok2) {
+                    const tool = bot.inventory.items().find(i => acceptable.includes(i.name))
+                    if (tool) await bot.equip(tool, 'hand')
+                }
+                return ok2
+            }
+        }
+
         // 嘗試燒製原礦後重試
         const smelted = await _smeltIfNeeded(bot, toolSuffix)
         if (smelted) {
@@ -373,6 +394,43 @@ async function _smeltIfNeeded(bot, toolSuffix) {
     }
     stopSmelting(bot)
     resumeMining()
+    return false
+}
+
+const _MATERIAL_FOR_TOOL_PREFIX = {
+    diamond: 'diamond',
+    iron:    'iron_ingot',
+    gold:    'gold_ingot',
+    golden:  'gold_ingot',
+}
+
+async function _decompressIfNeeded(bot, acceptable) {
+    for (const toolName of acceptable) {
+        const prefix = toolName.split('_')[0]
+        const material = _MATERIAL_FOR_TOOL_PREFIX[prefix]
+        if (!material) continue
+
+        const blockName = COMPACTABLE_ITEMS[material]
+        if (!blockName) continue
+        if (!bot.inventory.items().some(i => i.name === blockName)) continue
+
+        const materialId = bot.registry.itemsByName[material]?.id
+        if (!materialId) continue
+
+        const recipe = bot.recipesFor(materialId, null, 1, null)[0]
+        if (!recipe) {
+            console.log(`[Craft] 找不到 ${blockName} → ${material} 的解壓縮配方`)
+            continue
+        }
+
+        try {
+            await bot.craft(recipe, 1, null)
+            console.log(`[Craft] 解壓縮 ${blockName} → ${material} x9`)
+            return true
+        } catch (e) {
+            console.log(`[Craft] 解壓縮 ${blockName} 失敗: ${e.message}`)
+        }
+    }
     return false
 }
 
