@@ -449,12 +449,15 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
             } catch (e) { console.log(`[Tunnel] dig ${b.name} 失敗: ${e.message}`) }
         }
 
-        _setMovements(bot)
+        // 目標比目前位置高時，啟用疊方塊讓 pathfinder 能墊上去
+        if (feetPos.y > base.y) _setEscapeMovements(bot)
+        else _setMovements(bot)
         const prevPos = bot.entity.position.clone()
         try {
             await bot.pathfinder.goto(new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z))
             if (bot.entity.position.distanceTo(prevPos) > 0.5) progressed = true
         } catch (e) { console.log(`[Tunnel] GoalBlock 失敗: ${e.message}`); break }
+        _setMovements(bot)
 
         await _sleep(200)
     }
