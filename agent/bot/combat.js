@@ -137,18 +137,12 @@ function isActive() {
 
 async function _loop(bot, goal = {}) {
     const startTime = Date.now()
-    let weaponEquipped = false
     let noTargetTicks = 0
 
     while (isCombating) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Combat] 達到時間目標 ${goal.duration}s，停止`)
             break
-        }
-
-        if (!weaponEquipped) {
-            await equipWeapon(bot)
-            weaponEquipped = true
         }
 
         const target = _findTarget(bot, goal.target)
@@ -162,6 +156,12 @@ async function _loop(bot, goal = {}) {
             continue
         }
         noTargetTicks = 0
+
+        // 每次攻擊前確認手持武器（其他模組可能切換了手上物品）
+        const handItem = bot.inventory.slots[bot.getEquipmentDestSlot('hand')]
+        if (!handItem || !WEAPON_PRIORITY.includes(handItem.name)) {
+            await equipWeapon(bot)
+        }
 
         const dist = target.position.distanceTo(bot.entity.position)
         if (dist > 3) {
