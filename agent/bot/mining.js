@@ -142,10 +142,10 @@ async function _loop(bot, goal = {}) {
             console.log(`[Mine] 位置過深 Y=${currentY}，回到目標高度 Y=${bestY}`)
             _setEscapeMovements(bot)
             try {
-                await bot.pathfinder.goto(new goals.GoalNear(
+                await _goto(bot, new goals.GoalNear(
                     Math.floor(bot.entity.position.x), bestY,
                     Math.floor(bot.entity.position.z), 3
-                ))
+                ), 20000)
             } catch (e) {
                 console.log('[Mine] 無法上升到目標高度:', e.message)
             }
@@ -193,7 +193,7 @@ async function _loop(bot, goal = {}) {
 
                 _setMovements(bot)
                 try {
-                    await bot.pathfinder.goto(new goals.GoalNear(orePos.x, orePos.y, orePos.z, 2))
+                    await _goto(bot, new goals.GoalNear(orePos.x, orePos.y, orePos.z, 2), 12000)
                     if (!isMining) return
                     const fresh = bot.blockAt(orePos)
                     if (!fresh || !fresh.name.endsWith('_ore')) continue
@@ -238,7 +238,7 @@ async function _loop(bot, goal = {}) {
                 console.log(`[Mine] 目標 ${block.name} at y=${pos.y}`)
                 _setMovements(bot)
                 try {
-                    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2))
+                    await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 2), 12000)
                 } catch (e) { continue }
 
                 if (!isMining) return
@@ -276,7 +276,7 @@ async function _loop(bot, goal = {}) {
                     console.log(`[Mine] 廣域搜尋到 ${bot.blockAt(wp)?.name} at y=${wp.y}，嘗試導航`)
                     _setMovements(bot)
                     try {
-                        await bot.pathfinder.goto(new goals.GoalNear(wp.x, wp.y, wp.z, 2))
+                        await _goto(bot, new goals.GoalNear(wp.x, wp.y, wp.z, 2), 12000)
                         tunnelFailCount = 0
                         continue
                     } catch (_) {
@@ -303,7 +303,7 @@ async function _loop(bot, goal = {}) {
                                 _setEscapeMovements(bot)
                                 let reached = false
                                 try {
-                                    await bot.pathfinder.goto(new goals.GoalNear(wall.position.x, wall.position.y, wall.position.z, 2))
+                                    await _goto(bot, new goals.GoalNear(wall.position.x, wall.position.y, wall.position.z, 2), 12000)
                                     reached = true
                                 } catch (_) {}
                                 _setMovements(bot)
@@ -322,12 +322,12 @@ async function _loop(bot, goal = {}) {
                             const edx = Math.round(-Math.sin(tunnelYaw))
                             const edz = Math.round(-Math.cos(tunnelYaw))
                             try {
-                                await bot.pathfinder.goto(new goals.GoalNear(
+                                await _goto(bot, new goals.GoalNear(
                                     Math.floor(bot.entity.position.x) + edx * 10,
                                     Math.floor(bot.entity.position.y),
                                     Math.floor(bot.entity.position.z) + edz * 10,
                                     3
-                                ))
+                                ), 12000)
                             } catch (_) {}
                             _setMovements(bot)
                             tunnelYaw += Math.PI / 2
@@ -385,7 +385,7 @@ async function _stairDown(bot, yaw, steps) {
         // 走進前方格
         _setMovements(bot)
         try {
-            await bot.pathfinder.goto(new goals.GoalBlock(feet.x + dx, feet.y, feet.z + dz))
+            await _goto(bot, new goals.GoalBlock(feet.x + dx, feet.y, feet.z + dz), 5000)
         } catch (_) { break }
 
         await _sleep(100)
@@ -454,7 +454,7 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
         else _setMovements(bot)
         const prevPos = bot.entity.position.clone()
         try {
-            await bot.pathfinder.goto(new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z))
+            await _goto(bot, new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z), 5000)
             if (bot.entity.position.distanceTo(prevPos) > 0.5) progressed = true
         } catch (e) { console.log(`[Tunnel] GoalBlock 失敗: ${e.message}`); break }
         _setMovements(bot)
@@ -480,7 +480,7 @@ async function _collectNearby(bot, nearPos, maxDistance) {
             continue
         }
         try {
-            await bot.pathfinder.goto(new goals.GoalNear(e.position.x, e.position.y, e.position.z, 1))
+            await _goto(bot, new goals.GoalNear(e.position.x, e.position.y, e.position.z, 1), 5000)
             await _sleep(150)
         } catch (_) {}
     }
@@ -518,7 +518,7 @@ async function _digEscape(bot, stopY = 60) {
 
         _setEscapeMovements(bot)
         try {
-            await bot.pathfinder.goto(new goals.GoalBlock(feet.x, feet.y + 1, feet.z))
+            await _goto(bot, new goals.GoalBlock(feet.x, feet.y + 1, feet.z), 5000)
         } catch (_) {}
 
         await _sleep(150)
@@ -537,6 +537,14 @@ async function _digEscape(bot, stopY = 60) {
 
 function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
+}
+
+// pathfinder.goto 若超過 ms 毫秒沒有結果就拋出 timeout
+function _goto(bot, goal, ms = 8000) {
+    return Promise.race([
+        bot.pathfinder.goto(goal),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('pathfinder timeout')), ms)),
+    ])
 }
 
 function isActive() {
