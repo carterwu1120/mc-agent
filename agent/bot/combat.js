@@ -2,6 +2,8 @@ const { goals } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
 
+const FOOD_ANIMALS = new Set(['cow', 'pig', 'chicken', 'sheep', 'rabbit'])
+
 const HOSTILE_MOBS = new Set([
     'zombie', 'skeleton', 'creeper', 'spider', 'cave_spider', 'witch',
     'slime', 'magma_cube', 'blaze', 'wither_skeleton',
@@ -292,9 +294,10 @@ function _findTarget(bot, preferType) {
             if (e.id === bot.entity.id) return false
             if (!e.isValid || !e.position) return false
             if (e.position.distanceTo(selfPos) > 16) return false
-            const name = e.name || e.mobType || ''
-            if (preferType) return name.toLowerCase().includes(preferType.toLowerCase())
-            return HOSTILE_MOBS.has(name.toLowerCase())
+            const name = (e.name || e.mobType || '').toLowerCase()
+            if (preferType === 'animal') return FOOD_ANIMALS.has(name)
+            if (preferType) return name.includes(preferType.toLowerCase())
+            return HOSTILE_MOBS.has(name)
         })
         .sort((a, b) => a.position.distanceTo(selfPos) - b.position.distanceTo(selfPos))[0]
 }

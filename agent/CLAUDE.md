@@ -148,6 +148,7 @@ activityStack.resumeCurrent(bot)
 | `fishing_stuck` | Fishing-specific stuck | Yes |
 | `inventory_full` | Inventory full | Yes |
 | `craft_decision` | Needs crafting decision | Yes |
+| `food_low` | Food < 10 & idle & no food in inventory | Yes |
 | `chat` | Player sent a message | No (logged only) |
 
 **Key rule:** `activity_done` (goal reached) is NOT routed to Python. The bot idles and waits for the next command. Only `activity_stuck` triggers LLM intervention.
@@ -172,7 +173,7 @@ Example `stack` value:
 
 All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new activities as a `case` in the switch. Existing commands:
 
-`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`
+`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `getfood`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`
 
 ### Other Key Modules
 
@@ -238,7 +239,7 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 
 ### Available LLM Commands
 
-`fish`, `chop`, `mine` (args: ore type), `smelt` (args: material), `combat`, `equip`, `come`, `chat`, `idle`
+`fish`, `chop`, `mine` (args: ore type), `smelt` (args: material), `combat`, `getfood`, `equip`, `come`, `chat`, `idle`
 
 ### Existing Skills
 
@@ -248,6 +249,7 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 | `inventory.py` | `inventory_full` | Drop items or compact inventory |
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
 | `activity_stuck.py` | `activity_stuck` | Activity-specific recovery (mining/smelting), fallback for others |
+| `food.py` | `food_low` | 補充食物：烤生肉 → 打動物 → 釣魚（確定性邏輯，不呼叫 LLM）|
 
 ### LLM Clients (`agent/brain/`)
 

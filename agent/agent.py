@@ -8,6 +8,7 @@ from agent.skills import fishing as fishing_skill
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
 from agent.skills import activity_stuck as activity_stuck_skill
+from agent.skills import food as food_skill
 
 load_dotenv()
 
@@ -23,6 +24,7 @@ HANDLERS = {
     "inventory_full": inventory_skill.handle,
     "craft_decision": craft_decision_skill.handle,
     "activity_stuck": activity_stuck_skill.handle,
+    "food_low":       food_skill.handle,
 }
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM

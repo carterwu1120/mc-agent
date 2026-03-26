@@ -1,4 +1,15 @@
-const FOOD_THRESHOLD = 18  // 食物低於此值就吃東西
+const bridge = require('./bridge')
+const { getActivity } = require('./activity')
+
+const FOOD_THRESHOLD = 18     // 食物低於此值就吃東西
+const FOOD_LOW_THRESHOLD = 10 // 食物低於此值且無食物時發送 food_low 事件
+const FOOD_LOW_COOLDOWN = 30000
+
+// 可以放進熔爐的生食（需要先燒熟）
+const RAW_FOOD_ITEMS = new Set([
+    'beef', 'porkchop', 'chicken', 'mutton', 'rabbit',
+    'cod', 'salmon', 'potato',
+])
 
 // Minecraft 可食用物品
 const FOOD_ITEMS = new Set([
@@ -15,6 +26,7 @@ const FOOD_ITEMS = new Set([
 
 let _isEating = false
 let _lastEatTime = 0
+let _lastFoodLowTime = 0
 const EAT_COOLDOWN = 4000  // 吃完後 4 秒內不再觸發
 
 function _sleep(ms) {
@@ -81,11 +93,23 @@ async function _tryEat(bot) {
     }
 }
 
+function _checkFoodLow(bot) {
+    if (bot.food >= FOOD_LOW_THRESHOLD) return
+    if (getActivity() !== 'idle') return
+    if (Date.now() - _lastFoodLowTime < FOOD_LOW_COOLDOWN) return
+    const hasFood = bot.inventory.items().some(i => FOOD_ITEMS.has(i.name))
+    if (hasFood) return
+    _lastFoodLowTime = Date.now()
+    console.log(`[Eat] 食物不足（${bot.food}/20），背包無食物 → food_low`)
+    bridge.sendState(bot, 'food_low')
+}
+
 function startMonitor(bot) {
     const check = () => {
         if (bot.food < FOOD_THRESHOLD) {
             _tryEat(bot).catch(e => console.log(`[Eat] 自動進食失敗: ${e.message}`))
         }
+        _checkFoodLow(bot)
     }
 
     bot.on('health', check)
@@ -103,4 +127,4 @@ function isEating() {
     return _isEating
 }
 
-module.exports = { startMonitor, isEating }
+module.exports = { startMonitor, isEating, RAW_FOOD_ITEMS }

@@ -1,4 +1,5 @@
 const { goals } = require('mineflayer-pathfinder')
+const bridge = require('./bridge')
 const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
 const { applyInventoryDecision } = require('./inventory')
 const { startChopping, stopChopping } = require('./woodcutting')
@@ -85,6 +86,10 @@ function handle(bot, msg) {
 
         case 'stopcombat':
             stopCombat(bot)
+            break
+
+        case 'getfood':
+            bridge.sendState(bot, 'food_low')
             break
 
         case 'smeltout': {
