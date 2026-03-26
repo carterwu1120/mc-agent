@@ -1,9 +1,12 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
-const { setActivity } = require('./activity')
+const activityStack = require('./activity')
 const bridge = require('./bridge')
 
 let isSmelting = false
+let _isPaused = false
+let _smeltedCount = 0
+let _inputPending = false
 let _placedFurnacePos = null
 
 const SMELTABLE = {
@@ -19,23 +22,44 @@ const FUEL_PRIORITY = [
     'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks',
 ]
 
+activityStack.register('smelting', _pause)
+
+function _pause(_bot) {
+    isSmelting = false
+    _isPaused = true
+    console.log('[Smelt] 暫停燒製')
+}
+
 async function startSmelting(bot, goal = {}) {
     if (isSmelting) {
         console.log('[Smelt] 已在燒製中')
         return
     }
-    const { isActive: isMiningActive, stopMining } = require('./mining')
-    if (isMiningActive()) stopMining(bot)
     isSmelting = true
-    setActivity('smelting')
+    _smeltedCount = 0
+    _inputPending = false
+    activityStack.push(bot, 'smelting', goal, (b) => _resumeSmelting(b, goal))
     console.log(`[Smelt] 開始燒製 goal=${JSON.stringify(goal)}`)
     _loop(bot, goal)
 }
 
-function stopSmelting(bot) {
+function _resumeSmelting(bot, originalGoal) {
+    if (isSmelting) return
+    const remainingCount = originalGoal.count
+        ? Math.max(1, originalGoal.count - _smeltedCount)
+        : undefined
+    isSmelting = true
+    activityStack.updateTopGoal(remainingCount
+        ? { ...originalGoal, count: remainingCount }
+        : originalGoal)
+    console.log('[Smelt] 恢復燒製')
+    _loop(bot, originalGoal)
+}
+
+function stopSmelting(_bot) {
     if (!isSmelting) return
     isSmelting = false
-    setActivity('idle')
+    _isPaused = false
     console.log('[Smelt] 停止燒製')
 }
 
@@ -44,23 +68,20 @@ function isActive() {
 }
 
 async function _loop(bot, goal = {}) {
+    _isPaused = false
     const startTime = Date.now()
-    let smeltedCount = 0
-    let inputPending = false  // 已放入材料，等待燒製中，不再重複放
 
     while (isSmelting) {
         // 停止條件
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Smelt] 達到時間目標 ${goal.duration}s，停止`)
             isSmelting = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'smelting', reason: 'goal_reached' })
             break
         }
-        if (goal.target && goal.count && smeltedCount >= goal.count) {
+        if (goal.target && goal.count && _smeltedCount >= goal.count) {
             console.log(`[Smelt] 達到目標 ${goal.target} x${goal.count}，停止`)
             isSmelting = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'smelting', reason: 'goal_reached' })
             break
         }
@@ -70,7 +91,6 @@ async function _loop(bot, goal = {}) {
         if (!furnaceBlock) {
             console.log('[Smelt] 找不到熔爐，停止')
             isSmelting = false
-            setActivity('idle')
             break
         }
 
@@ -84,7 +104,7 @@ async function _loop(bot, goal = {}) {
             continue
         }
 
-        if (!isSmelting) return
+        if (!isSmelting) break
 
         // 開啟熔爐
         let furnace
@@ -103,14 +123,18 @@ async function _loop(bot, goal = {}) {
             if (prevOut) {
                 try {
                     await furnace.takeOutput()
-                    smeltedCount += prevOut.count
-                    inputPending = !!furnace.slots[0]
-                    console.log(`[Smelt] 取出遺留產物 ${prevOut.name} x${prevOut.count}（共 ${smeltedCount}）`)
+                    _smeltedCount += prevOut.count
+                    _inputPending = !!furnace.slots[0]
+                    activityStack.updateProgress({ smelted: _smeltedCount })
+                    console.log(`[Smelt] 取出遺留產物 ${prevOut.name} x${prevOut.count}（共 ${_smeltedCount}）`)
                 } catch (e) {
                     const invSlots = bot.inventory.items().length
                     if (invSlots >= 36) {
                         console.log('[Smelt] 背包已滿，執行整理...')
                         furnace.close()
+                        isSmelting = false
+                        _isPaused = false
+                        activityStack.pop(bot)
                         const { handleFull } = require('./inventory')
                         await handleFull(bot)
                         return
@@ -127,11 +151,10 @@ async function _loop(bot, goal = {}) {
             })
 
             // 沒材料且沒有在燒 → 停止
-            if (smeltableItems.length === 0 && !inputPending) {
+            if (smeltableItems.length === 0 && !_inputPending) {
                 console.log('[Smelt] 背包沒有可燒的材料，停止')
                 furnace.close()
                 isSmelting = false
-                setActivity('idle')
                 bridge.sendState(bot, 'activity_stuck', { activity: 'smelting', reason: 'no_input' })
                 break
             }
@@ -154,22 +177,22 @@ async function _loop(bot, goal = {}) {
             }
 
             // 放入材料（未放過才放）
-            if (!inputPending && smeltableItems.length > 0) {
+            if (!_inputPending && smeltableItems.length > 0) {
                 const inputItem = smeltableItems[0]
                 const totalAvail = smeltableItems
                     .filter(i => i.name === inputItem.name)
                     .reduce((s, i) => s + i.count, 0)
                 let count = totalAvail
-                if (goal.count) count = Math.min(count, goal.count - smeltedCount)
+                if (goal.count) count = Math.min(count, goal.count - _smeltedCount)
                 count = Math.min(count, 64)
                 if (count > 0) {
                     try {
                         await furnace.putInput(inputItem.type, null, count)
-                        inputPending = true
-                        console.log(`[Smelt] 放入 ${inputItem.name} x${count}（背包共 ${totalAvail}${goal.count ? `，目標剩 ${goal.count - smeltedCount}` : ''}）`)
+                        _inputPending = true
+                        console.log(`[Smelt] 放入 ${inputItem.name} x${count}（背包共 ${totalAvail}${goal.count ? `，目標剩 ${goal.count - _smeltedCount}` : ''}）`)
                     } catch (e) {
                         if (!e.message?.includes('destination full')) throw e
-                        inputPending = true
+                        _inputPending = true
                         console.log('[Smelt] input slot 已有材料，等待燒製完成...')
                     }
                 }
@@ -180,12 +203,12 @@ async function _loop(bot, goal = {}) {
             // 每 10 秒重開熔爐，輪詢 slots[2] 有無產物，直到爐膛清空或達到目標
             // timeout 以「距上次取出產物的時間」計算，避免大批材料被誤判為超時
             let lastProgressAt = Date.now()
-            while (inputPending && isSmelting) {
+            while (_inputPending && isSmelting) {
                 for (let i = 0; i < 10 && isSmelting; i++) await _sleep(1000)
                 if (!isSmelting) break
                 if (Date.now() - lastProgressAt > 60000) {
                     console.log('[Smelt] 60s 無進度，放棄本批')
-                    inputPending = false
+                    _inputPending = false
                     break
                 }
 
@@ -201,14 +224,18 @@ async function _loop(bot, goal = {}) {
                 if (outputItem) {
                     try {
                         await furnace.takeOutput()
-                        smeltedCount += outputItem.count
-                        inputPending = !!furnace.slots[0]
+                        _smeltedCount += outputItem.count
+                        _inputPending = !!furnace.slots[0]
                         lastProgressAt = Date.now()
-                        console.log(`[Smelt] 取出 ${outputItem.name} x${outputItem.count}（共 ${smeltedCount}，爐膛剩餘: ${furnace.slots[0]?.count ?? 0}）`)
+                        activityStack.updateProgress({ smelted: _smeltedCount })
+                        console.log(`[Smelt] 取出 ${outputItem.name} x${outputItem.count}（共 ${_smeltedCount}，爐膛剩餘: ${furnace.slots[0]?.count ?? 0}）`)
                     } catch (e) {
                         const invSlots = bot.inventory.items().length
                         if (invSlots >= 36) {
                             furnace.close()
+                            isSmelting = false
+                            _isPaused = false
+                            activityStack.pop(bot)
                             const { handleFull } = require('./inventory')
                             await handleFull(bot)
                             return
@@ -219,8 +246,8 @@ async function _loop(bot, goal = {}) {
                     console.log(`[Smelt] 燒製中... (${pollTries * 10}s)`)
                 }
 
-                if (goal.target && goal.count && smeltedCount >= goal.count) {
-                    inputPending = false
+                if (goal.target && goal.count && _smeltedCount >= goal.count) {
+                    _inputPending = false
                     break
                 }
 
@@ -228,7 +255,7 @@ async function _loop(bot, goal = {}) {
             }
 
             // 本批完成，回收燃料
-            if (!inputPending) {
+            if (!_inputPending) {
                 try {
                     furnace = await bot.openFurnace(furnaceBlock)
                     await _sleep(300)
@@ -247,6 +274,9 @@ async function _loop(bot, goal = {}) {
             if (e.message?.includes('destination full')) {
                 const slots = bot.inventory.items().length
                 if (slots >= 36) {
+                    isSmelting = false
+                    _isPaused = false
+                    activityStack.pop(bot)
                     const { handleFull } = require('./inventory')
                     await handleFull(bot)
                     return
@@ -257,7 +287,11 @@ async function _loop(bot, goal = {}) {
         }
     }
 
-    await _reclaimFurnace(bot)
+    if (!_isPaused) {
+        await _reclaimFurnace(bot)
+        activityStack.pop(bot)
+    }
+    _isPaused = false
 }
 
 async function _findOrPlaceFurnace(bot) {

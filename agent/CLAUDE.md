@@ -37,68 +37,106 @@ agent/bot/                                      agent/agent.py
 
 ## JS Bot (`agent/bot/`)
 
-### Activity Modules
+### Activity Stack (`activity.js`)
 
-Each activity follows this exact pattern. Use `woodcutting.js` as the canonical reference:
+Activities are managed by a **LIFO stack**. Each frame stores:
 
 ```js
+{
+    activity:  'mining',                       // activity name
+    goal:      { target: 'iron', count: 10 }, // original goal (immutable)
+    progress:  { count: 5 },                  // updated during execution
+    startPos:  { x: 100, y: -16, z: -200 },  // position at push time
+    startTime: 1711411200000,                 // Date.now() at push
+    resumeFn:  Function,                      // closure to restart — NOT sent to Python
+}
+```
+
+**API:**
+- `register(name, pauseFn)` — called once at module load, registers pause handler
+- `push(bot, name, goal, resumeFn)` — auto-pauses current top, pushes new frame
+- `pop(bot)` — pops top frame, calls previous frame's `resumeFn`
+- `pause(bot)` — calls registered `pauseFn` for top (no pop; used by inventory)
+- `resumeCurrent(bot)` — calls top frame's `resumeFn` without popping (used by inventory)
+- `updateProgress(data)` — merges data into top frame's progress
+- `updateTopGoal(goal)` — updates top frame's goal and resets progress (used by `_resumeX`)
+- `getActivity()` — top frame name or `'idle'`
+- `getStack()` — all frames without `resumeFn` (JSON-safe, sent to Python)
+
+### Activity Module Pattern
+
+Every activity follows this exact pattern:
+
+```js
+const activityStack = require('./activity')
+
 let isActive = false
+let _isPaused = false
+let _progressVar = 0  // promoted from loop-local
+
+activityStack.register('name', _pause)
+
+function _pause(_bot) { isActive = false; _isPaused = true }
 
 async function startX(bot, goal = {}) {
     if (isActive) return
-    // pause other running activities (see combat.js or inventory.js for pause/resume pattern)
-    isActive = true
-    setActivity('x')        // from activity.js
+    isActive = true; _progressVar = 0
+    activityStack.push(bot, 'name', goal, (b) => _resumeX(b, goal))
     _loop(bot, goal)
 }
 
-function stopX(bot) {
-    isActive = false
-    setActivity('idle')
+function _resumeX(bot, originalGoal) {  // does NOT push — updates existing frame
+    if (isActive) return
+    const remaining = originalGoal.count
+        ? Math.max(1, originalGoal.count - _progressVar) : undefined
+    isActive = true
+    activityStack.updateTopGoal(remaining ? { ...originalGoal, count: remaining } : originalGoal)
+    _loop(bot, originalGoal)
 }
 
-function isActive() { return isActive }
+function stopX(_bot) {
+    if (!isActive) return
+    isActive = false; _isPaused = false
+    // loop handles the pop
+}
 
 async function _loop(bot, goal) {
+    _isPaused = false
     while (isActive) {
-        // on goal reached:
-        bridge.sendState(bot, 'activity_done', { activity: 'x', reason: 'goal_reached' })
-        break
-        // on stuck mid-activity:
-        bridge.sendState(bot, 'activity_stuck', { activity: 'x', reason: 'reason_code' })
-        break
+        // on goal reached: isActive = false; bridge.sendState(done); break
+        // on stuck: isActive = false; bridge.sendState(stuck); break
+        // update progress: activityStack.updateProgress({ count: _progressVar })
     }
+    if (!_isPaused) activityStack.pop(bot)  // pop only if not paused by another activity
+    _isPaused = false
 }
-
-module.exports = { startX, stopX, isActive }
 ```
+
+**Key rule:** `stopX` sets flags only — `_loop` calls `activityStack.pop(bot)` when it exits. `_pause` sets `_isPaused = true` so `_loop` skips the pop (stack already handled by `push`).
 
 ### Existing Activity Modules
 
-| Module | Activity name | Stuck reasons sent |
-|--------|--------------|-------------------|
-| `fishing.js` | `fishing` | `fishing_stuck` (separate event) |
-| `woodcutting.js` | `chopping` | — |
-| `mining.js` | `mining` | `no_blocks` |
-| `smelting.js` | `smelting` | `no_input` |
-| `combat.js` | `combat` | — |
+| Module | Activity name | Progress field | Stuck reasons sent |
+|--------|--------------|---------------|-------------------|
+| `fishing.js` | `fishing` | `catches` | `fishing_stuck` (separate event) |
+| `woodcutting.js` | `chopping` | `logs` | — |
+| `mining.js` | `mining` | `count` | `no_blocks` |
+| `smelting.js` | `smelting` | `smelted` | `no_input` |
+| `combat.js` | `combat` | — | — |
 
-### Pause / Resume Pattern
+### Inventory Interruption (Transient)
 
-When starting a new activity that should pause others (e.g. combat, inventory handling), save and restore state:
+Inventory does **not** push its own frame. It's a transient interruption:
 
 ```js
-// Save
-_wasFishing = isFishing(); _wasMining = isMining(); ...
-if (_wasFishing) stopFishing(bot)
-if (_wasMining) { _savedMiningGoal = getMiningGoal(); stopMining(bot) }
+// Pause current top activity:
+activityStack.pause(bot)
 
-// Restore
-if (_wasFishing) startFishing(bot)
-if (_wasMining) startMining(bot, _savedMiningGoal)
+// ... handle inventory ...
+
+// Resume current top activity:
+activityStack.resumeCurrent(bot)
 ```
-
-See `combat.js` `startCombat`/`stopCombat` for the full implementation.
 
 ### Event Types (JS → Python)
 
@@ -114,6 +152,22 @@ See `combat.js` `startCombat`/`stopCombat` for the full implementation.
 
 **Key rule:** `activity_done` (goal reached) is NOT routed to Python. The bot idles and waits for the next command. Only `activity_stuck` triggers LLM intervention.
 
+### Bridge State Sent to Python
+
+Every `sendState` call includes:
+- `activity` — top frame name or `'idle'` (backward compat)
+- `stack` — full frame array without `resumeFn` (for LLM context)
+- `pos`, `health`, `food`, `inventory`, `entities`
+
+Example `stack` value:
+```json
+[
+  { "activity": "mining", "goal": { "target": "iron", "count": 10 },
+    "progress": { "count": 5 }, "startPos": { "x": 100, "y": -16, "z": -200 } },
+  { "activity": "combat", "goal": {}, "progress": {}, "startPos": { ... } }
+]
+```
+
 ### Command Routing (`commands.js`)
 
 All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new activities as a `case` in the switch. Existing commands:
@@ -125,9 +179,10 @@ All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new act
 | Module | Purpose |
 |--------|---------|
 | `bridge.js` | WebSocket server, `sendState(bot, type, extra)` |
-| `activity.js` | Single global activity string (`setActivity`, `getActivity`) |
+| `activity.js` | LIFO activity stack manager |
+| `water.js` | Background water escape monitor (3-phase: swim up, pathfind dry, horizontal push) |
 | `eating.js` | Auto-eats when food < 18, triggered by `bot.on('health')` |
-| `inventory.js` | Pauses all activities when full, asks LLM via `inventory_full` |
+| `inventory.js` | Pauses top activity when full, asks LLM via `inventory_full` |
 | `crafting.js` | `ensureToolFor`, `ensurePickaxeTier`, `applyCraftDecision` |
 | `equipment.js` | `equipBestLoadout`, `equipSpecific`, `unequipAll` |
 | `world.js` | Utility: `findNearestPlayer`, entity/block helpers |
@@ -158,6 +213,7 @@ Handlers receive `state: dict` (full bot state) and `llm: LLMClient`. Return a l
 async def handle(state: dict, llm: LLMClient) -> list | None:
     activity = state.get("activity", "unknown")
     reason   = state.get("reason", "unknown")
+    stack    = state.get("stack", [])        # full activity stack for context
     inventory = state.get("inventory", [])   # list of {name, count}
     pos      = state.get("pos") or {}        # {x, y, z}
     health   = state.get("health")
@@ -208,5 +264,5 @@ llm: LLMClient = GeminiClient()
 1. **Activities are tools** — each module is a dumb executor. It runs, finishes or gets stuck, then reports. It never decides what comes next.
 2. **goal_reached → idle** — bot stops and waits. No automatic chaining to the next activity. Next command comes from a player or external orchestration.
 3. **stuck → LLM** — only when stuck mid-activity does the LLM intervene to decide recovery.
-4. **One activity at a time** — starting a new activity pauses the current one. Stopping restores it.
+4. **LIFO stack** — activities form a stack. Pushing auto-pauses the current top; popping auto-resumes the previous. No manual save/restore variables needed.
 5. **Prompts live in skills** — system prompts belong in `agent/skills/`, not in JS. JS only sends state, Python decides meaning.

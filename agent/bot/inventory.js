@@ -3,22 +3,12 @@ const bridge = require('./bridge')
 const { ensureToolFor } = require('./crafting')
 const { compactCompressibleItems } = require('./crafting')
 const { markBuried } = require('./buried')
-const { isActive: isFishing, stopFishing, startFishing } = require('./fishing')
-const { isActive: isChopping, stopChopping, startChopping } = require('./woodcutting')
-const { isActive: isMining, stopMining, startMining, getGoal: getMiningGoal } = require('./mining')
-const { isActive: isSmelting, stopSmelting, startSmelting } = require('./smelting')
-const { isActive: isCombating, stopCombat, startCombat } = require('./combat')
+const activityStack = require('./activity')
 
 const INVENTORY_FULL = 36
 
 let _decision = null
 let _checking = false
-let _wasFishing = false
-let _wasChopping = false
-let _wasMining = false
-let _wasSmelting = false
-let _wasCombating = false
-let _savedMiningGoal = {}
 
 function applyInventoryDecision(decision) {
     _decision = decision
@@ -33,16 +23,7 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
     _checking = true
 
     // 暫停當前行為
-    _wasFishing = isFishing()
-    _wasChopping = isChopping()
-    _wasMining = isMining()
-    _wasSmelting = isSmelting()
-    _wasCombating = isCombating()
-    if (_wasFishing) stopFishing(bot)
-    if (_wasChopping) stopChopping(bot)
-    if (_wasMining) { _savedMiningGoal = getMiningGoal(); stopMining(bot) }
-    if (_wasSmelting) stopSmelting(bot)
-    if (_wasCombating) stopCombat(bot)
+    activityStack.pause(bot)
 
     const beforeSlots = bot.inventory.items().length
     const compacted = await compactCompressibleItems(bot)
@@ -52,7 +33,7 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
     }
     if (!forceLlm || afterSlots < INVENTORY_FULL) {
         console.log('[Inv] 壓縮後背包已有空間，不需丟棄物品')
-        _resumePreviousActivity(bot)
+        activityStack.resumeCurrent(bot)
         _checking = false
         return
     }
@@ -73,31 +54,8 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
     }
 
     // 恢復之前的行為
-    _resumePreviousActivity(bot)
+    activityStack.resumeCurrent(bot)
     _checking = false
-}
-
-function _resumePreviousActivity(bot) {
-    if (_wasFishing) {
-        console.log('[Inv] 恢復釣魚')
-        startFishing(bot)
-    }
-    if (_wasChopping) {
-        console.log('[Inv] 恢復砍樹')
-        startChopping(bot)
-    }
-    if (_wasMining) {
-        console.log('[Inv] 恢復挖礦')
-        startMining(bot, _savedMiningGoal)
-    }
-    if (_wasSmelting) {
-        console.log('[Inv] 恢復燒製')
-        startSmelting(bot)
-    }
-    if (_wasCombating) {
-        console.log('[Inv] 恢復戰鬥')
-        startCombat(bot)
-    }
 }
 
 async function _buryItems(bot, itemsMap) {
@@ -117,15 +75,13 @@ async function _buryItems(bot, itemsMap) {
     const snapped = Math.round(backYaw / (Math.PI / 2)) * (Math.PI / 2)
     const dx = Math.round(-Math.sin(snapped))
     const dz = Math.round(-Math.cos(snapped))
-    const perpX = -dz   // 垂直於前進方向的左右偏移
-    const perpZ =  dx
     const feet = bot.entity.position.floored()
     const clearPos  = feet.offset(dx,  0, dz)   // bot 腳部高度的前方格
     const clearPos2 = feet.offset(dx,  1, dz)   // bot 頭部高度的前方格
     const topPos    = feet.offset(dx, -1, dz)   // 地板高度的前方格（封口位置）
     const botPos    = feet.offset(dx, -2, dz)   // 地板下一格（物品落點）
-    
-    // 3. 清出丟物路徑：正前方腳/頭高度 + 洞口左右兩側（防止側邊障礙物擋住拋物線）
+
+    // 3. 清出丟物路徑：正前方腳/頭高度
     const pathToClear = [
         clearPos2,                                      // 頭部高度正前方
         clearPos,                                       // 腳部高度正前方

@@ -1,10 +1,12 @@
 const { goals, Movements } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
-const { setActivity } = require('./activity')
+const activityStack = require('./activity')
 const { ensureAxe, ensureToolFor } = require('./crafting')
 const bridge = require('./bridge')
 
 let isChopping = false
+let _isPaused = false
+let _logsCollected = 0
 
 const SCAFFOLD_BLOCKS = new Set([
     'dirt', 'cobblestone', 'gravel', 'sand', 'stone',
@@ -23,41 +25,61 @@ const LOG_TO_SAPLING = {
     mangrove_log: 'mangrove_propagule',
 }
 
+activityStack.register('chopping', _pause)
+
+function _pause(_bot) {
+    isChopping = false
+    _isPaused = true
+    console.log('[Wood] 暫停砍樹')
+}
+
 async function startChopping(bot, goal = {}) {
     if (isChopping) {
         console.log('[Wood] 已在砍樹中')
         return
     }
     isChopping = true
-    setActivity('chopping')
+    _logsCollected = 0
+    activityStack.push(bot, 'chopping', goal, (b) => _resumeChopping(b, goal))
     console.log('[Wood] 開始砍樹')
     _loop(bot, goal)
 }
 
-function stopChopping(bot) {
+function _resumeChopping(bot, originalGoal) {
+    if (isChopping) return
+    const remainingLogs = originalGoal.logs
+        ? Math.max(1, originalGoal.logs - _logsCollected)
+        : undefined
+    isChopping = true
+    activityStack.updateTopGoal(remainingLogs
+        ? { ...originalGoal, logs: remainingLogs }
+        : originalGoal)
+    console.log('[Wood] 恢復砍樹')
+    _loop(bot, originalGoal)
+}
+
+function stopChopping(_bot) {
     if (!isChopping) return
     isChopping = false
-    setActivity('idle')
+    _isPaused = false
     console.log('[Wood] 停止砍樹')
 }
 
 async function _loop(bot, goal = {}) {
+    _isPaused = false
     const skipped = new Set()  // 完全無法到達的樹根位置
-    let logsCollected = 0
     const startTime = Date.now()
 
     while (isChopping) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Wood] 達到時間目標 ${goal.duration}s，停止`)
             isChopping = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
             break
         }
-        if (goal.logs && logsCollected >= goal.logs) {
+        if (goal.logs && _logsCollected >= goal.logs) {
             console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
             isChopping = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
             break
         }
@@ -88,7 +110,6 @@ async function _loop(bot, goal = {}) {
             }
             console.log('[Wood] 附近找不到木頭，停止')
             isChopping = false
-            setActivity('idle')
             break
         }
 
@@ -132,8 +153,9 @@ async function _loop(bot, goal = {}) {
 
             try {
                 await bot.dig(fresh)
-                logsCollected++
-                console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}（共 ${logsCollected} 根）`)
+                _logsCollected++
+                console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}（共 ${_logsCollected} 根）`)
+                activityStack.updateProgress({ logs: _logsCollected })
                 await _sleep(500)
                 await _collectNearby(bot, pos, 4)
             } catch (e) {
@@ -170,6 +192,9 @@ async function _loop(bot, goal = {}) {
         await _collectNearby(bot, rootPos, 8)
         await _plantSapling(bot, rootPos, treeLogName)
     }
+
+    if (!_isPaused) activityStack.pop(bot)
+    _isPaused = false
 }
 
 // BFS 找所有相連的 log block（同一棵樹），由下往上排序

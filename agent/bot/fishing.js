@@ -1,15 +1,26 @@
 const { goals } = require('mineflayer-pathfinder')
 const { findNearestEntity, findNearestWater, findFishableWater, isWater, scanAreaMap } = require('./world')
 const bridge = require('./bridge')
-const { setActivity } = require('./activity')
+const activityStack = require('./activity')
 
 let isFishing = false
+let _isPaused = false
+let _catches = 0
 let _savedPitch = null   // 目前使用的 pitch（同目標時沿用）
 let _lastWaterKey = null
 let _llmDecision = null  // 待處理的 LLM 決策（由 applyLLMDecision 設定）
 
 const PITCH_MIN = -1.0   // ~-57°
 const PITCH_MAX = 0.5    // ~+28°
+
+activityStack.register('fishing', _pause)
+
+function _pause(bot) {
+    isFishing = false
+    _isPaused = true
+    if (bot.fishing) bot.activateItem()
+    console.log('[Fish] 暫停釣魚')
+}
 
 async function startFishing(bot, goal = {}) {
     if (isFishing) {
@@ -27,35 +38,49 @@ async function startFishing(bot, goal = {}) {
     console.log('[Fish] 釣竿已裝備，開始釣魚')
 
     isFishing = true
-    setActivity('fishing')
+    _catches = 0
+    activityStack.push(bot, 'fishing', goal, (b) => _resumeFishing(b, goal))
     _loop(bot, goal)
+}
+
+function _resumeFishing(bot, originalGoal) {
+    if (isFishing) return
+    const remainingCatches = originalGoal.catches
+        ? Math.max(1, originalGoal.catches - _catches)
+        : undefined
+    isFishing = true
+    activityStack.updateTopGoal(remainingCatches
+        ? { ...originalGoal, catches: remainingCatches }
+        : originalGoal)
+    const rod = bot.inventory.items().find(i => i.name === 'fishing_rod')
+    if (rod) bot.equip(rod, 'hand').catch(() => {})
+    console.log('[Fish] 恢復釣魚')
+    _loop(bot, originalGoal)
 }
 
 function stopFishing(bot) {
     if (!isFishing) return
     isFishing = false
-    setActivity('idle')
+    _isPaused = false
     if (bot.fishing) bot.activateItem()
     console.log('[Fish] 停止釣魚')
 }
 
 async function _loop(bot, goal = {}) {
+    _isPaused = false
     let failStreak = 0
-    let catches = 0
     const startTime = Date.now()
 
     while (isFishing) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Fish] 達到時間目標 ${goal.duration}s，停止`)
             isFishing = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'fishing', reason: 'goal_reached' })
             break
         }
-        if (goal.catches && catches >= goal.catches) {
+        if (goal.catches && _catches >= goal.catches) {
             console.log(`[Fish] 達到釣魚目標 ${goal.catches} 次，停止`)
             isFishing = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'fishing', reason: 'goal_reached' })
             break
         }
@@ -68,7 +93,6 @@ async function _loop(bot, goal = {}) {
         if (!water) {
             console.log('[Fish] 附近沒有水，停止釣魚')
             isFishing = false
-            setActivity('idle')
             break
         }
 
@@ -120,7 +144,6 @@ async function _loop(bot, goal = {}) {
             if (decision.action === 'stop') {
                 console.log('[Fish] LLM 決定停止釣魚')
                 isFishing = false
-                setActivity('idle')
                 break
             }
 
@@ -161,12 +184,16 @@ async function _loop(bot, goal = {}) {
             console.log(caught.length > 0
                 ? `[Fish] 收竿！釣到：${caught.join(', ')}`
                 : '[Fish] 收竿！（物品未進背包）')
-            catches++
+            _catches++
+            activityStack.updateProgress({ catches: _catches })
         } else {
             console.log('[Fish] 超時，重新拋竿')
             await _sleep(500)
         }
     }
+
+    if (!_isPaused) activityStack.pop(bot)
+    _isPaused = false
 }
 
 // 等待 LLM 決策（polling _llmDecision，有 timeout）

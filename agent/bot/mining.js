@@ -1,12 +1,14 @@
 const { goals, Movements } = require('mineflayer-pathfinder')
-const { setActivity } = require('./activity')
+const activityStack = require('./activity')
 const { ensureToolFor, ensurePickaxeTier } = require('./crafting')
 const bridge = require('./bridge')
 const { isBuried } = require('./buried')
 const eating = require('./eating')
 
 let isMining = false
-let _currentGoal = {}
+let _isPaused = false
+let _targetCount = 0
+let _currentGoal = {}  // shim: removed in combat.js step
 
 const ORE_PRIORITY = [
     'diamond', 'emerald', 'ancient_debris',
@@ -69,6 +71,14 @@ function _setEscapeMovements(bot) {
     bot.pathfinder.setMovements(movements)
 }
 
+activityStack.register('mining', _pause)
+
+function _pause(_bot) {
+    isMining = false
+    _isPaused = true
+    console.log('[Mine] 暫停挖礦')
+}
+
 async function startMining(bot, goal = {}) {
     if (isMining) {
         console.log('[Mine] 已在挖礦中')
@@ -76,24 +86,34 @@ async function startMining(bot, goal = {}) {
     }
     if (goal.count !== undefined && !Number.isFinite(goal.count)) delete goal.count
     _currentGoal = goal
-    const { isActive: isSmeltingActive, stopSmelting } = require('./smelting')
-    if (isSmeltingActive()) stopSmelting(bot)
+    _targetCount = 0
     isMining = true
-    setActivity('mining')
+    activityStack.push(bot, 'mining', goal, (b) => _resumeMining(b, goal))
     console.log('[Mine] 開始挖礦')
     _loop(bot, goal)
 }
 
-function stopMining(bot) {
+function _resumeMining(bot, originalGoal) {
+    if (isMining) return
+    const remaining = originalGoal.count
+        ? Math.max(1, originalGoal.count - _targetCount)
+        : undefined
+    isMining = true
+    activityStack.updateTopGoal(remaining ? { ...originalGoal, count: remaining } : originalGoal)
+    console.log('[Mine] 恢復挖礦')
+    _loop(bot, originalGoal)
+}
+
+function stopMining(_bot) {
     if (!isMining) return
     isMining = false
-    setActivity('idle')
+    _isPaused = false
     console.log('[Mine] 停止挖礦')
 }
 
 async function _loop(bot, goal = {}) {
+    _isPaused = false
     const startTime = Date.now()
-    let targetCount = 0
     let tunnelYaw = bot.entity.yaw
     let wallNavAttempts = 0
     const bestY = goal.target ? (ORE_BEST_Y[goal.target] ?? null) : null
@@ -122,14 +142,12 @@ async function _loop(bot, goal = {}) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Mine] 達到時間目標 ${goal.duration}s，停止`)
             isMining = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached', goal_target: goal.target ?? 'general' })
             break
         }
-        if (goal.target && goal.count && targetCount >= goal.count) {
+        if (goal.target && goal.count && _targetCount >= goal.count) {
             console.log(`[Mine] 達到目標 ${goal.target} x${goal.count}，停止`)
             isMining = false
-            setActivity('idle')
             bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached', goal_target: goal.target ?? 'general' })
             break
         }
@@ -154,7 +172,6 @@ async function _loop(bot, goal = {}) {
                 console.log('[Mine] 上升失敗（仍遠離目標高度），向上挖掘逃脫...')
                 await _digEscape(bot, bestY)
                 isMining = false
-                setActivity('idle')
                 bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
                 break
             }
@@ -202,8 +219,11 @@ async function _loop(bot, goal = {}) {
                     if (!ok) continue
                     await bot.dig(fresh)
                     const isTarget = goal.target && fresh.name.includes(goal.target)
-                    if (isTarget) targetCount++
-                    console.log(`[Mine] 挖下 ${fresh.name}${isTarget ? ` (目標 ${targetCount}/${goal.count})` : ''}`)
+                    if (isTarget) {
+                        _targetCount++
+                        activityStack.updateProgress({ count: _targetCount })
+                    }
+                    console.log(`[Mine] 挖下 ${fresh.name}${isTarget ? ` (目標 ${_targetCount}/${goal.count})` : ''}`)
                     await _sleep(300)
                     await _collectNearby(bot, orePos, 4)
                 } catch (_) {}
@@ -257,8 +277,11 @@ async function _loop(bot, goal = {}) {
                     unavailablePickaxe.delete(required)  // 成功取得，解除跳過
                     await bot.dig(fresh)
                     const isTarget = goal.target && fresh.name.includes(goal.target)
-                    if (isTarget) targetCount++
-                    console.log(`[Mine] 挖下 ${fresh.name}${isTarget ? ` (目標 ${targetCount}/${goal.count})` : ''}`)
+                    if (isTarget) {
+                        _targetCount++
+                        activityStack.updateProgress({ count: _targetCount })
+                    }
+                    console.log(`[Mine] 挖下 ${fresh.name}${isTarget ? ` (目標 ${_targetCount}/${goal.count})` : ''}`)
                     await _sleep(300)
                     await _collectNearby(bot, pos, 4)
                 } catch (e) {
@@ -346,7 +369,6 @@ async function _loop(bot, goal = {}) {
                         console.log('[Mine] 四個方向都無法繼續，向上挖掘逃脫...')
                         await _digEscape(bot, Math.floor(bot.entity.position.y) + 20)
                         isMining = false
-                        setActivity('idle')
                         bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
                         break
                     }
@@ -356,6 +378,9 @@ async function _loop(bot, goal = {}) {
             }
         }
     }
+
+    if (!_isPaused) activityStack.pop(bot)
+    _isPaused = false
 }
 
 // 往目標 Y 走一步（pathfinder 自動挖出階梯）
@@ -551,11 +576,10 @@ function isActive() {
     return isMining
 }
 
-// 還原 flag 讓 suspended loop 繼續，不啟動新 loop
-function resumeMining() {
-    isMining = true
-}
+// shim: kept for inventory.js until step 6
+function resumeMining() { isMining = true }
 
+// shim: kept for combat.js until step 5
 function getGoal() { return _currentGoal }
 
 module.exports = { startMining, stopMining, isActive, resumeMining, getGoal }

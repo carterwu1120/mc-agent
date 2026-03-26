@@ -1,5 +1,5 @@
 const { goals } = require('mineflayer-pathfinder')
-const { setActivity } = require('./activity')
+const activityStack = require('./activity')
 const bridge = require('./bridge')
 
 const HOSTILE_MOBS = new Set([
@@ -26,11 +26,15 @@ const ARMOR_SLOTS = [
 ]
 
 let isCombating = false
-let _wasFishing = false
-let _wasChopping = false
-let _wasMining = false
-let _wasSmelting = false
-let _savedMiningGoal = {}
+let _isPaused = false
+
+activityStack.register('combat', _pause)
+
+function _pause(_bot) {
+    isCombating = false
+    _isPaused = true
+    console.log('[Combat] 暫停戰鬥')
+}
 
 function _armorTier(name) {
     for (const [mat, tier] of Object.entries(ARMOR_TIERS)) {
@@ -194,53 +198,25 @@ async function equipWeapon(bot) {
 async function startCombat(bot, goal = {}) {
     if (isCombating) return
 
-    const { isActive: isFishing, stopFishing, startFishing } = require('./fishing')
-    const { isActive: isChopping, stopChopping, startChopping } = require('./woodcutting')
-    const { isActive: isMining, stopMining, startMining, getGoal: getMiningGoal } = require('./mining')
-    const { isActive: isSmelting, stopSmelting, startSmelting } = require('./smelting')
-
-    _wasFishing = isFishing()
-    _wasChopping = isChopping()
-    _wasMining = isMining()
-    _wasSmelting = isSmelting()
-    if (_wasFishing) stopFishing(bot)
-    if (_wasChopping) stopChopping(bot)
-    if (_wasMining) { _savedMiningGoal = getMiningGoal(); stopMining(bot) }
-    if (_wasSmelting) stopSmelting(bot)
-
     isCombating = true
-    setActivity('combat')
+    activityStack.push(bot, 'combat', goal, (b) => _resumeCombat(b, goal))
     console.log(`[Combat] 開始戰鬥 goal=${JSON.stringify(goal)}`)
     _loop(bot, goal)
 }
 
-function stopCombat(bot) {
+function _resumeCombat(bot, originalGoal) {
+    if (isCombating) return
+    isCombating = true
+    activityStack.updateTopGoal(originalGoal)
+    console.log('[Combat] 恢復戰鬥')
+    _loop(bot, originalGoal)
+}
+
+function stopCombat(_bot) {
     if (!isCombating) return
     isCombating = false
-    setActivity('idle')
+    _isPaused = false
     console.log('[Combat] 停止戰鬥')
-
-    const { startFishing } = require('./fishing')
-    const { startChopping } = require('./woodcutting')
-    const { startMining } = require('./mining')
-    const { startSmelting } = require('./smelting')
-
-    if (_wasFishing) { console.log('[Combat] 恢復釣魚'); startFishing(bot) }
-    if (_wasChopping) { console.log('[Combat] 恢復砍樹'); startChopping(bot) }
-    if (_wasMining) { console.log('[Combat] 恢復挖礦'); startMining(bot, _savedMiningGoal) }
-    if (_wasSmelting) { console.log('[Combat] 恢復燒製'); startSmelting(bot) }
-
-    _wasFishing = false
-    _wasChopping = false
-    _wasMining = false
-    _wasSmelting = false
-    _savedMiningGoal = {}
-
-    // 戰鬥結束後升級裝備（可能撿到掉落 / 背包有材料）
-    setTimeout(async () => {
-        await craftMissingArmor(bot)
-        await equipArmor(bot)
-    }, 1000)
 }
 
 function isActive() {
@@ -248,6 +224,7 @@ function isActive() {
 }
 
 async function _loop(bot, goal = {}) {
+    _isPaused = false
     const startTime = Date.now()
     let noTargetTicks = 0
 
@@ -300,7 +277,12 @@ async function _loop(bot, goal = {}) {
         await _sleep(600)
     }
 
-    if (isCombating) stopCombat(bot)
+    isCombating = false
+    if (!_isPaused) {
+        setTimeout(async () => { await craftMissingArmor(bot); await equipArmor(bot) }, 1000)
+        activityStack.pop(bot)
+    }
+    _isPaused = false
 }
 
 function _findTarget(bot, preferType) {
