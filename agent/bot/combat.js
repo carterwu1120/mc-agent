@@ -4,7 +4,7 @@ const bridge = require('./bridge')
 
 const HOSTILE_MOBS = new Set([
     'zombie', 'skeleton', 'creeper', 'spider', 'cave_spider', 'witch',
-    'enderman', 'slime', 'magma_cube', 'blaze', 'wither_skeleton',
+    'slime', 'magma_cube', 'blaze', 'wither_skeleton',
     'zombie_villager', 'husk', 'stray', 'drowned', 'phantom',
     'pillager', 'vindicator', 'evoker', 'vex', 'ravager',
     'endermite', 'silverfish', 'guardian', 'elder_guardian',
@@ -269,8 +269,11 @@ async function _loop(bot, goal = {}) {
         }
         noTargetTicks = 0
 
+        // 若腳下或身體位置有蜘蛛網，先挖掉脫身
+        await _clearCobwebs(bot)
+
         // 每次攻擊前確認手持武器（其他模組可能切換了手上物品）
-        const handItem = bot.inventory.slots[bot.getEquipmentDestSlot('hand')]
+        const handItem = bot.heldItem
         if (!handItem || !WEAPON_PRIORITY.includes(handItem.name)) {
             await equipWeapon(bot)
         }
@@ -278,9 +281,10 @@ async function _loop(bot, goal = {}) {
         const dist = target.position.distanceTo(bot.entity.position)
         if (dist > 3) {
             try {
-                await bot.pathfinder.goto(
-                    new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2)
-                )
+                await Promise.race([
+                    bot.pathfinder.goto(new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2)),
+                    _sleep(5000).then(() => { bot.pathfinder.setGoal(null) }),
+                ])
             } catch (_) {}
         }
 
@@ -311,6 +315,19 @@ function _findTarget(bot, preferType) {
             return HOSTILE_MOBS.has(name.toLowerCase())
         })
         .sort((a, b) => a.position.distanceTo(selfPos) - b.position.distanceTo(selfPos))[0]
+}
+
+async function _clearCobwebs(bot) {
+    const feet = bot.entity.position.floored()
+    for (const dy of [0, 1]) {
+        const b = bot.blockAt(feet.offset(0, dy, 0))
+        if (b && b.name === 'cobweb') {
+            try {
+                await bot.dig(b)
+                console.log('[Combat] 清除蜘蛛網')
+            } catch (_) {}
+        }
+    }
 }
 
 function _sleep(ms) {
