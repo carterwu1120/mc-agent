@@ -2,6 +2,7 @@ const { goals, Movements } = require('mineflayer-pathfinder')
 const { getActivity } = require('./activity')
 
 let _escaping = false
+let _escapingLava = false
 let _lastCheck = 0
 const CHECK_INTERVAL = 500
 
@@ -9,7 +10,11 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-// 掃描周圍找最近的乾燥站立位置（腳 + 頭都是空氣）
+function _isLiquid(name) {
+    return name === 'water' || name === 'flowing_water' || name === 'lava' || name === 'flowing_lava'
+}
+
+// 掃描周圍找最近的安全站立位置（腳 + 頭都是空氣，地板是實心且非岩漿）
 function _findDryBlock(bot, radius = 8) {
     const pos = bot.entity.position
     let best = null
@@ -26,6 +31,7 @@ function _findDryBlock(bot, radius = 8) {
                 const isAir = n => n === 'air' || n === 'cave_air'
                 if (!isAir(feetB.name) || !isAir(headB.name)) continue
                 if (floorB.boundingBox !== 'block') continue  // 要有地板
+                if (_isLiquid(floorB.name)) continue          // 地板不能是岩漿/水
 
                 const dist = Math.abs(dx) + Math.abs(dy) * 0.5 + Math.abs(dz)
                 if (dist < bestDist) { bestDist = dist; best = feet }
@@ -103,25 +109,96 @@ async function _tryEscape(bot) {
     _escaping = false
 }
 
+async function _tryEscapeLava(bot) {
+    if (_escapingLava) return
+    _escapingLava = true
+    console.log('[Hazard] 偵測到在岩漿中，緊急逃脫！')
+
+    bot.pathfinder?.setGoal(null)
+
+    // ── 第一階段：跳出岩漿（比水更緊急，只等 2 秒）────────
+    const phase1 = Date.now() + 2000
+    while (bot.entity.isInLava && Date.now() < phase1) {
+        bot.setControlState('jump', true)
+        await _sleep(200)
+    }
+    bot.setControlState('jump', false)
+
+    if (!bot.entity.isInLava) {
+        console.log('[Hazard] 跳出岩漿成功')
+        _escapingLava = false
+        return
+    }
+
+    // ── 第二階段：掃描安全位置，pathfind 過去 ────────────
+    console.log('[Hazard] 尋找安全出口...')
+    const safe = _findDryBlock(bot, 8)
+    if (safe) {
+        const movements = new Movements(bot)
+        movements.canDig = false
+        bot.pathfinder.setMovements(movements)
+        try {
+            await Promise.race([
+                bot.pathfinder.goto(new goals.GoalNear(safe.x, safe.y, safe.z, 1)),
+                _sleep(6000).then(() => { bot.pathfinder.setGoal(null) }),
+            ])
+        } catch (_) {}
+        bot.pathfinder.setMovements(new Movements(bot))
+    }
+
+    if (!bot.entity.isInLava) {
+        console.log('[Hazard] 導航出岩漿成功')
+        _escapingLava = false
+        return
+    }
+
+    // ── 第三階段：四方向強行移動 ─────────────────────────
+    console.log('[Hazard] 強行水平逃脫...')
+    const dirs = ['forward', 'back', 'left', 'right']
+    for (const dir of dirs) {
+        if (!bot.entity.isInLava) break
+        bot.setControlState('jump', true)
+        bot.setControlState(dir, true)
+        await _sleep(1500)
+        bot.setControlState(dir, false)
+        bot.setControlState('jump', false)
+        await _sleep(200)
+    }
+
+    if (bot.entity.isInLava) {
+        console.log('[Hazard] 無法逃脫岩漿，請求協助')
+        bot.chat('我被困在岩漿裡了，請救我！')
+    } else {
+        console.log('[Hazard] 逃脫岩漿成功')
+    }
+
+    _escapingLava = false
+}
+
 function startMonitor(bot) {
     bot.on('physicsTick', () => {
         if (getActivity() === 'fishing') return
-        if (_escaping) return
 
         const now = Date.now()
         if (now - _lastCheck < CHECK_INTERVAL) return
         _lastCheck = now
 
-        if (bot.entity.isInWater) {
+        // 岩漿優先（更危險）
+        if (!_escapingLava && !_escaping && bot.entity.isInLava) {
+            _tryEscapeLava(bot).catch(e => console.log('[Hazard] 岩漿逃脫失敗:', e.message))
+            return
+        }
+
+        if (!_escaping && !_escapingLava && bot.entity.isInWater) {
             _tryEscape(bot).catch(e => console.log('[Water] 逃脫失敗:', e.message))
         }
     })
 
-    console.log('[Water] 水中逃脫監控已啟動')
+    console.log('[Hazard] 水/岩漿危機監控已啟動')
 }
 
 function isEscaping() {
-    return _escaping
+    return _escaping || _escapingLava
 }
 
 module.exports = { startMonitor, isEscaping }

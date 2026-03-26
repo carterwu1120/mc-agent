@@ -1,4 +1,5 @@
 const { goals, Movements } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
 const { ensureToolFor, ensurePickaxeTier } = require('./crafting')
 const bridge = require('./bridge')
@@ -30,6 +31,41 @@ const ORE_MIN_PICKAXE = {
     gold:           'iron_pickaxe',
     iron:           'stone_pickaxe',
     // coal, copper, lapis, redstone, stone → 木稿即可，不需特別限制
+}
+
+function _isLava(block) {
+    return block && (block.name === 'lava' || block.name === 'flowing_lava')
+}
+
+// 挖開 pos 後岩漿是否會流進來（檢查 pos 的 6 個鄰居）
+function _hasAdjacentLava(bot, pos) {
+    const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
+    return offsets.some(([dx, dy, dz]) => _isLava(bot.blockAt(pos.offset(dx, dy, dz))))
+}
+
+// 嘗試用背包裡的方塊封堵岩漿（最佳努力，不保證成功）
+async function _tryBlockLava(bot, lavaPos) {
+    const filler = bot.inventory.items().find(i =>
+        ['cobblestone', 'cobbled_deepslate', 'dirt', 'stone', 'gravel'].includes(i.name)
+    )
+    if (!filler) { console.log('[Mine] 沒有封堵材料，直接撤離'); return }
+
+    await bot.equip(filler, 'hand').catch(() => {})
+
+    const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
+    for (const [dx, dy, dz] of offsets) {
+        const ref = bot.blockAt(lavaPos.offset(dx, dy, dz))
+        if (!ref || ref.boundingBox !== 'block') continue
+        if (_isLava(ref)) continue
+        if (!_isLava(bot.blockAt(lavaPos))) return  // 已被封
+        try {
+            await bot.lookAt(lavaPos.offset(0.5, 0.5, 0.5))
+            await bot.placeBlock(ref, new Vec3(-dx, -dy, -dz))
+            console.log('[Mine] 封堵岩漿成功')
+            return
+        } catch (_) {}
+    }
+    console.log('[Mine] 無法封堵岩漿')
 }
 
 function _requiredPickaxe(blockName) {
@@ -214,6 +250,10 @@ async function _loop(bot, goal = {}) {
                     if (!isMining) return
                     const fresh = bot.blockAt(orePos)
                     if (!fresh || !fresh.name.endsWith('_ore')) continue
+                    if (_hasAdjacentLava(bot, fresh.position)) {
+                        console.log(`[Mine] 礦石 ${fresh.name} 鄰近岩漿，跳過`)
+                        continue
+                    }
                     const required = _requiredPickaxe(fresh.name)
                     const ok = await ensurePickaxeTier(bot, required)
                     if (!ok) continue
@@ -275,6 +315,10 @@ async function _loop(bot, goal = {}) {
                         continue
                     }
                     unavailablePickaxe.delete(required)  // 成功取得，解除跳過
+                    if (_hasAdjacentLava(bot, fresh.position)) {
+                        console.log(`[Mine] 礦石 ${fresh.name} 鄰近岩漿，跳過`)
+                        continue
+                    }
                     await bot.dig(fresh)
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) {
@@ -398,14 +442,20 @@ async function _stairDown(bot, yaw, steps) {
 
         const feet = bot.entity.position.floored()
 
-        // 挖前方 2 格（腳 + 頭）
+        // 挖前方 2 格（腳 + 頭）— 先確認鄰近無岩漿
         await ensureToolFor(bot, 'stone')  // 確保稿子在手
+        let lavaDetected = false
         for (const off of [[dx, 0, dz], [dx, 1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
-            if (b && b.boundingBox === 'block') {
-                try { await bot.dig(b) } catch (_) {}
+            if (!b || b.boundingBox !== 'block') continue
+            if (_hasAdjacentLava(bot, b.position)) {
+                console.log('[Mine] 前方偵測到岩漿，中止下潛')
+                lavaDetected = true
+                break
             }
+            try { await bot.dig(b) } catch (_) {}
         }
+        if (lavaDetected) return
 
         // 走進前方格
         _setMovements(bot)
@@ -466,12 +516,31 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
             if (isBuried(pos)) { console.log(`[Tunnel] 跳過 buried ${pos}`); continue }
             const b = bot.blockAt(pos)
             if (!b || b.name === 'air' || b.name === 'cave_air') continue
+            if (_isLava(b)) {
+                // 已經是岩漿（可見），嘗試封堵後中止
+                console.log(`[Tunnel] 偵測到可見岩漿 at ${pos}，封堵並中止`)
+                await _tryBlockLava(bot, pos)
+                return false
+            }
             if (b.hardness < 0) { console.log(`[Tunnel] 跳過基岩 ${pos}`); continue }
+            if (_hasAdjacentLava(bot, b.position)) {
+                // 隱藏岩漿：挖開後會流出，跳過此方塊
+                console.log(`[Tunnel] ${b.name} 鄰近岩漿，跳過`)
+                continue
+            }
             try {
                 await ensureToolFor(bot, b.name)
                 await bot.dig(b)
                 progressed = true
             } catch (e) { console.log(`[Tunnel] dig ${b.name} 失敗: ${e.message}`) }
+
+            // 挖後立即確認該位置是否出現岩漿
+            const afterDig = bot.blockAt(pos)
+            if (_isLava(afterDig)) {
+                console.log(`[Tunnel] 挖開後岩漿流入 ${pos}，嘗試封堵並中止`)
+                await _tryBlockLava(bot, pos)
+                return false
+            }
         }
 
         // 目標比目前位置高時，啟用疊方塊讓 pathfinder 能墊上去
