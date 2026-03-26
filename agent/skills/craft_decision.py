@@ -15,6 +15,29 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的合成決策助手。
 - 如果背包有可燒製的原礦（raw_iron 等），考慮是否先燒成錠再合成更好的工具
 """
 
+SYSTEM_PROMPT_MATERIAL = """你是 Minecraft 機器人的合成材料決策助手。
+機器人想合成某樣物品，但缺少必要材料，請根據缺少的材料類型決定下一步行動。
+每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
+只能回覆以下其中一種 JSON（不要加任何其他文字）：
+{"command": "chop", "text": "..."}
+{"command": "mine", "args": ["iron"], "text": "..."}
+{"command": "mine", "args": ["diamond"], "text": "..."}
+{"command": "mine", "args": ["stone"], "text": "..."}
+{"command": "combat", "text": "..."}
+{"command": "idle", "text": "..."}
+{"command": "chat", "text": "..."}
+
+決策原則：
+- 缺木材（log、planks、stick）→ chop
+- 缺礦石或金屬（cobblestone、stone）→ mine stone
+- 缺鐵材料（iron_ingot、raw_iron）→ mine iron
+- 缺鑽石（diamond）→ mine diamond
+- 缺需要戰鬥才能獲得的材料（皮革、骨粉、經驗等）→ combat
+- 目前已在執行相關任務（正在挖礦/砍樹）→ idle，等當前任務完成
+- 材料無法自動取得（需要玩家介入）→ chat 說明
+- 禁止回覆 fish、smelt
+"""
+
 SMELTABLE = {
     'raw_iron': 'iron_ingot', 'iron_ore': 'iron_ingot', 'deepslate_iron_ore': 'iron_ingot',
     'raw_gold': 'gold_ingot', 'gold_ore': 'gold_ingot', 'deepslate_gold_ore': 'gold_ingot',
@@ -25,14 +48,50 @@ SMELTABLE = {
 
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     inventory = state.get("inventory", [])
-    goal = state.get("goal", "物品")
-    options = state.get("options", [])
-    activity = state.get("activity", "idle")
-    pos = state.get("pos") or {}
-    health = state.get("health", "?")
-    food = state.get("food", "?")
-    y = round(pos.get("y", 0))
+    goal      = state.get("goal", "物品")
+    options   = state.get("options", [])
+    reason    = state.get("reason", "choose")
+    activity  = state.get("activity", "idle")
+    pos       = state.get("pos") or {}
+    health    = state.get("health", "?")
+    food      = state.get("food", "?")
+    y         = round(pos.get("y", 0))
 
+    inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
+
+    # ── 材料不足，決定如何補充 ──────────────────────────────
+    if reason == "material_missing" or not options:
+        missing = state.get("missing_materials", [])
+        missing_lines = "\n".join(f"- {m['name']} x{m['count']}" for m in missing) or "（未指定）"
+        prompt = (
+            f"機器人想合成「{goal}」，但缺少以下材料：\n{missing_lines}\n\n"
+            f"當前狀態：活動={activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
+            f"背包內容：\n{inv_summary}\n\n"
+            f"請根據缺少的材料類型，決定下一步行動。"
+        )
+        response = None
+        try:
+            print(f"[Skill/craft_decision/material] Prompt:\n{prompt}\n---")
+            response = await llm.chat(
+                [{"role": "user", "content": prompt}],
+                system=SYSTEM_PROMPT_MATERIAL,
+            )
+            clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+            clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
+            decision = json.loads(clean)
+            result = []
+            text = decision.get("text", "").strip()
+            if text:
+                result.append({"command": "chat", "text": text})
+            if decision.get("command") != "idle":
+                cmd = {k: v for k, v in decision.items() if k != "text"}
+                result.append(cmd)
+            return result if result else None
+        except Exception as e:
+            print(f"[Skill/craft_decision/material] 解析失敗: {e}\n原始回應: {response!r}")
+            return None
+
+    # ── 有多個選項，選最適合的 ──────────────────────────────
     inv_map = {i['name']: i['count'] for i in inventory}
     smeltable_lines = [
         f"- {name} x{inv_map[name]} → {out}"
@@ -43,7 +102,6 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         if smeltable_lines else "（無可燒製原料）"
     )
 
-    inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory)
     prompt = (
         f"機器人需要合成：{goal}\n"
         f"目前可合成的選項：{', '.join(options)}\n\n"

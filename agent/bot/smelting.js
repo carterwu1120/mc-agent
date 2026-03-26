@@ -256,6 +256,8 @@ async function _loop(bot, goal = {}) {
             }
         }
     }
+
+    await _reclaimFurnace(bot)
 }
 
 async function _findOrPlaceFurnace(bot) {
@@ -361,6 +363,34 @@ async function _placeFurnace(bot, furnaceId) {
 
     console.log('[Smelt] 找不到放置位置')
     return null
+}
+
+async function _reclaimFurnace(bot) {
+    if (!_placedFurnacePos) return
+    const pos = _placedFurnacePos
+    _placedFurnacePos = null
+    const furnaceId    = bot.registry.blocksByName['furnace']?.id
+    const litFurnaceId = bot.registry.blocksByName['lit_furnace']?.id
+    const block = bot.blockAt(pos)
+    if (!block || (block.type !== furnaceId && block.type !== litFurnaceId)) return
+    try {
+        const { ensurePickaxe } = require('./crafting')
+        await ensurePickaxe(bot)
+        await bot.dig(block)
+        await _sleep(400)
+        // 撿起掉落的熔爐
+        const dropped = Object.values(bot.entities).find(
+            e => e.name === 'item' && e.position.distanceTo(pos) < 3
+        )
+        if (dropped) {
+            try {
+                await bot.pathfinder.goto(new goals.GoalNear(dropped.position.x, dropped.position.y, dropped.position.z, 0))
+            } catch (_) {}
+        }
+        console.log('[Smelt] 回收熔爐')
+    } catch (e) {
+        console.log('[Smelt] 回收熔爐失敗:', e.message)
+    }
 }
 
 function _sleep(ms) {

@@ -1,5 +1,6 @@
 const { goals } = require('mineflayer-pathfinder')
 const { setActivity } = require('./activity')
+const bridge = require('./bridge')
 
 const HOSTILE_MOBS = new Set([
     'zombie', 'skeleton', 'creeper', 'spider', 'cave_spider', 'witch',
@@ -38,10 +39,15 @@ function _armorTier(name) {
     return 0
 }
 
+function _isNearlyBroken(item) {
+    if (!item || !item.maxDurability) return false
+    return (item.maxDurability - item.durabilityUsed) < item.maxDurability * 0.1
+}
+
 async function equipArmor(bot) {
     for (const { slot, dest, suffix } of ARMOR_SLOTS) {
         const current = bot.inventory.slots[slot]
-        const currentTier = current ? _armorTier(current.name) : 0
+        const currentTier = (current && !_isNearlyBroken(current)) ? _armorTier(current.name) : 0
         const best = bot.inventory.items()
             .filter(i => i.name.endsWith(suffix))
             .sort((a, b) => _armorTier(b.name) - _armorTier(a.name))[0]
@@ -53,6 +59,106 @@ async function equipArmor(bot) {
                 console.log(`[Combat] 裝備失敗 ${best.name}: ${e.message}`)
             }
         }
+    }
+}
+
+const DIAMOND_ARMOR_COST = { '_helmet': 5, '_chestplate': 8, '_leggings': 7, '_boots': 4 }
+
+function _diamondReserve(bot) {
+    // 預留給工具的鑽石數量（沒有就預留合成所需）
+    const inv = bot.inventory.items()
+    const reserve =
+        (inv.some(i => i.name === 'diamond_pickaxe') ? 0 : 3) +
+        (inv.some(i => i.name === 'diamond_sword')   ? 0 : 2)
+    return reserve
+}
+
+async function craftMissingArmor(bot) {
+    // 任何欄位低於鐵裝或快壞就觸發
+    const needsUpgrade = ARMOR_SLOTS.some(({ slot }) => {
+        const cur = bot.inventory.slots[slot]
+        return !cur || _isNearlyBroken(cur) || _armorTier(cur.name) < ARMOR_TIERS.iron
+    })
+    if (!needsUpgrade) return
+
+    const { ensureCraftingTable, reclaimCraftingTable } = require('./crafting')
+
+    // 計算缺少的鐵裝需要多少 iron_ingot，不足就先燒製
+    const ironIngotCount = () => bot.inventory.items()
+        .filter(i => i.name === 'iron_ingot').reduce((s, i) => s + i.count, 0)
+    const ingotNeeded = ARMOR_SLOTS.reduce((sum, { slot, suffix }) => {
+        const cur = bot.inventory.slots[slot]
+        const tier = (cur && !_isNearlyBroken(cur)) ? _armorTier(cur.name) : 0
+        if (tier >= ARMOR_TIERS.iron) return sum
+        const diamonds = bot.inventory.items()
+            .filter(i => i.name === 'diamond').reduce((s, i) => s + i.count, 0)
+        const canDiamond = diamonds - _diamondReserve(bot) >= DIAMOND_ARMOR_COST[suffix]
+        return canDiamond ? sum : sum + DIAMOND_ARMOR_COST[suffix]
+    }, 0)
+    const stillNeed = ingotNeeded - ironIngotCount()
+    if (stillNeed > 0) {
+        const rawIron = bot.inventory.items().filter(i => i.name === 'raw_iron').reduce((s, i) => s + i.count, 0)
+        if (rawIron > 0) {
+            const toSmelt = Math.min(rawIron, stillNeed)
+            const ingotsBefore = ironIngotCount()
+            console.log(`[Combat] 先燒製 ${toSmelt} 個 iron_ingot`)
+            const { startSmelting, isActive: isSmeltingActive } = require('./smelting')
+            startSmelting(bot, { target: 'iron', count: toSmelt })
+            while (isSmeltingActive()) {
+                await _sleep(3000)
+            }
+            if (ironIngotCount() < ingotsBefore + toSmelt) {
+                console.log(`[Combat] 燒製提前結束，只取得 ${ironIngotCount() - ingotsBefore}/${toSmelt} 個 iron_ingot`)
+            }
+        }
+        if (rawIron === 0) {
+            console.log(`[Combat] 缺少鐵材料，通知 Python 決策`)
+            bridge.sendState(bot, 'craft_decision', {
+                goal: 'iron_armor',
+                options: [],
+                reason: 'material_missing',
+                missing_materials: [{ name: 'iron_ingot', count: stillNeed }],
+            })
+            return
+        }
+    }
+
+    const table = await ensureCraftingTable(bot)
+    if (!table) return
+
+    try {
+        for (const { slot, dest, suffix } of ARMOR_SLOTS) {
+            const cur = bot.inventory.slots[slot]
+            const currentTier = (cur && !_isNearlyBroken(cur)) ? _armorTier(cur.name) : 0
+            if (currentTier >= ARMOR_TIERS.iron) continue
+
+            // 決定嘗試的材料：鑽石夠用才試，否則直接鐵
+            const diamonds = bot.inventory.items()
+                .filter(i => i.name === 'diamond').reduce((s, i) => s + i.count, 0)
+            const reserve = _diamondReserve(bot)
+            const canUseDiamond = diamonds - reserve >= DIAMOND_ARMOR_COST[suffix]
+
+            const tiers = canUseDiamond ? ['diamond', 'iron'] : ['iron']
+
+            for (const mat of tiers) {
+                const pieceName = `${mat}${suffix}`
+                const pieceItem = bot.registry.itemsByName[pieceName]
+                if (!pieceItem) continue
+                const recipe = bot.recipesFor(pieceItem.id, null, 1, table)[0]
+                if (!recipe) continue
+                try {
+                    await bot.craft(recipe, 1, table)
+                    console.log(`[Combat] 合成 ${pieceName}`)
+                    const crafted = bot.inventory.items().find(i => i.name === pieceName)
+                    if (crafted) await bot.equip(crafted, dest)
+                    break
+                } catch (e) {
+                    console.log(`[Combat] 合成 ${pieceName} 失敗: ${e.message}`)
+                }
+            }
+        }
+    } finally {
+        await reclaimCraftingTable(bot)
     }
 }
 
@@ -129,6 +235,12 @@ function stopCombat(bot) {
     _wasMining = false
     _wasSmelting = false
     _savedMiningGoal = {}
+
+    // 戰鬥結束後升級裝備（可能撿到掉落 / 背包有材料）
+    setTimeout(async () => {
+        await craftMissingArmor(bot)
+        await equipArmor(bot)
+    }, 1000)
 }
 
 function isActive() {
@@ -230,4 +342,4 @@ function startMonitor(bot) {
     console.log('[Combat] 戰鬥監控已啟動')
 }
 
-module.exports = { startCombat, stopCombat, isActive, equipArmor, equipWeapon, startMonitor }
+module.exports = { startCombat, stopCombat, isActive, equipArmor, equipWeapon, craftMissingArmor, startMonitor }

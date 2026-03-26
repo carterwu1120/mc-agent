@@ -349,9 +349,10 @@ async function _reclaimCraftingTable(bot) {
     const block = bot.blockAt(pos)
     if (!block || block.name !== 'crafting_table') return
     try {
-        const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
-        if (axe) await bot.equip(axe, 'hand')
+        await ensureAxe(bot)
         await bot.dig(block)
+        await _sleep(300)
+        await _collectNearby(bot, 3)
         console.log('[Craft] 回收工作檯')
     } catch (e) {
         console.log('[Craft] 回收工作檯失敗:', e.message)
@@ -378,25 +379,18 @@ async function _smeltIfNeeded(bot, toolSuffix) {
                  : oreEntry.name.includes('gold') ? 'gold' : 'copper'
 
     console.log(`[Craft] 有 ${oreEntry.name}，先燒製 ${needed} 個 ${neededIngot}...`)
-    const { startSmelting, stopSmelting } = require('./smelting')
+    const { startSmelting, isActive: isSmeltingActive } = require('./smelting')
     const { resumeMining } = require('./mining')
     startSmelting(bot, { target, count: needed })  // 內部會停 mining
 
-    const deadline = Date.now() + 120000  // 最多等 2 分鐘
-    while (Date.now() < deadline) {
+    while (isSmeltingActive()) {
         await _sleep(3000)
-        const ingotCount = bot.inventory.items()
-            .filter(i => i.name === neededIngot)
-            .reduce((s, i) => s + i.count, 0)
-        if (ingotCount >= needed) {
-            stopSmelting(bot)
-            resumeMining()  // 還原 flag，讓 suspended mining loop 繼續
-            return true
-        }
     }
-    stopSmelting(bot)
+    const ingotCount = bot.inventory.items()
+        .filter(i => i.name === neededIngot)
+        .reduce((s, i) => s + i.count, 0)
     resumeMining()
-    return false
+    return ingotCount >= needed
 }
 
 const _MATERIAL_FOR_TOOL_PREFIX = {
@@ -483,4 +477,4 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensureSword, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, compactCompressibleItems, chooseCraft, applyCraftDecision }
+module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensureSword, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, reclaimCraftingTable: _reclaimCraftingTable, compactCompressibleItems, chooseCraft, applyCraftDecision }
