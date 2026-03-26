@@ -10,6 +10,7 @@ const water = require('./water')
 let isMining = false
 let _isPaused = false
 let _targetCount = 0
+let _loopGen = 0
 let _currentGoal = {}  // shim: removed in combat.js step
 
 const ORE_PRIORITY = [
@@ -149,6 +150,7 @@ function stopMining(_bot) {
 }
 
 async function _loop(bot, goal = {}) {
+    const _myGen = ++_loopGen
     _isPaused = false
     const startTime = Date.now()
     let tunnelYaw = bot.entity.yaw
@@ -426,7 +428,7 @@ async function _loop(bot, goal = {}) {
         }
     }
 
-    if (!_isPaused) activityStack.pop(bot)
+    if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
 
