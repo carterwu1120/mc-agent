@@ -5,6 +5,7 @@ const { ensureToolFor, ensurePickaxeTier } = require('./crafting')
 const bridge = require('./bridge')
 const { isBuried } = require('./buried')
 const eating = require('./eating')
+const water = require('./water')
 
 let isMining = false
 let _isPaused = false
@@ -212,6 +213,8 @@ async function _loop(bot, goal = {}) {
                 break
             }
         } else if (needDescend) {
+            // 等待水/岩漿逃脫完成再下潛
+            if (water.isEscaping()) { await _sleep(500); continue }
             // 主動作：挖階梯往下
             await _stepDown(bot, bestY, tunnelYaw)
             if (!isMining) return
@@ -246,7 +249,7 @@ async function _loop(bot, goal = {}) {
 
                 _setMovements(bot)
                 try {
-                    await _goto(bot, new goals.GoalNear(orePos.x, orePos.y, orePos.z, 2), 12000)
+                    await _goto(bot, new goals.GoalNear(orePos.x, orePos.y, orePos.z, 1), 12000)
                     if (!isMining) return
                     const fresh = bot.blockAt(orePos)
                     if (!fresh || !fresh.name.endsWith('_ore')) continue
@@ -298,7 +301,7 @@ async function _loop(bot, goal = {}) {
                 console.log(`[Mine] 目標 ${block.name} at y=${pos.y}`)
                 _setMovements(bot)
                 try {
-                    await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 2), 12000)
+                    await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 12000)
                 } catch (e) { continue }
 
                 if (!isMining) return
@@ -435,6 +438,7 @@ async function _stairDown(bot, yaw, steps) {
 
     for (let i = 0; i < steps; i++) {
         if (!isMining) return
+        if (water.isEscaping()) return
         if (eating.isEating()) {
             await _sleep(250)
             continue
@@ -448,7 +452,7 @@ async function _stairDown(bot, yaw, steps) {
         for (const off of [[dx, 0, dz], [dx, 1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
             if (!b || b.boundingBox !== 'block') continue
-            if (_hasAdjacentLava(bot, b.position)) {
+            if (_isLava(b) || _hasAdjacentLava(bot, b.position)) {
                 console.log('[Mine] 前方偵測到岩漿，中止下潛')
                 lavaDetected = true
                 break
@@ -530,6 +534,12 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
             }
             try {
                 await ensureToolFor(bot, b.name)
+                // 工具切換期間岩漿可能流入，重新確認
+                const recheck = bot.blockAt(pos)
+                if (!recheck || _isLava(recheck)) {
+                    console.log(`[Tunnel] ${pos} 在工具切換後變為岩漿，中止`)
+                    return false
+                }
                 await bot.dig(b)
                 progressed = true
             } catch (e) { console.log(`[Tunnel] dig ${b.name} 失敗: ${e.message}`) }
