@@ -160,6 +160,7 @@ async function _loop(bot, goal = {}) {
     let stuckCount = 0
     let tunnelFailCount = 0
     const unavailablePickaxe = new Set()  // 本輪無法取得的稿子等級，跳過需要它的礦
+    const digFailed = new Set()           // 挖掘失敗的位置，本輪跳過
 
     while (isMining) {
         if (eating.isEating()) {
@@ -279,7 +280,10 @@ async function _loop(bot, goal = {}) {
             const allExposed = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 16, count: 50 })
                 .filter(p => {
                     if (!_isExposed(bot, p)) return false
-                    if (bestY !== null && Math.abs(p.y - bestY) > 5) return false
+                    const blockName = bot.blockAt(p)?.name
+                    const isTargetOre = goal.target && blockName?.includes(goal.target)
+                    if (!isTargetOre && bestY !== null && Math.abs(p.y - bestY) > 5) return false
+                    if (digFailed.has(p.toString())) return false
                     if (unavailablePickaxe.size > 0) {
                         const req = _requiredPickaxe(bot.blockAt(p)?.name)
                         if (unavailablePickaxe.has(req)) return false
@@ -304,7 +308,23 @@ async function _loop(bot, goal = {}) {
                 _setMovements(bot)
                 try {
                     await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 12000)
-                } catch (e) { continue }
+                } catch (e) {
+                    if (e.message.includes('goal was changed') || e.message.includes('goal changed')) {
+                        while (water.isEscaping()) await _sleep(300)
+                        await _sleep(200)
+                        try {
+                            await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 12000)
+                        } catch (e2) {
+                            console.log(`[Mine] 無法導航到礦石: ${e2.message}`)
+                            digFailed.add(pos.toString())
+                            continue
+                        }
+                    } else {
+                        console.log(`[Mine] 無法導航到礦石: ${e.message}`)
+                        digFailed.add(pos.toString())
+                        continue
+                    }
+                }
 
                 if (!isMining) return
 
@@ -322,9 +342,11 @@ async function _loop(bot, goal = {}) {
                     unavailablePickaxe.delete(required)  // 成功取得，解除跳過
                     if (_hasAdjacentLava(bot, fresh.position)) {
                         console.log(`[Mine] 礦石 ${fresh.name} 鄰近岩漿，跳過`)
+                        digFailed.add(pos.toString())
                         continue
                     }
                     await bot.dig(fresh)
+                    digFailed.delete(pos.toString())
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) {
                         _targetCount++
@@ -335,6 +357,7 @@ async function _loop(bot, goal = {}) {
                     await _collectNearby(bot, pos, 4)
                 } catch (e) {
                     console.log('[Mine] 挖掘失敗:', e.message)
+                    digFailed.add(pos.toString())
                     await _sleep(300)
                 }
 
@@ -345,18 +368,46 @@ async function _loop(bot, goal = {}) {
                     .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
                 if (wideOres.length > 0) {
                     const wp = wideOres[0]
-                    console.log(`[Mine] 廣域搜尋到 ${bot.blockAt(wp)?.name} at y=${wp.y}，嘗試導航`)
-                    _setMovements(bot)
-                    try {
-                        await _goto(bot, new goals.GoalNear(wp.x, wp.y, wp.z, 2), 12000)
-                        tunnelFailCount = 0
+                    if (digFailed.has(wp.toString())) {
+                        // 已知無法挖，跳過直接挖隧道
+                    } else {
+                        console.log(`[Mine] 廣域搜尋到 ${bot.blockAt(wp)?.name} at y=${wp.y}，嘗試導航`)
+                        _setMovements(bot)
+                        try {
+                            await _goto(bot, new goals.GoalNear(wp.x, wp.y, wp.z, 1), 12000)
+                            tunnelFailCount = 0
+                        } catch (_) {
+                            console.log('[Mine] 廣域導航失敗，改挖隧道')
+                            digFailed.add(wp.toString())
+                            continue
+                        }
+                        // 導航成功，嘗試挖礦
+                        const freshWide = bot.blockAt(wp)
+                        if (freshWide && freshWide.name.endsWith('_ore') && !_hasAdjacentLava(bot, freshWide.position)) {
+                            try {
+                                const required = _requiredPickaxe(freshWide.name)
+                                await ensurePickaxeTier(bot, required)
+                                await bot.dig(freshWide)
+                                digFailed.delete(wp.toString())
+                                const isTarget = goal.target && freshWide.name.includes(goal.target)
+                                if (isTarget) {
+                                    _targetCount++
+                                    activityStack.updateProgress({ count: _targetCount })
+                                }
+                                console.log(`[Mine] 挖下廣域 ${freshWide.name}`)
+                            } catch (e) {
+                                console.log(`[Mine] 廣域挖掘失敗: ${e.message}`)
+                                digFailed.add(wp.toString())
+                            }
+                        } else {
+                            digFailed.add(wp.toString())
+                        }
                         continue
-                    } catch (_) {
-                        console.log('[Mine] 廣域導航失敗，改挖隧道')
                     }
                 }
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
-                const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY)
+                const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal)
+                if (tunneled) digFailed.clear()
                 if (!tunneled) {
                     tunnelFailCount++
                     tunnelYaw += Math.PI / 2
@@ -497,7 +548,7 @@ async function _stepDown(bot, targetY, yaw) {
 }
 
 // 挖 2×2 隧道往前，回傳是否有成功前進（挖到方塊 或 實際移動）
-async function _digTunnel(bot, yaw, length = 8, targetY = null) {
+async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}) {
     let progressed = false
     const dx = Math.round(-Math.sin(yaw))
     const dz = Math.round(-Math.cos(yaw))
@@ -544,6 +595,11 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
                 }
                 await bot.dig(b)
                 progressed = true
+                if (goal.target && b.name.includes(goal.target)) {
+                    _targetCount++
+                    activityStack.updateProgress({ count: _targetCount })
+                    console.log(`[Mine] 挖下 ${b.name} (目標 ${_targetCount}/${goal.count})`)
+                }
             } catch (e) { console.log(`[Tunnel] dig ${b.name} 失敗: ${e.message}`) }
 
             // 挖後立即確認該位置是否出現岩漿
@@ -558,14 +614,43 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null) {
         // 目標比目前位置高時，啟用疊方塊讓 pathfinder 能墊上去
         if (feetPos.y > base.y) _setEscapeMovements(bot)
         else _setMovements(bot)
+        bot.pathfinder.setGoal(null)  // 清除 setMovements 可能觸發的殘留 goal
         const prevPos = bot.entity.position.clone()
         try {
             await _goto(bot, new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z), 5000)
             if (bot.entity.position.distanceTo(prevPos) > 0.5) progressed = true
-        } catch (e) { console.log(`[Tunnel] GoalBlock 失敗: ${e.message}`); break }
+        } catch (e) {
+            if (e.message.includes('goal was changed') || e.message.includes('goal changed')) {
+                // water/lava escape cancelled pathfinder — wait and retry once
+                while (water.isEscaping()) await _sleep(300)
+                await _sleep(200)
+                try {
+                    await _goto(bot, new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z), 5000)
+                    if (bot.entity.position.distanceTo(prevPos) > 0.5) progressed = true
+                } catch (e2) { console.log(`[Tunnel] GoalBlock 失敗: ${e2.message}`); break }
+            } else {
+                console.log(`[Tunnel] GoalBlock 失敗: ${e.message}`)
+                break
+            }
+        }
         _setMovements(bot)
 
         await _sleep(200)
+
+        // 每步完成後掃描附近新 exposed 的礦 — 有就讓主 loop 去挖
+        const newlyExposed = bot.findBlocks({
+            matching: b => b.name.endsWith('_ore'),
+            maxDistance: 8,
+            count: 10,
+        }).filter(p => {
+            if (!_isExposed(bot, p)) return false
+            if (goal.target) return bot.blockAt(p)?.name.includes(goal.target)
+            return true
+        })
+        if (newlyExposed.length > 0) {
+            console.log(`[Tunnel] 發現 ${newlyExposed.length} 個新礦石，暫停隧道`)
+            return true
+        }
     }
     return progressed
 }
@@ -645,11 +730,20 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-// pathfinder.goto 若超過 ms 毫秒沒有結果就拋出 timeout
+// pathfinder.goto 若超過 ms 毫秒沒有結果就拋出 timeout，並取消 pathfinder
 function _goto(bot, goal, ms = 8000) {
+    let done = false
+    const gotoPromise = bot.pathfinder.goto(goal).then(
+        v => { done = true; return v },
+        e => { if (!done) throw e }  // 若已 timeout 則靜默吞掉舊 goal 的 rejection
+    )
     return Promise.race([
-        bot.pathfinder.goto(goal),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('pathfinder timeout')), ms)),
+        gotoPromise,
+        new Promise((_, reject) => setTimeout(() => {
+            done = true
+            bot.pathfinder.setGoal(null)  // 正確取消 pathfinder，避免殘留 goal 干擾下一次 goto
+            reject(new Error('pathfinder timeout'))
+        }, ms)),
     ])
 }
 
