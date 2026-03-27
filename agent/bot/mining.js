@@ -12,11 +12,16 @@ let _isPaused = false
 let _targetCount = 0
 let _loopGen = 0
 let _currentGoal = {}  // shim: removed in combat.js step
+const _digFailed = new Set()          // persists across loop restarts (inventory interruptions)
+const _unavailablePickaxe = new Set() // persists across loop restarts
 
 const ORE_PRIORITY = [
     'diamond', 'emerald', 'ancient_debris',
-    'gold', 'iron','lapis', 'coal',
+    'gold', 'iron', 'lapis', 'coal',
 ]
+
+// 不主動導航前往挖的礦石（在隧道路徑上遇到還是會挖）
+const SKIP_ORES = new Set(['redstone'])
 
 
 const ORE_BEST_Y = {
@@ -125,6 +130,8 @@ async function startMining(bot, goal = {}) {
     if (goal.count !== undefined && !Number.isFinite(goal.count)) delete goal.count
     _currentGoal = goal
     _targetCount = 0
+    _digFailed.clear()
+    _unavailablePickaxe.clear()
     isMining = true
     activityStack.push(bot, 'mining', goal, (b) => _resumeMining(b, goal))
     console.log('[Mine] 開始挖礦')
@@ -146,6 +153,8 @@ function stopMining(_bot) {
     if (!isMining) return
     isMining = false
     _isPaused = false
+    _digFailed.clear()
+    _unavailablePickaxe.clear()
     console.log('[Mine] 停止挖礦')
 }
 
@@ -159,8 +168,6 @@ async function _loop(bot, goal = {}) {
     let lastDescentY = null
     let stuckCount = 0
     let tunnelFailCount = 0
-    const unavailablePickaxe = new Set()  // 本輪無法取得的稿子等級，跳過需要它的礦
-    const digFailed = new Set()           // 挖掘失敗的位置，本輪跳過
 
     while (isMining) {
         if (eating.isEating()) {
@@ -169,12 +176,14 @@ async function _loop(bot, goal = {}) {
         }
 
         // 每輪檢查：若之前因材料不足跳過某等級，看背包現在是否已有足夠材料可解除
-        if (unavailablePickaxe.size > 0) {
+        if (_unavailablePickaxe.size > 0) {
             const ironIngots = bot.inventory.items().filter(i => i.name === 'iron_ingot').reduce((s, i) => s + i.count, 0)
             const rawIron    = bot.inventory.items().some(i => ['raw_iron','iron_ore','deepslate_iron_ore'].includes(i.name))
-            if (ironIngots >= 3 || rawIron) {
+            const hasFurnace = !!bot.findBlock({ matching: b => ['furnace','lit_furnace','blast_furnace'].map(n => bot.registry.blocksByName[n]?.id).filter(Boolean).includes(b.type), maxDistance: 32 })
+            const cobble     = bot.inventory.items().filter(i => i.name === 'cobblestone').reduce((s, i) => s + i.count, 0)
+            if (ironIngots >= 3 || (rawIron && (hasFurnace || cobble >= 8))) {
                 console.log('[Mine] 已有足夠鐵礦/鐵錠，解除稿子限制')
-                unavailablePickaxe.clear()
+                _unavailablePickaxe.clear()
             }
         }
 
@@ -237,7 +246,7 @@ async function _loop(bot, goal = {}) {
             lastDescentY = afterY
 
             // 順手：挖階梯時旁邊看到的礦（8 格內）
-            const nearbyOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 8, count: 20 })
+            const nearbyOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 8, count: 20 })
                 .filter(p => _isExposed(bot, p))
                 .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
 
@@ -277,16 +286,16 @@ async function _loop(bot, goal = {}) {
 
         } else if (!needAscend) {
             // 已到目標深度：找附近礦石挖（嚴格限制在 bestY ±1），沒有就挖隧道
-            const allExposed = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 16, count: 50 })
+            const allExposed = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 16, count: 50 })
                 .filter(p => {
                     if (!_isExposed(bot, p)) return false
                     const blockName = bot.blockAt(p)?.name
                     const isTargetOre = goal.target && blockName?.includes(goal.target)
                     if (!isTargetOre && bestY !== null && Math.abs(p.y - bestY) > 5) return false
-                    if (digFailed.has(p.toString())) return false
-                    if (unavailablePickaxe.size > 0) {
+                    if (_digFailed.has(p.toString())) return false
+                    if (_unavailablePickaxe.size > 0) {
                         const req = _requiredPickaxe(bot.blockAt(p)?.name)
-                        if (unavailablePickaxe.has(req)) return false
+                        if (_unavailablePickaxe.has(req)) return false
                     }
                     return true
                 })
@@ -304,6 +313,11 @@ async function _loop(bot, goal = {}) {
                     continue
                 }
 
+                if (_hasAdjacentLava(bot, pos)) {
+                    console.log(`[Mine] 礦石 ${block.name} 鄰近岩漿，跳過`)
+                    _digFailed.add(pos.toString())
+                    continue
+                }
                 console.log(`[Mine] 目標 ${block.name} at y=${pos.y}`)
                 _setMovements(bot)
                 try {
@@ -316,12 +330,12 @@ async function _loop(bot, goal = {}) {
                             await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 12000)
                         } catch (e2) {
                             console.log(`[Mine] 無法導航到礦石: ${e2.message}`)
-                            digFailed.add(pos.toString())
+                            _digFailed.add(pos.toString())
                             continue
                         }
                     } else {
                         console.log(`[Mine] 無法導航到礦石: ${e.message}`)
-                        digFailed.add(pos.toString())
+                        _digFailed.add(pos.toString())
                         continue
                     }
                 }
@@ -334,19 +348,20 @@ async function _loop(bot, goal = {}) {
                 try {
                     const required = _requiredPickaxe(fresh.name)
                     const ok = await ensurePickaxeTier(bot, required)
+                    if (_loopGen !== _myGen) return  // smelting started a new loop, exit this one
                     if (!ok) {
                         console.log(`[Mine] 材料不足無法取得 ${required}，跳過需要它的礦`)
-                        unavailablePickaxe.add(required)
+                        _unavailablePickaxe.add(required)
                         continue
                     }
-                    unavailablePickaxe.delete(required)  // 成功取得，解除跳過
+                    _unavailablePickaxe.delete(required)  // 成功取得，解除跳過
                     if (_hasAdjacentLava(bot, fresh.position)) {
                         console.log(`[Mine] 礦石 ${fresh.name} 鄰近岩漿，跳過`)
-                        digFailed.add(pos.toString())
+                        _digFailed.add(pos.toString())
                         continue
                     }
                     await bot.dig(fresh)
-                    digFailed.delete(pos.toString())
+                    _digFailed.delete(pos.toString())
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) {
                         _targetCount++
@@ -357,18 +372,18 @@ async function _loop(bot, goal = {}) {
                     await _collectNearby(bot, pos, 4)
                 } catch (e) {
                     console.log('[Mine] 挖掘失敗:', e.message)
-                    digFailed.add(pos.toString())
+                    _digFailed.add(pos.toString())
                     await _sleep(300)
                 }
 
             } else {
                 // 先嘗試沿洞穴導航到更遠的礦石（不限 Y），讓 pathfinder 自然走進洞穴
-                const wideOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore'), maxDistance: 32, count: 20 })
+                const wideOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 32, count: 20 })
                     .filter(p => _isExposed(bot, p))
                     .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
                 if (wideOres.length > 0) {
                     const wp = wideOres[0]
-                    if (digFailed.has(wp.toString())) {
+                    if (_digFailed.has(wp.toString())) {
                         // 已知無法挖，跳過直接挖隧道
                     } else {
                         console.log(`[Mine] 廣域搜尋到 ${bot.blockAt(wp)?.name} at y=${wp.y}，嘗試導航`)
@@ -378,7 +393,7 @@ async function _loop(bot, goal = {}) {
                             tunnelFailCount = 0
                         } catch (_) {
                             console.log('[Mine] 廣域導航失敗，改挖隧道')
-                            digFailed.add(wp.toString())
+                            _digFailed.add(wp.toString())
                             continue
                         }
                         // 導航成功，嘗試挖礦
@@ -388,7 +403,7 @@ async function _loop(bot, goal = {}) {
                                 const required = _requiredPickaxe(freshWide.name)
                                 await ensurePickaxeTier(bot, required)
                                 await bot.dig(freshWide)
-                                digFailed.delete(wp.toString())
+                                _digFailed.delete(wp.toString())
                                 const isTarget = goal.target && freshWide.name.includes(goal.target)
                                 if (isTarget) {
                                     _targetCount++
@@ -397,17 +412,28 @@ async function _loop(bot, goal = {}) {
                                 console.log(`[Mine] 挖下廣域 ${freshWide.name}`)
                             } catch (e) {
                                 console.log(`[Mine] 廣域挖掘失敗: ${e.message}`)
-                                digFailed.add(wp.toString())
+                                _digFailed.add(wp.toString())
                             }
                         } else {
-                            digFailed.add(wp.toString())
+                            _digFailed.add(wp.toString())
                         }
                         continue
                     }
                 }
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
-                const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal)
-                if (tunneled) digFailed.clear()
+                if (!bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))) {
+                    const ok = await ensureToolFor(bot, 'stone')
+                    if (_loopGen !== _myGen) return
+                    if (!ok) {
+                        console.log('[Mine] 無法取得稿子，停止並請求決策')
+                        isMining = false
+                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
+                        break
+                    }
+                }
+                const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal, _myGen)
+                if (!isMining || _loopGen !== _myGen) return
+                if (tunneled) _digFailed.clear()
                 if (!tunneled) {
                     tunnelFailCount++
                     tunnelYaw += Math.PI / 2
@@ -548,7 +574,7 @@ async function _stepDown(bot, targetY, yaw) {
 }
 
 // 挖 2×2 隧道往前，回傳是否有成功前進（挖到方塊 或 實際移動）
-async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}) {
+async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expectedGen = -1) {
     let progressed = false
     const dx = Math.round(-Math.sin(yaw))
     const dz = Math.round(-Math.cos(yaw))
@@ -557,7 +583,7 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}) {
     const perpZ = -dx
 
     for (let i = 0; i < length; i++) {
-        if (!isMining) return false
+        if (!isMining || (expectedGen >= 0 && _loopGen !== expectedGen)) return false
         if (eating.isEating()) {
             await _sleep(250)
             continue
@@ -639,11 +665,13 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}) {
 
         // 每步完成後掃描附近新 exposed 的礦 — 有就讓主 loop 去挖
         const newlyExposed = bot.findBlocks({
-            matching: b => b.name.endsWith('_ore'),
+            matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)),
             maxDistance: 8,
             count: 10,
         }).filter(p => {
             if (!_isExposed(bot, p)) return false
+            if (_digFailed.has(p.toString())) return false
+            if (_hasAdjacentLava(bot, p)) return false
             if (goal.target) return bot.blockAt(p)?.name.includes(goal.target)
             return true
         })

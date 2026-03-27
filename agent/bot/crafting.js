@@ -77,7 +77,7 @@ async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false) 
     // acceptable = priority 裡等級 >= minTier 的選項（index 越小等級越高）
     const acceptable = minIdx === -1 ? priority : priority.slice(0, minIdx + 1)
 
-    const existing = bot.inventory.items().find(i => acceptable.includes(i.name))
+    const existing = acceptable.map(name => bot.inventory.items().find(i => i.name === name)).find(Boolean)
     if (existing) {
         await bot.equip(existing, 'hand')
         return true
@@ -212,9 +212,14 @@ async function ensureCraftingTable(bot) {
 
     let table = bot.findBlock({ matching: tableBlockId, maxDistance: 6 })
     if (table) {
-        await bot.pathfinder.goto(
-            new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
-        )
+        try {
+            await bot.pathfinder.goto(
+                new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
+            )
+        } catch (e) {
+            console.log(`[Craft] 導航到工作檯失敗: ${e.message}`)
+            return null
+        }
         return table
     }
 
@@ -373,6 +378,17 @@ async function _smeltIfNeeded(bot, toolSuffix) {
 
     const oreEntry = bot.inventory.items().find(i => _ORE_TO_INGOT[i.name] === neededIngot)
     if (!oreEntry) return false
+
+    const hasFurnace = !!bot.findBlock({
+        matching: b => ['furnace', 'lit_furnace', 'blast_furnace']
+            .map(n => bot.registry.blocksByName[n]?.id).filter(Boolean).includes(b.type),
+        maxDistance: 32,
+    })
+    const cobble = bot.inventory.items().filter(i => i.name === 'cobblestone').reduce((s, i) => s + i.count, 0)
+    if (!hasFurnace && cobble < 8) {
+        console.log('[Craft] 無熔爐且圓石不足，跳過燒製')
+        return false
+    }
 
     const needed = toolSuffix === '_shovel' ? 1 : 3
     const target = oreEntry.name.includes('iron') ? 'iron'
