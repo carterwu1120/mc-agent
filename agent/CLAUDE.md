@@ -173,7 +173,7 @@ Example `stack` value:
 
 All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new activities as a `case` in the switch. Existing commands:
 
-`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `getfood`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`
+`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `getfood`, `sethome`, `home`, `back`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`
 
 ### Other Key Modules
 
@@ -188,6 +188,7 @@ All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new act
 | `equipment.js` | `equipBestLoadout`, `equipSpecific`, `unequipAll` |
 | `world.js` | Utility: `findNearestPlayer`, entity/block helpers |
 | `buried.js` | Tracks positions where items were buried (avoids re-digging) |
+| `home.js` | Base location: `setHome`, `goHome`, `getHome`, `back` — persisted to `agent/data/home.json`. `back` tps to current activity's `startPos` and resumes. |
 
 ---
 

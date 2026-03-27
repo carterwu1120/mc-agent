@@ -3,7 +3,7 @@ import re
 from agent.brain import LLMClient
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
-背包已滿，請決定哪些物品可以埋入地下清出空間。
+背包已滿，請決定哪些物品可以埋入地下清出空間，或是否回基地整理。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 {"action": "drop", "items": ["diorite", "tuff"]}
 {"action": "continue"}

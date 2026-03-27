@@ -9,6 +9,7 @@ const { applyCraftDecision } = require('./crafting')
 const { equipBestLoadout, equipSpecific, unequipAll, unequipSpecific } = require('./equipment')
 const { startCombat, stopCombat } = require('./combat')
 const { findNearestPlayer } = require('./world')
+const { setHome, goHome } = require('./home')
 
 function handle(bot, msg) {
     console.log('[Action]', JSON.stringify(msg))
@@ -90,6 +91,14 @@ function handle(bot, msg) {
 
         case 'getfood':
             bridge.sendState(bot, 'food_low')
+            break
+
+        case 'sethome':
+            setHome(bot)
+            break
+
+        case 'home':
+            goHome(bot)
             break
 
         case 'smeltout': {
