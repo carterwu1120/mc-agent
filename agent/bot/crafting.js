@@ -356,9 +356,25 @@ async function _reclaimCraftingTable(bot) {
     try {
         await ensureAxe(bot)
         await bot.dig(block)
-        await _sleep(300)
-        await _collectNearby(bot, 3)
-        console.log('[Craft] 回收工作檯')
+        for (let attempt = 0; attempt < 8; attempt++) {
+            await _sleep(500)
+            if (bot.inventory.items().some(i => i.name === 'crafting_table')) break
+            const dropped = Object.values(bot.entities).find(
+                e => e.name === 'item' && e.position.distanceTo(pos) < 3
+            )
+            if (dropped) {
+                try {
+                    await bot.pathfinder.goto(
+                        new goals.GoalNear(dropped.position.x, dropped.position.y, dropped.position.z, 0)
+                    )
+                } catch (_) {}
+            }
+        }
+        if (bot.inventory.items().some(i => i.name === 'crafting_table')) {
+            console.log('[Craft] 回收工作檯')
+        } else {
+            console.log('[Craft] 無法回收工作檯')
+        }
     } catch (e) {
         console.log('[Craft] 回收工作檯失敗:', e.message)
     }

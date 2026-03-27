@@ -14,6 +14,7 @@ let _loopGen = 0
 let _currentGoal = {}  // shim: removed in combat.js step
 const _digFailed = new Set()          // persists across loop restarts (inventory interruptions)
 const _unavailablePickaxe = new Set() // persists across loop restarts
+const _lavaOres = new Set()           // lava-adjacent ores — never cleared by tunnel success
 
 const ORE_PRIORITY = [
     'diamond', 'emerald', 'ancient_debris',
@@ -132,6 +133,7 @@ async function startMining(bot, goal = {}) {
     _targetCount = 0
     _digFailed.clear()
     _unavailablePickaxe.clear()
+    _lavaOres.clear()
     isMining = true
     activityStack.push(bot, 'mining', goal, (b) => _resumeMining(b, goal))
     console.log('[Mine] 開始挖礦')
@@ -155,6 +157,7 @@ function stopMining(_bot) {
     _isPaused = false
     _digFailed.clear()
     _unavailablePickaxe.clear()
+    _lavaOres.clear()
     console.log('[Mine] 停止挖礦')
 }
 
@@ -267,6 +270,7 @@ async function _loop(bot, goal = {}) {
                     if (!fresh || !fresh.name.endsWith('_ore')) continue
                     if (_hasAdjacentLava(bot, fresh.position)) {
                         console.log(`[Mine] 礦石 ${fresh.name} 鄰近岩漿，跳過`)
+                        _lavaOres.add(fresh.position.toString())
                         continue
                     }
                     const required = _requiredPickaxe(fresh.name)
@@ -293,6 +297,7 @@ async function _loop(bot, goal = {}) {
                     const isTargetOre = goal.target && blockName?.includes(goal.target)
                     if (!isTargetOre && bestY !== null && Math.abs(p.y - bestY) > 5) return false
                     if (_digFailed.has(p.toString())) return false
+                    if (_lavaOres.has(p.toString())) return false
                     if (_unavailablePickaxe.size > 0) {
                         const req = _requiredPickaxe(bot.blockAt(p)?.name)
                         if (_unavailablePickaxe.has(req)) return false
@@ -315,7 +320,7 @@ async function _loop(bot, goal = {}) {
 
                 if (_hasAdjacentLava(bot, pos)) {
                     console.log(`[Mine] 礦石 ${block.name} 鄰近岩漿，跳過`)
-                    _digFailed.add(pos.toString())
+                    _lavaOres.add(pos.toString())
                     continue
                 }
                 console.log(`[Mine] 目標 ${block.name} at y=${pos.y}`)
@@ -357,7 +362,7 @@ async function _loop(bot, goal = {}) {
                     _unavailablePickaxe.delete(required)  // 成功取得，解除跳過
                     if (_hasAdjacentLava(bot, fresh.position)) {
                         console.log(`[Mine] 礦石 ${fresh.name} 鄰近岩漿，跳過`)
-                        _digFailed.add(pos.toString())
+                        _lavaOres.add(pos.toString())
                         continue
                     }
                     await bot.dig(fresh)

@@ -288,7 +288,30 @@ async function _loop(bot, goal = {}) {
     }
 
     if (!_isPaused) {
+        const hadPlaced = !!_placedFurnacePos
         await _reclaimFurnace(bot)
+        if (hadPlaced && !bot.inventory.items().some(i => i.name === 'furnace')) {
+            console.log('[Smelt] 背包未收到熔爐，嘗試補撿...')
+            for (let attempt = 0; attempt < 8; attempt++) {
+                await _sleep(500)
+                if (bot.inventory.items().some(i => i.name === 'furnace')) break
+                const dropped = Object.values(bot.entities).find(
+                    e => e.name === 'item' && e.position.distanceTo(bot.entity.position) < 5
+                )
+                if (dropped) {
+                    try {
+                        await bot.pathfinder.goto(new goals.GoalNear(
+                            dropped.position.x, dropped.position.y, dropped.position.z, 0
+                        ))
+                    } catch (_) {}
+                }
+            }
+            if (bot.inventory.items().some(i => i.name === 'furnace')) {
+                console.log('[Smelt] 熔爐已收回')
+            } else {
+                console.log('[Smelt] 無法收回熔爐，繼續')
+            }
+        }
         activityStack.pop(bot)
     }
     _isPaused = false
