@@ -151,14 +151,16 @@ function _resumeMining(bot, originalGoal) {
     _loop(bot, originalGoal)
 }
 
-function stopMining(_bot) {
+function stopMining(bot) {
     if (!isMining) return
     isMining = false
     _isPaused = false
+    _loopGen++  // invalidate current loop so it skips its own pop
     _digFailed.clear()
     _unavailablePickaxe.clear()
     _lavaOres.clear()
     console.log('[Mine] 停止挖礦')
+    activityStack.pop(bot)
 }
 
 async function _loop(bot, goal = {}) {
