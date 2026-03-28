@@ -188,7 +188,7 @@ All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new act
 | `equipment.js` | `equipBestLoadout`, `equipSpecific`, `unequipAll` |
 | `world.js` | Utility: `findNearestPlayer`, entity/block helpers |
 | `buried.js` | Tracks positions where items were buried (avoids re-digging) |
-| `home.js` | Base location: `setHome`, `goHome`, `getHome`, `back` — persisted to `agent/data/home.json`. `back` tps to current activity's `startPos` and resumes. |
+| `home.js` | Base location: `setHome`, `goHome`, `getHome`, `back` — persisted to `agent/data/home.json`. `back` tps to top activity's `startPos` and calls `resumeCurrent`. |
 
 ---
 
@@ -240,7 +240,7 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 
 ### Available LLM Commands
 
-`fish`, `chop`, `mine` (args: ore type), `smelt` (args: material), `combat`, `getfood`, `equip`, `come`, `chat`, `idle`
+`fish`, `chop`, `mine` (args: ore type), `smelt` (args: material), `combat`, `getfood`, `equip`, `come`, `home`, `back`, `chat`, `idle`
 
 ### Existing Skills
 

@@ -22,7 +22,7 @@ const ORE_PRIORITY = [
 ]
 
 // 不主動導航前往挖的礦石（在隧道路徑上遇到還是會挖）
-const SKIP_ORES = new Set(['redstone'])
+const SKIP_ORES = new Set(['redstone', 'copper'])
 
 
 const ORE_BEST_Y = {
@@ -170,6 +170,8 @@ async function _loop(bot, goal = {}) {
     const bestY = goal.target ? (ORE_BEST_Y[goal.target] ?? null) : null
     let lastDescentY = null
     let stuckCount = 0
+    let descentRotations = 0
+    let descentHardFails = 0
     let tunnelFailCount = 0
 
     while (isMining) {
@@ -241,10 +243,28 @@ async function _loop(bot, goal = {}) {
                 if (stuckCount >= 3) {
                     tunnelYaw += Math.PI / 2
                     stuckCount = 0
+                    descentRotations++
                     console.log('[Mine] 下潛方向受阻，旋轉 90° 繼續')
+                    if (descentRotations >= 4) {
+                        descentRotations = 0
+                        if (descentHardFails >= 2) {
+                            console.log('[Mine] 多次無法下潛，停止')
+                            isMining = false
+                            bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
+                            break
+                        }
+                        // 嘗試直接往下挖 1~2 格突破
+                        const digY = Math.min(2, Math.floor(bot.entity.position.y) - bestY)
+                        console.log(`[Mine] 四方受阻，嘗試往下直挖 ${digY} 格`)
+                        await _digEscape(bot, Math.floor(bot.entity.position.y) - digY)
+                        descentHardFails++
+                        lastDescentY = null
+                    }
                 }
             } else {
                 stuckCount = 0
+                descentRotations = 0
+                descentHardFails = 0
             }
             lastDescentY = afterY
 
