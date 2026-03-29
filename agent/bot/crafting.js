@@ -100,6 +100,33 @@ async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false) 
         return bot.recipesFor(item.id, null, 1, table).length > 0
     })
 
+    const shouldTrySmeltUpgrade =
+        acceptable.some(name => name.startsWith('iron_')) &&
+        !craftable.some(name => name.startsWith('iron_')) &&
+        craftable.some(name => name.startsWith('wooden_') || name.startsWith('stone_') || name.startsWith('golden_'))
+
+    if (shouldTrySmeltUpgrade) {
+        const smelted = await _smeltIfNeeded(bot, toolSuffix)
+        if (smelted) {
+            const table2 = await ensureCraftingTable(bot)
+            const craftable2 = acceptable.filter(name => {
+                const item = bot.registry.itemsByName[name]
+                if (!item || !table2) return false
+                return bot.recipesFor(item.id, null, 1, table2).length > 0
+            })
+            if (craftable2.some(name => name.startsWith('iron_'))) {
+                const chosen2 = autoChoose ? craftable2[0] : await chooseCraft(bot, toolSuffix.slice(1), craftable2)
+                const ok2 = await _craft(bot, chosen2, table2)
+                await _reclaimCraftingTable(bot)
+                if (ok2) {
+                    const tool = bot.inventory.items().find(i => acceptable.includes(i.name))
+                    if (tool) await bot.equip(tool, 'hand')
+                }
+                return ok2
+            }
+        }
+    }
+
     if (craftable.length === 0) {
         // 先嘗試解壓縮方塊（e.g. diamond_block → 9 diamonds）
         const decompressed = await _decompressIfNeeded(bot, acceptable)
