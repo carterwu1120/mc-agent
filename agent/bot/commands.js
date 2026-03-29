@@ -10,6 +10,7 @@ const { equipBestLoadout, equipSpecific, unequipAll, unequipSpecific } = require
 const { startCombat, stopCombat } = require('./combat')
 const { findNearestPlayer } = require('./world')
 const { setHome, goHome, back } = require('./home')
+const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
 
 function handle(bot, msg) {
     console.log('[Action]', JSON.stringify(msg))
@@ -104,6 +105,36 @@ function handle(bot, msg) {
         case 'back':
             back(bot)
             break
+
+        case 'makechest':
+            craftAndPlaceChest(bot)
+            break
+
+        case 'setchest':
+            setChest(bot)
+            break
+
+        case 'labelchest': {
+            const id = parseInt(msg.args?.[0])
+            const label = msg.args?.[1]
+            if (id && label) labelChest(id, label)
+            break
+        }
+
+        case 'readchest':
+            readChest(bot, msg.args?.[0] ? parseInt(msg.args[0]) : undefined)
+            break
+
+        case 'deposit':
+            if (msg.args?.[0]) depositToChest(bot, parseInt(msg.args[0]))
+            else bot.chat('用法：!deposit <chest_id>')
+            break
+
+        case 'withdraw': {
+            const [wItem, wCount, wId] = msg.args ?? []
+            if (wItem && wId) withdrawFromChest(bot, wItem, wCount ? parseInt(wCount) : undefined, parseInt(wId))
+            break
+        }
 
         case 'smeltout': {
             // 測試用：找最近的熔爐，印出 slot 狀態，嘗試取出

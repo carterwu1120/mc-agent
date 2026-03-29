@@ -1,5 +1,6 @@
 const { WebSocketServer } = require('ws')
 const { getActivity, getStack } = require('./activity')
+const { getChests } = require('./chest')
 
 const wss = new WebSocketServer({ port: 3001 })
 let agentSocket = null
@@ -37,6 +38,7 @@ function sendState(bot, type, extra = {}) {
         health: bot.health,
         food: bot.food,
         inventory: bot.inventory.items().map(i => ({ name: i.name, count: i.count })),
+        chests: getChests(),
         entities: Object.values(bot.entities)
             .filter(e => e.id !== bot.entity.id)
             .slice(0, 20)

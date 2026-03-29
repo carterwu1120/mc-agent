@@ -158,7 +158,7 @@ activityStack.resumeCurrent(bot)
 Every `sendState` call includes:
 - `activity` — top frame name or `'idle'` (backward compat)
 - `stack` — full frame array without `resumeFn` (for LLM context)
-- `pos`, `health`, `food`, `inventory`, `entities`
+- `pos`, `health`, `food`, `inventory`, `entities`, `chests`
 
 Example `stack` value:
 ```json
@@ -173,7 +173,7 @@ Example `stack` value:
 
 All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new activities as a `case` in the switch. Existing commands:
 
-`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `getfood`, `sethome`, `home`, `back`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`
+`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `getfood`, `sethome`, `home`, `back`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`, `setchest`, `labelchest`, `readchest`, `deposit`, `withdraw`
 
 ### Other Key Modules
 
@@ -189,6 +189,7 @@ All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new act
 | `world.js` | Utility: `findNearestPlayer`, entity/block helpers |
 | `buried.js` | Tracks positions where items were buried (avoids re-digging) |
 | `home.js` | Base location: `setHome`, `goHome`, `getHome`, `back` — persisted to `agent/data/home.json`. `back` tps to top activity's `startPos` and calls `resumeCurrent`. |
+| `chest.js` | Chest storage: `setChest`, `labelChest`, `readChest`, `depositToChest`, `withdrawFromChest`, `getChests` — persisted to `agent/data/chests.json`. Labels: `food`, `wood`, `stone`, `ore`, `misc`. |
 
 ---
 
@@ -240,7 +241,7 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 
 ### Available LLM Commands
 
-`fish`, `chop`, `mine` (args: ore type), `smelt` (args: material), `combat`, `getfood`, `equip`, `come`, `home`, `back`, `chat`, `idle`
+`fish`, `chop`, `mine` (args: ore type), `smelt` (args: material), `combat`, `getfood`, `equip`, `come`, `home`, `back`, `labelchest` (args: id label), `readchest` (args: [id]), `deposit` (args: chest_id), `withdraw` (args: item [count] chest_id), `chat`, `idle`
 
 ### Existing Skills
 

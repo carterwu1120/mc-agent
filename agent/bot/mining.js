@@ -552,10 +552,10 @@ async function _stairDown(bot, yaw, steps) {
 
         const feet = bot.entity.position.floored()
 
-        // 挖前方 2 格（腳 + 頭）— 先確認鄰近無岩漿
-        await ensureToolFor(bot, 'stone')  // 確保稿子在手
+        // 依序挖：頭[dx,1,dz] → 腳[dx,0,dz] → 腳下[dx,-1,dz]（確認安全後再移動）
+        await ensureToolFor(bot, 'stone')
         let lavaDetected = false
-        for (const off of [[dx, 0, dz], [dx, 1, dz]]) {
+        for (const off of [[dx, 1, dz], [dx, 0, dz], [dx, -1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
             if (!b || b.boundingBox !== 'block') continue
             if (_isLava(b) || _hasAdjacentLava(bot, b.position)) {
@@ -567,21 +567,11 @@ async function _stairDown(bot, yaw, steps) {
         }
         if (lavaDetected) return
 
-        // 走進前方格
+        // 三格都安全，移動 → 自然掉落
         _setMovements(bot)
         try {
             await _goto(bot, new goals.GoalBlock(feet.x + dx, feet.y, feet.z + dz), 5000)
         } catch (_) { break }
-
-        await _sleep(100)
-
-        // 挖腳下的格，往下掉一格
-        await ensureToolFor(bot, 'stone')  // pathfinder 可能換了手持物品，重新裝備
-        const newFeet = bot.entity.position.floored()
-        const below = bot.blockAt(newFeet.offset(0, -1, 0))
-        if (below && below.boundingBox === 'block') {
-            try { await bot.dig(below) } catch (_) { break }
-        }
 
         await _sleep(300)  // 等掉落
     }
