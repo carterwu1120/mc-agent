@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.state_summary import summary_json
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 玩家用自然語言下達指令，你要轉換成機器人可執行的指令序列。
@@ -49,6 +50,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"位置=({pos.get('x',0):.0f}, {pos.get('y',0):.0f}, {pos.get('z',0):.0f})，"
         f"血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}\n\n"
+        f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請根據玩家的話決定要做什麼。"
     )
 

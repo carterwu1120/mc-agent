@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.state_summary import summary_json
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的合成決策助手。
 機器人需要合成某樣物品，但有多種材料選項，請根據當前資源和目標做出最適合的決策。
@@ -67,6 +68,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             f"機器人想合成「{goal}」，但缺少以下材料：\n{missing_lines}\n\n"
             f"當前狀態：活動={activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
             f"背包內容：\n{inv_summary}\n\n"
+            f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
             f"請根據缺少的材料類型，決定下一步行動。"
         )
         response = None
@@ -108,6 +110,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"當前狀態：活動={activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
         f"背包內容：\n{inv_summary}\n\n"
         f"{smeltable_section}\n\n"
+        f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請從選項中選出最適合的一個，必要時考慮是否先燒製原料能讓合成更好的工具。"
     )
 

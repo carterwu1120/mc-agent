@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.state_summary import summary_json
 
 
 def _extract_first_json_object(text: str) -> dict:
@@ -157,7 +158,8 @@ def _build_fishing_prompt(state: dict, health, food) -> str:
         f"當前狀態：位置 x={pos.get('x', '?'):.1f}, z={pos.get('z', '?'):.1f}，血量={health}/20，飢餓={food}/20\n"
         f"目標水面：{water}\n\n"
         f"周圍地形（B=Bot, W=水, .=可走, #=阻擋, ~=懸崖）：\n"
-        f"{map_section}\n"
+        f"{map_section}\n\n"
+        f"狀態摘要（JSON）：\n{summary_json(state)}\n"
     )
 
 
@@ -198,6 +200,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
             f"背包內容：\n{inv_summary}\n\n"
             f"{extra}\n\n"
+            f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
             f"請決定機器人接下來要做什麼。"
         )
 
