@@ -1,12 +1,15 @@
 const mineflayer = require('mineflayer')
 const minecraftProtocolForge = require('minecraft-protocol-forge')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
+const { initLogger } = require('./logger')
 const bridge = require('./bridge')
 const { handle } = require('./commands')
 const eating = require('./eating')
 const inventory = require('./inventory')
 const combat = require('./combat')
 const water = require('./water')
+
+initLogger('bot')
 
 const bot = mineflayer.createBot({
     host: 'localhost',

@@ -4,6 +4,7 @@ import websockets
 from dotenv import load_dotenv
 
 from agent.brain import LLMClient, GeminiClient, OllamaClient
+from agent.logger import init_logger
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
 from agent.skills import activity_stuck as activity_stuck_skill
@@ -12,6 +13,7 @@ from agent.skills import planner as planner_skill
 from agent.executor import PlanExecutor
 
 load_dotenv()
+init_logger("brain")
 
 WS_URL = "ws://localhost:3001"
 
