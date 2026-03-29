@@ -3,10 +3,15 @@ import re
 from agent.brain import LLMClient
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
-背包已滿，請決定哪些物品可以埋入地下清出空間，或是否回基地整理。
+背包已滿，請決定最佳處理方式。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 {"action": "drop", "items": ["diorite", "tuff"]}
+{"action": "plan", "commands": ["stopmine", "home", "deposit 1", "back", "mine diamond 41"]}
 {"action": "continue"}
+
+選 plan 的時機：有已分類的箱子且還有空間（freeSlots > 0），且背包沒有明顯可以丟棄的垃圾時。
+commands 裡的 chest id（如 deposit 1）從下方提供的箱子資訊取得。
+mine 的最後一個數字填入剩餘目標（原目標 - 已完成數量）。
 
 【絕對不能丟的物品】
 - 食物（cooked_beef、bread、fish 等）
@@ -49,16 +54,32 @@ items 清單填英文 item name，不包含數量。
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     inventory = state.get("inventory", [])
     activity = state.get("activity", "idle")
+    stack = state.get("stack", [])
     pos = state.get("pos") or {}
     health = state.get("health", "?")
     food = state.get("food", "?")
     y = round(pos.get("y", 0))
+    chests = state.get("chests", [])
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory)
+
+    chests_summary = "\n".join(
+        f"- id={c['id']} label={c.get('label','未分類')} freeSlots={c.get('freeSlots','?')}"
+        for c in chests if c.get('label')
+    ) or "（無已分類箱子）"
+
+    # Current goal/progress from stack for mine remaining calculation
+    top = stack[-1] if stack else {}
+    goal = top.get("goal", {})
+    progress = top.get("progress", {})
+    goal_str = f"目標：{goal}，進度：{progress}" if goal else "（無目標）"
+
     prompt = (
-        f"背包已滿，機器人目前的活動：{activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20。\n\n"
+        f"背包已滿，機器人目前的活動：{activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20。\n"
+        f"當前任務：{goal_str}\n\n"
         f"背包內容：\n{inv_summary}\n\n"
-        f"請根據活動規則決定要埋掉哪些物品。"
+        f"已登記箱子：\n{chests_summary}\n\n"
+        f"請根據活動規則決定處理方式。"
     )
 
     response = None
@@ -71,6 +92,8 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         decision = json.loads(clean)
+        if decision.get('action') == 'plan':
+            return decision  # handled by executor in agent.py
         return {"command": "inventory_decision", **decision}
     except Exception as e:
         print(f"[Skill/inventory] 解析失敗: {e}\n原始回應: {response!r}")

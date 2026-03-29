@@ -552,28 +552,33 @@ async function _stairDown(bot, yaw, steps) {
 
         const feet = bot.entity.position.floored()
 
-        // 依序挖：頭[dx,1,dz] → 腳[dx,0,dz] → 腳下[dx,-1,dz]（確認安全後再移動）
+        // 先 check 三格岩漿（頭、腳、落點地板）再動手
         await ensureToolFor(bot, 'stone')
         let lavaDetected = false
         for (const off of [[dx, 1, dz], [dx, 0, dz], [dx, -1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
-            if (!b || b.boundingBox !== 'block') continue
+            if (!b) continue
             if (_isLava(b) || _hasAdjacentLava(bot, b.position)) {
                 console.log('[Mine] 前方偵測到岩漿，中止下潛')
                 lavaDetected = true
                 break
             }
-            try { await bot.dig(b) } catch (_) {}
         }
         if (lavaDetected) return
 
-        // 三格都安全，移動 → 自然掉落
+        // 先挖三格（頭、腳、地板），再往前走自然落下
+        for (const off of [[dx, 1, dz], [dx, 0, dz], [dx, -1, dz]]) {
+            const b = bot.blockAt(feet.offset(...off))
+            if (!b || b.boundingBox !== 'block') continue
+            try { await bot.dig(b) } catch (_) {}
+        }
+
+        // 走到前方低一格的位置（pathfinder 會自然掉落）
         _setMovements(bot)
         try {
-            await _goto(bot, new goals.GoalBlock(feet.x + dx, feet.y, feet.z + dz), 5000)
+            await _goto(bot, new goals.GoalBlock(feet.x + dx, feet.y - 1, feet.z + dz), 5000)
         } catch (_) { break }
-
-        await _sleep(300)  // 等掉落
+        await _sleep(300)  // 等落地
     }
 }
 

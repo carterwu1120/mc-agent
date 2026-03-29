@@ -56,6 +56,7 @@ function handle(bot, msg) {
 
         case 'stopfish':
             stopFishing(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'chop':
@@ -64,6 +65,7 @@ function handle(bot, msg) {
 
         case 'stopchop':
             stopChopping(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'mine':
@@ -72,6 +74,7 @@ function handle(bot, msg) {
 
         case 'stopmine':
             stopMining(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'smelt':
@@ -80,6 +83,7 @@ function handle(bot, msg) {
 
         case 'stopsmelt':
             stopSmelting(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'combat':
@@ -88,6 +92,7 @@ function handle(bot, msg) {
 
         case 'stopcombat':
             stopCombat(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'getfood':
@@ -96,43 +101,60 @@ function handle(bot, msg) {
 
         case 'sethome':
             setHome(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'home':
             goHome(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'back':
             back(bot)
+            setTimeout(() => bridge.sendState(bot, 'action_done'), 1500)
             break
 
         case 'makechest':
-            craftAndPlaceChest(bot)
+            ;(async () => {
+                await craftAndPlaceChest(bot)
+                bridge.sendState(bot, 'action_done')
+            })()
             break
 
         case 'setchest':
             setChest(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'labelchest': {
             const id = parseInt(msg.args?.[0])
             const label = msg.args?.[1]
             if (id && label) labelChest(id, label)
+            bridge.sendState(bot, 'action_done')
             break
         }
 
         case 'readchest':
-            readChest(bot, msg.args?.[0] ? parseInt(msg.args[0]) : undefined)
+            ;(async () => {
+                await readChest(bot, msg.args?.[0] ? parseInt(msg.args[0]) : undefined)
+                bridge.sendState(bot, 'action_done')
+            })()
             break
 
         case 'deposit':
-            if (msg.args?.[0]) depositToChest(bot, parseInt(msg.args[0]))
-            else bot.chat('用法：!deposit <chest_id>')
+            ;(async () => {
+                if (msg.args?.[0]) await depositToChest(bot, parseInt(msg.args[0]))
+                else bot.chat('用法：!deposit <chest_id>')
+                bridge.sendState(bot, 'action_done')
+            })()
             break
 
         case 'withdraw': {
             const [wItem, wCount, wId] = msg.args ?? []
-            if (wItem && wId) withdrawFromChest(bot, wItem, wCount ? parseInt(wCount) : undefined, parseInt(wId))
+            ;(async () => {
+                if (wItem && wId) await withdrawFromChest(bot, wItem, wCount ? parseInt(wCount) : undefined, parseInt(wId))
+                bridge.sendState(bot, 'action_done')
+            })()
             break
         }
 
@@ -204,6 +226,7 @@ function handle(bot, msg) {
                 await craftMissingArmor(bot)
                 const result = await equipBestLoadout(bot)
                 console.log(`[Equip] 完成裝備：武器=${result.weapon ?? '無'}，護甲=${result.armor?.join(', ') || '無'}`)
+                bridge.sendState(bot, 'action_done')
             })()
             break
 
@@ -214,6 +237,7 @@ function handle(bot, msg) {
                     ? await unequipSpecific(bot, target)
                     : await unequipAll(bot)
                 console.log(`[Equip] 完成卸裝：${removed.join(', ') || '無'}`)
+                bridge.sendState(bot, 'action_done')
             })()
             break
 

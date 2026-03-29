@@ -9,6 +9,7 @@ from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
 from agent.skills import activity_stuck as activity_stuck_skill
 from agent.skills import food as food_skill
+from agent.executor import PlanExecutor
 
 load_dotenv()
 
@@ -18,13 +19,21 @@ WS_URL = "ws://localhost:3001"
 llm: LLMClient = GeminiClient()
 # llm = OllamaClient(model="qwen3:14b")
 
+executor = PlanExecutor()
+
+async def _on_done(_state: dict, _llm: LLMClient):
+    executor.signal_done()
+    return None
+
 # ── 各事件對應的 skill handler ────────────────────────────
 HANDLERS = {
-    "fishing_stuck": fishing_skill.handle,
+    "fishing_stuck":  fishing_skill.handle,
     "inventory_full": inventory_skill.handle,
     "craft_decision": craft_decision_skill.handle,
     "activity_stuck": activity_stuck_skill.handle,
     "food_low":       food_skill.handle,
+    "action_done":    _on_done,
+    "activity_done":  _on_done,
 }
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
@@ -35,12 +44,23 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
     _thinking.add(event_type)
     try:
         print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
-        action = await handler(state, llm)
-        if action:
-            actions = action if isinstance(action, list) else [action]
-            for a in actions:
-                print(f"[Agent] 送出決策: {a}")
-                await ws.send(json.dumps(a))
+        result = await handler(state, llm)
+        if not result:
+            return
+        # Plan response: execute commands sequentially
+        if isinstance(result, dict) and result.get('action') == 'plan':
+            commands = result.get('commands', [])
+            if commands:
+                if executor.is_running():
+                    print('[Agent] 計畫執行中，中止舊計畫')
+                    executor.abort()
+                asyncio.create_task(executor.execute(commands, ws))
+            return
+        # Standard response: send immediately
+        actions = result if isinstance(result, list) else [result]
+        for a in actions:
+            print(f"[Agent] 送出決策: {a}")
+            await ws.send(json.dumps(a))
     except Exception as e:
         print(f"[Agent] {event_type} 處理失敗: {e}")
     finally:
