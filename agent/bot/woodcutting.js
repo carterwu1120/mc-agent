@@ -294,18 +294,70 @@ async function _reclaimScaffold(bot, groundY) {
 
 // 撿起附近掉落的物品
 async function _collectNearby(bot, nearPos, maxDistance) {
-    const items = Object.values(bot.entities).filter(
-        e => e.name === 'item' && e.position.distanceTo(nearPos) < maxDistance
-    )
+    const items = Object.values(bot.entities)
+        .filter(e => e.name === 'item' && e.position.distanceTo(nearPos) < maxDistance)
+        .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
+
     for (const e of items) {
         if (!isChopping) return
+        await _collectDrop(bot, e)
+    }
+}
+
+async function _collectDrop(bot, drop) {
+    const initialPos = drop.position.clone()
+    for (let attempt = 0; attempt < 3 && isChopping; attempt++) {
         try {
             await bot.pathfinder.goto(
-                new goals.GoalNear(e.position.x, e.position.y, e.position.z, 1)
+                new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 1)
             )
-            await _sleep(150)
+            await _sleep(250)
+        } catch (e) {
+            if (await _clearLeavesToward(bot, drop.position)) {
+                continue
+            }
+            console.log(`[Wood] 無法撿取掉落物: ${e.message}`)
+            break
+        }
+
+        const stillThere = Object.values(bot.entities).find(
+            ent => ent.id === drop.id || (ent.name === 'item' && ent.position.distanceTo(initialPos) < 1.2)
+        )
+        if (!stillThere) return
+
+        if (!await _clearLeavesToward(bot, stillThere.position)) {
+            break
+        }
+    }
+}
+
+async function _clearLeavesToward(bot, targetPos) {
+    const candidates = []
+    const base = bot.entity.position.floored()
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = 0; dy <= 1; dy++) {
+            for (let dz = -1; dz <= 1; dz++) {
+                const pos = base.offset(dx, dy, dz)
+                const block = bot.blockAt(pos)
+                if (!block || !block.name?.includes('leaves')) continue
+                const score = block.position.distanceTo(targetPos) + block.position.distanceTo(bot.entity.position)
+                candidates.push({ block, score })
+            }
+        }
+    }
+
+    if (candidates.length === 0) return false
+    candidates.sort((a, b) => a.score - b.score)
+
+    for (const { block } of candidates.slice(0, 2)) {
+        try {
+            await bot.dig(block)
+            console.log(`[Wood] 挖開 ${block.name} 以撿取掉落物`)
+            await _sleep(200)
+            return true
         } catch (_) {}
     }
+    return false
 }
 
 // 在砍完的樹根位置種樹苗

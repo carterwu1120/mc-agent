@@ -20,9 +20,49 @@ const bot = mineflayer.createBot({
 minecraftProtocolForge.forgeHandshake(bot._client, { forge: true })
 bot.loadPlugin(pathfinder)
 
+function _pathfinderCallerLabel() {
+    const stack = new Error().stack?.split('\n').slice(2) ?? []
+    for (const line of stack) {
+        const match = line.match(/agent[\\/]+bot[\\/]+([^:\\)\s]+):(\d+)/i)
+        if (!match) continue
+        if (match[1].toLowerCase() === 'index.js') continue
+        return `${match[1]}:${match[2]}`
+    }
+    return 'unknown'
+}
+
+function _wrapPathfinderDebug(bot) {
+    if (!bot.pathfinder || bot.pathfinder.__debugWrapped) return
+
+    const originalGoto = bot.pathfinder.goto.bind(bot.pathfinder)
+    const originalSetGoal = bot.pathfinder.setGoal.bind(bot.pathfinder)
+
+    bot.pathfinder.goto = function wrappedGoto(goal, dynamic) {
+        const caller = _pathfinderCallerLabel()
+        const goalName = goal?.constructor?.name ?? 'UnknownGoal'
+        const target = [goal?.x, goal?.y, goal?.z].filter(v => v !== undefined).join(', ')
+        console.log(`[Path] goto by ${caller} -> ${goalName}${target ? ` (${target})` : ''}`)
+        return originalGoto(goal, dynamic).catch((err) => {
+            console.log(`[Path] goto failed for ${caller}: ${err.message}`)
+            throw err
+        })
+    }
+
+    bot.pathfinder.setGoal = function wrappedSetGoal(goal, dynamic) {
+        const caller = _pathfinderCallerLabel()
+        const goalName = goal?.constructor?.name ?? 'null'
+        const target = goal ? [goal?.x, goal?.y, goal?.z].filter(v => v !== undefined).join(', ') : ''
+        console.log(`[Path] setGoal by ${caller} -> ${goalName}${target ? ` (${target})` : ''}`)
+        return originalSetGoal(goal, dynamic)
+    }
+
+    bot.pathfinder.__debugWrapped = true
+}
+
 bot.once('spawn', () => {
     console.log(`[Bot] 進入世界！位置：${JSON.stringify(bot.entity.position)}`)
 
+    _wrapPathfinderDebug(bot)
     bot.pathfinder.setMovements(new Movements(bot))
     bridge.init(bot, (msg) => handle(bot, msg))
     eating.startMonitor(bot)

@@ -13,6 +13,9 @@ const SMELTABLE = {
     raw_iron: 'iron_ingot',         iron_ore: 'iron_ingot',         deepslate_iron_ore: 'iron_ingot',
     raw_gold: 'gold_ingot',         gold_ore: 'gold_ingot',         deepslate_gold_ore: 'gold_ingot',
     raw_copper: 'copper_ingot',     copper_ore: 'copper_ingot',     deepslate_copper_ore: 'copper_ingot',
+    beef: 'cooked_beef',            porkchop: 'cooked_porkchop',    chicken: 'cooked_chicken',
+    mutton: 'cooked_mutton',        rabbit: 'cooked_rabbit',        cod: 'cooked_cod',
+    salmon: 'cooked_salmon',        potato: 'baked_potato',
     sand: 'glass',                  cobblestone: 'stone',
 }
 
@@ -331,11 +334,18 @@ async function _findOrPlaceFurnace(bot) {
 
     // 背包沒有熔爐 → 嘗試合成
     if (!bot.inventory.items().some(i => i.name === 'furnace')) {
-        const cobble = bot.inventory.items()
-            .filter(i => i.name === 'cobblestone')
-            .reduce((s, i) => s + i.count, 0)
+        const cobble = _countItem(bot, 'cobblestone')
         if (cobble < 8) {
-            console.log('[Smelt] 沒有熔爐且圓石不足 8 個，無法合成')
+            const needed = 8 - cobble
+            console.log(`[Smelt] 沒有熔爐且 cobblestone 不足，交由 activity_stuck 決定下一步（還差 ${needed}）`)
+            _reportStuck(bot, {
+                reason: 'missing_dependency',
+                missing: ['cobblestone'],
+                needed_for: 'furnace',
+                missing_count: needed,
+                suggested_actions: ['mine', 'home', 'withdraw'],
+                detail: `缺少 ${needed} 個 cobblestone，無法合成熔爐`,
+            })
             return null
         }
         const crafted = await _craftFurnace(bot)
@@ -343,6 +353,19 @@ async function _findOrPlaceFurnace(bot) {
     }
 
     return await _placeFurnace(bot, furnaceId)
+}
+
+function _countItem(bot, name) {
+    return bot.inventory.items()
+        .filter(i => i.name === name)
+        .reduce((s, i) => s + i.count, 0)
+}
+
+function _reportStuck(bot, stuck) {
+    bridge.sendState(bot, 'activity_stuck', {
+        activity: 'smelting',
+        ...stuck,
+    })
 }
 
 async function _craftFurnace(bot) {

@@ -2,6 +2,52 @@ import json
 import re
 from agent.brain import LLMClient
 
+
+def _extract_first_json_object(text: str) -> dict:
+    decoder = json.JSONDecoder()
+    idx = text.find("{")
+    while idx != -1:
+        try:
+            obj, _end = decoder.raw_decode(text[idx:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        idx = text.find("{", idx + 1)
+    raise json.JSONDecodeError("No valid JSON object found", text, 0)
+
+
+def _normalize_decision(activity: str, reason: str, needed_for: str | None, missing: list, missing_count: int | None, decision: dict) -> dict:
+    if decision.get("command") == "chop" and "goal" not in decision and "args" not in decision:
+        # Fallback only when the LLM omitted a quantity; prefer the LLM to decide goal.logs explicitly.
+        if activity == "smelting" and reason == "missing_dependency":
+            if needed_for == "pickaxe" or any(m in ("wood", "crafting_material", "stick") for m in missing):
+                decision = {**decision, "goal": {"logs": 4}}
+    if activity == "smelting" and reason == "missing_dependency" and "cobblestone" in missing:
+        desired_count = str(missing_count or 8)
+        args = decision.get("args")
+        if decision.get("command") == "mine":
+            if not args:
+                decision = {**decision, "args": ["stone", desired_count]}
+            elif len(args) == 1:
+                target = args[0]
+                if target != "stone":
+                    target = "stone"
+                decision = {**decision, "args": [target, desired_count]}
+            elif len(args) >= 2:
+                target = args[0]
+                count = args[1]
+                if target != "stone":
+                    target = "stone"
+                try:
+                    count_num = int(count)
+                except Exception:
+                    count_num = 0
+                if count_num < int(desired_count):
+                    count = desired_count
+                decision = {**decision, "args": [target, str(count)]}
+    return decision
+
 SYSTEM_PROMPTS = {
     "mining": """你是 Minecraft 機器人的挖礦卡住處理助手。
 機器人在挖礦時遇到障礙而中斷，請根據當前狀態決定下一步。
@@ -19,21 +65,48 @@ SYSTEM_PROMPTS = {
 """,
 
     "smelting": """你是 Minecraft 機器人的燒製卡住處理助手。
-機器人因背包沒有可燒製的原料而中斷，請根據當前資源決定下一步。
+機器人在燒製過程中遇到依賴不足或材料問題而中斷，請根據當前資源決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{"command": "mine", "args": ["iron"], "text": "...理由..."}
-{"command": "mine", "args": ["diamond"], "text": "...理由..."}
-{"command": "chop", "text": "...理由..."}
+{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}
+{"command": "mine", "args": ["diamond", "5"], "text": "...理由..."}
+{"command": "mine", "args": ["stone", "8"], "text": "...理由..."}
+{"command": "chop", "goal": {"logs": 4}, "text": "...理由..."}
+{"command": "home", "text": "...理由..."}
+{"command": "withdraw", "args": ["oak_log", "16", "1"], "text": "...理由..."}
 {"command": "chat", "text": "...提醒內容..."}
 {"command": "idle", "text": "...理由..."}
 
 決策原則：
+- 若 reason 是 missing_dependency，優先根據 missing / needed_for / suggested_actions 決定下一步
+- 若選擇 mine，必須同時決定要挖的 target 與 count，不能只回 mine iron 這種沒有數量的指令
+- 若 missing 包含 wood 或 crafting_material，優先 chop；若選擇 chop，必須同時決定 goal.logs 數量
+- goal.logs 應根據缺口估算：只缺做稿子的基本材料時通常 3 到 5 根即可；若還要順便補工作台或備料，可給更高數量
+- 若有 home 或 chest 資源線索，也可選 home / withdraw
+- 若 missing 是 cobblestone，優先回 mine stone N 來補足熔爐材料，不要回 mine iron
+- 當 missing_count 有提供時，mine 的 count 應至少等於 missing_count；例如缺 8 個 cobblestone，應回 mine stone 8 或更多
 - 若背包有 iron_ingot >= 3 但沒有 iron_pickaxe → 用 chat 提醒玩家可以合成鐵鎬
 - 若背包有 iron_ingot 足夠工具已齊全 → mine diamond
 - 若背包沒有礦石也沒有木材燃料 → mine iron 補充資源
 - 若沒有明確需求 → idle
 - 禁止回覆 fish、smelt
+""",
+
+    "fishing": """你是 Minecraft 機器人的釣魚卡住處理助手。
+機器人因拋竿方向或站位問題無法正常釣魚，請根據當前地圖與狀態決定下一步。
+每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
+只能回覆以下其中一種 JSON（不要加任何其他文字）：
+{"command": "fishing_decision", "action": "move", "x": 102, "z": -45, "text": "...理由..."}
+{"command": "fishing_decision", "action": "stop", "text": "...理由..."}
+{"command": "chat", "text": "...提醒內容..."}
+{"command": "idle", "text": "...理由..."}
+
+地圖說明：B=Bot目前位置, W=水, .=可走的陸地, #=阻擋, ~=懸崖
+決策原則：
+- 若附近仍有可釣水域，優先回覆 fishing_decision move，x/z 必須落在可走陸地
+- 選靠近 W 的 . 格，避免選到 W、#、~ 格
+- 若附近根本沒有合適站位，才用 fishing_decision stop 或 chat
+- 不要回 fish；釣魚中已在原 activity 內，請只給 move/stop 類決策
 """,
 }
 
@@ -52,8 +125,40 @@ REASON_DESC = {
     'no_tools':  '無稿子且無法合成（缺少木材或燃料）',
     'no_input':  '背包中沒有可燒製的原料',
     'no_fuel':   '沒有可用的燃料',
+    'missing_dependency': '缺少執行目前活動所需的前置資源或工具',
+    'cannot_cook_food': '有生食但目前無法完成烹飪流程',
+    'bad_cast': '拋竿角度或站位不佳，無法正常落水',
+    'no_bobber': '拋竿後持續找不到浮標，可能站位或拋竿位置異常',
     'timeout':   '操作超時',
 }
+
+
+def _build_fishing_prompt(state: dict, health, food) -> str:
+    pos = state.get("pos", {})
+    water = state.get("waterTarget")
+    map_data = state.get("areaMap")
+
+    map_section = "（無地圖資料）"
+    if isinstance(map_data, dict) and "grid" in map_data:
+        grid = map_data["grid"]
+        origin_x = map_data["originX"]
+        origin_z = map_data["originZ"]
+        x_labels = "     " + "".join(f"{origin_x + i:2d}" for i in range(len(grid[0])))
+        rows = [x_labels]
+        for i, row in enumerate(grid):
+            z = origin_z + i
+            rows.append(f"{z:4d}: {''.join(f' {c}' for c in row)}")
+        map_section = "\n".join(rows)
+    elif isinstance(map_data, str) and map_data:
+        map_section = map_data
+
+    return (
+        f"機器人在執行「fishing」時中斷（原因：{REASON_DESC.get(state.get('reason', 'unknown'), state.get('reason', 'unknown'))}）\n"
+        f"當前狀態：位置 x={pos.get('x', '?'):.1f}, z={pos.get('z', '?'):.1f}，血量={health}/20，飢餓={food}/20\n"
+        f"目標水面：{water}\n\n"
+        f"周圍地形（B=Bot, W=水, .=可走, #=阻擋, ~=懸崖）：\n"
+        f"{map_section}\n"
+    )
 
 
 async def handle(state: dict, llm: LLMClient) -> dict | None:
@@ -64,16 +169,37 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     health = state.get("health", "?")
     food = state.get("food", "?")
     y = round(pos.get("y", 0))
+    missing = state.get("missing", [])
+    needed_for = state.get("needed_for")
+    suggested_actions = state.get("suggested_actions", [])
+    detail = state.get("detail")
+    missing_count = state.get("missing_count")
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
     reason_desc = REASON_DESC.get(reason, reason)
+    extra_lines = []
+    if missing:
+        extra_lines.append(f"缺少資源/工具：{', '.join(missing)}")
+    if needed_for:
+        extra_lines.append(f"用途：{needed_for}")
+    if suggested_actions:
+        extra_lines.append(f"可考慮動作：{', '.join(suggested_actions)}")
+    if missing_count is not None:
+        extra_lines.append(f"缺少數量：{missing_count}")
+    if detail:
+        extra_lines.append(f"補充說明：{detail}")
+    extra = "\n".join(extra_lines)
 
-    prompt = (
-        f"機器人在執行「{activity}」時中斷（原因：{reason_desc}）\n"
-        f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
-        f"背包內容：\n{inv_summary}\n\n"
-        f"請決定機器人接下來要做什麼。"
-    )
+    if activity == "fishing":
+        prompt = _build_fishing_prompt(state, health, food)
+    else:
+        prompt = (
+            f"機器人在執行「{activity}」時中斷（原因：{reason_desc}）\n"
+            f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
+            f"背包內容：\n{inv_summary}\n\n"
+            f"{extra}\n\n"
+            f"請決定機器人接下來要做什麼。"
+        )
 
     response = None
     try:
@@ -84,7 +210,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-        decision = json.loads(clean)
+        try:
+            decision = json.loads(clean)
+        except json.JSONDecodeError:
+            decision = _extract_first_json_object(clean)
+        decision = _normalize_decision(activity, reason, needed_for, missing, missing_count, decision)
         result = []
         text = decision.get("text", "").strip()
         if text:

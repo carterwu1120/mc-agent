@@ -118,10 +118,10 @@ async function _loop(bot, goal) {
 
 | Module | Activity name | Progress field | Stuck reasons sent |
 |--------|--------------|---------------|-------------------|
-| `fishing.js` | `fishing` | `catches` | `fishing_stuck` (separate event) |
+| `fishing.js` | `fishing` | `catches` | `bad_cast` via `activity_stuck` |
 | `woodcutting.js` | `chopping` | `logs` | — |
 | `mining.js` | `mining` | `count` | `no_blocks` |
-| `smelting.js` | `smelting` | `smelted` | `no_input` |
+| `smelting.js` | `smelting` | `smelted` | `no_input`, `missing_dependency` |
 | `combat.js` | `combat` | — | — |
 
 ### Inventory Interruption (Transient)
@@ -145,7 +145,6 @@ activityStack.resumeCurrent(bot)
 | `tick` | Heartbeat every 2s | No |
 | `activity_done` | Goal reached, bot idles | **No** — bot just waits |
 | `activity_stuck` | Stuck mid-activity | **Yes** — LLM decides recovery |
-| `fishing_stuck` | Fishing-specific stuck | Yes |
 | `inventory_full` | Inventory full | Yes |
 | `craft_decision` | Needs crafting decision | Yes |
 | `food_low` | Food < 10 & idle & no food in inventory | Yes |
@@ -247,10 +246,9 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 
 | File | Triggered by | Purpose |
 |------|-------------|---------|
-| `fishing.py` | `fishing_stuck` | Fishing recovery decisions |
 | `inventory.py` | `inventory_full` | Drop items or compact inventory |
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
-| `activity_stuck.py` | `activity_stuck` | Activity-specific recovery (mining/smelting), fallback for others |
+| `activity_stuck.py` | `activity_stuck` | Activity-specific recovery (mining/smelting/fishing), supports structured dependency failures via `missing`, `needed_for`, `suggested_actions`, `detail` |
 | `food.py` | `food_low` | 補充食物：烤生肉 → 打動物 → 釣魚（確定性邏輯，不呼叫 LLM）|
 
 ### LLM Clients (`agent/brain/`)

@@ -1,6 +1,5 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
-const bridge = require('./bridge')
 
 let _craftDecision = null
 let _placedTablePos = null
@@ -31,6 +30,7 @@ function _waitForCraftDecision(timeoutMs = 20000) {
 async function chooseCraft(bot, goal, options) {
     if (options.length === 1) return options[0]
     console.log(`[Craft] 多種選項，詢問 LLM：${options.join(', ')}`)
+    const bridge = require('./bridge')
     bridge.sendState(bot, 'craft_decision', { goal, options })
     const decision = await _waitForCraftDecision(20000)
     if (decision?.item && options.includes(decision.item)) {

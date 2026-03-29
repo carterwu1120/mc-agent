@@ -175,6 +175,7 @@ async function _loop(bot, goal = {}) {
     let descentRotations = 0
     let descentHardFails = 0
     let tunnelFailCount = 0
+    let stoneSearchFails = 0
 
     while (isMining) {
         if (eating.isEating()) {
@@ -206,6 +207,68 @@ async function _loop(bot, goal = {}) {
             isMining = false
             bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached', goal_target: goal.target ?? 'general' })
             break
+        }
+
+        if (goal.target === 'stone') {
+            const nearbyStone = bot.findBlocks({
+                matching: b => ['stone', 'cobblestone'].includes(b.name),
+                maxDistance: 6,
+                count: 20,
+            })
+                .filter(p => _isExposed(bot, p) && !_digFailed.has(p.toString()))
+                .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))
+
+            if (nearbyStone.length > 0) {
+                const pos = nearbyStone[0]
+                const block = bot.blockAt(pos)
+                if (!block) continue
+                console.log(`[Mine] 目標 ${block.name} at y=${pos.y}`)
+                try {
+                    await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 8000)
+                    const fresh = bot.blockAt(pos)
+                    if (!fresh || !['stone', 'cobblestone'].includes(fresh.name)) {
+                        _digFailed.add(pos.toString())
+                        continue
+                    }
+                    const ok = await ensureToolFor(bot, 'stone')
+                    if (!ok) {
+                        console.log('[Mine] 無法取得稿子，停止並請求決策')
+                        isMining = false
+                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
+                        break
+                    }
+                    await bot.dig(fresh)
+                    _digFailed.delete(pos.toString())
+                    _targetCount++
+                    activityStack.updateProgress({ count: _targetCount })
+                    stoneSearchFails = 0
+                    console.log(`[Mine] 挖下 ${fresh.name} (目標 ${_targetCount}/${goal.count})`)
+                    await _sleep(300)
+                    await _collectNearby(bot, pos, 4)
+                } catch (e) {
+                    console.log(`[Mine] 挖石頭失敗: ${e.message}`)
+                    _digFailed.add(pos.toString())
+                    stoneSearchFails++
+                }
+                continue
+            }
+
+            const beforeY = Math.floor(bot.entity.position.y)
+            console.log('[Mine] 附近沒有石頭，往下潛尋找')
+            await _stepDown(bot, beforeY - 3, tunnelYaw)
+            if (!isMining) return
+            const afterY = Math.floor(bot.entity.position.y)
+            if (afterY >= beforeY) {
+                stoneSearchFails++
+                if (stoneSearchFails >= 2) {
+                    tunnelYaw += Math.PI / 2
+                    stoneSearchFails = 0
+                    console.log('[Mine] 下潛未成功，旋轉 90° 繼續找石頭')
+                }
+            } else {
+                stoneSearchFails = 0
+            }
+            continue
         }
 
         const currentY = Math.floor(bot.entity.position.y)

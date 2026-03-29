@@ -69,6 +69,7 @@ function stopFishing(bot) {
 async function _loop(bot, goal = {}) {
     _isPaused = false
     let failStreak = 0
+    let noBobberStreak = 0
     const startTime = Date.now()
 
     while (isFishing) {
@@ -106,9 +107,29 @@ async function _loop(bot, goal = {}) {
 
         const bobber = findNearestEntity(bot, 'fishing_bobber')
         if (!bobber) {
-            console.log('[Fish] 找不到浮標，重試')
+            noBobberStreak++
+            console.log(`[Fish] 找不到浮標（第 ${noBobberStreak} 次）`)
+            if (noBobberStreak >= 3) {
+                const repositioned = await _tryLocalReposition(bot)
+                if (repositioned) {
+                    noBobberStreak = 0
+                    failStreak = 0
+                    continue
+                }
+                const handled = await _handleFishingStuck(bot, 'no_bobber', water)
+                if (!handled) {
+                    console.log('[Fish] LLM 超時，走向水邊')
+                    _savedPitch = null
+                    await _walkToWater(bot)
+                }
+                noBobberStreak = 0
+                failStreak = 0
+            } else {
+                await _sleep(500)
+            }
             continue
         }
+        noBobberStreak = 0
 
         if (!isWater(bot, bobber.position)) {
             await bot.activateItem()
@@ -125,38 +146,20 @@ async function _loop(bot, goal = {}) {
                 continue
             }
 
-            // 角度試完還是失敗 → 詢問 LLM
-            console.log('[Fish] 角度調整無效，詢問 LLM...')
-            bridge.sendState(bot, 'fishing_stuck', {
-                waterTarget: water.position,
-                areaMap: scanAreaMap(bot, 10),
-            })
-
-            const decision = await _waitForLLMDecision(20000)
-            if (!decision) {
+            // 角度試完還是失敗 → 統一走 activity_stuck
+            const repositioned = await _tryLocalReposition(bot)
+            if (repositioned) {
+                failStreak = 0
+                continue
+            }
+            const handled = await _handleFishingStuck(bot, 'bad_cast', water)
+            if (!handled) {
                 console.log('[Fish] LLM 超時，走向水邊')
                 _savedPitch = null
                 await _walkToWater(bot)
                 failStreak = 0
                 continue
             }
-
-            if (decision.action === 'stop') {
-                console.log('[Fish] LLM 決定停止釣魚')
-                isFishing = false
-                break
-            }
-
-            if (decision.action === 'move') {
-                const pos = bot.entity.position
-                console.log(`[Fish] LLM 決定移動至 (${decision.x}, ${decision.z})`)
-                _savedPitch = null
-                try {
-                    await bot.pathfinder.goto(new goals.GoalNear(decision.x, pos.y, decision.z, 2))
-                } catch (e) { /* 找不到路就算了 */ }
-                await _sleep(500)
-            }
-
             failStreak = 0
             continue
         }
@@ -194,6 +197,44 @@ async function _loop(bot, goal = {}) {
 
     if (!_isPaused) activityStack.pop(bot)
     _isPaused = false
+}
+
+async function _handleFishingStuck(bot, reason, water) {
+    console.log(`[Fish] ${reason}，送出 activity_stuck...`)
+    bridge.sendState(bot, 'activity_stuck', {
+        activity: 'fishing',
+        reason,
+        waterTarget: water.position,
+        areaMap: scanAreaMap(bot, 10),
+    })
+
+    const decision = await _waitForLLMDecision(20000)
+    if (!decision) return false
+
+    if (decision.action === 'stop') {
+        console.log('[Fish] LLM 決定停止釣魚')
+        isFishing = false
+        return true
+    }
+
+    if (decision.action === 'move') {
+        console.log(`[Fish] LLM 決定移動至 (${decision.x}, ${decision.z})`)
+        _savedPitch = null
+        const stand = _resolveStandPosition(bot, decision.x, decision.z)
+        if (!stand) {
+            console.log('[Fish] 找不到 LLM 目標附近可站位置')
+            return false
+        }
+        try {
+            await bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1))
+        } catch (e) {
+            console.log(`[Fish] LLM 移動失敗: ${e.message}`)
+            return false
+        }
+        await _sleep(500)
+    }
+
+    return true
 }
 
 // 等待 LLM 決策（polling _llmDecision，有 timeout）
@@ -254,11 +295,139 @@ async function _faceTarget(bot, targetPos) {
 }
 
 async function _walkToWater(bot) {
+    const stand = _findNearbyFishingStand(bot, 10)
+    if (stand) {
+        console.log(`[Fish] 走向本地釣魚站位 (${stand.x}, ${stand.y}, ${stand.z})`)
+        try {
+            await bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1))
+            await _sleep(500)
+            return
+        } catch (e) {
+            console.log(`[Fish] 前往本地釣魚站位失敗: ${e.message}`)
+        }
+    }
     const water = findNearestWater(bot, 32)
     if (!water) return
     console.log(`[Fish] 走向水邊 (${water.position.x}, ${water.position.y}, ${water.position.z})`)
-    await bot.pathfinder.goto(new goals.GoalNear(water.position.x, water.position.y, water.position.z, 3))
-    await _sleep(500)
+    try {
+        await bot.pathfinder.goto(new goals.GoalNear(water.position.x, water.position.y, water.position.z, 3))
+        await _sleep(500)
+    } catch (e) {
+        console.log(`[Fish] 前往水邊失敗: ${e.message}`)
+    }
+}
+
+async function _tryLocalReposition(bot) {
+    const stand = _findNearbyFishingStand(bot, 8)
+    if (!stand) return false
+
+    const current = bot.entity.position.floored()
+    if (Math.abs(current.x - stand.x) <= 1 && Math.abs(current.z - stand.z) <= 1 && Math.abs(current.y - stand.y) <= 1) {
+        return false
+    }
+
+    console.log(`[Fish] 本地重新站位至 (${stand.x}, ${stand.y}, ${stand.z})`)
+    _savedPitch = null
+    try {
+        await bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1))
+        await _sleep(400)
+        return true
+    } catch (_) {
+        return false
+    }
+}
+
+function _findNearbyFishingStand(bot, radius = 8) {
+    const pos = bot.entity.position.floored()
+    const candidates = []
+
+    for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+            for (let dy = -2; dy <= 2; dy++) {
+                const feetPos = pos.offset(dx, dy, dz)
+                const feet = bot.blockAt(feetPos)
+                const body = bot.blockAt(feetPos.offset(0, 1, 0))
+                const floor = bot.blockAt(feetPos.offset(0, -1, 0))
+                if (!feet || !body || !floor) continue
+                if (feet.name !== 'air' || body.name !== 'air') continue
+                if (floor.name === 'air' || floor.name === 'water' || floor.name === 'flowing_water') continue
+                if (Math.abs(feetPos.y - pos.y) > 1) continue
+
+                const nearWater = _hasNearbyWater(bot, feetPos, 2)
+                if (!nearWater) continue
+
+                const score =
+                    feetPos.distanceTo(bot.entity.position) +
+                    Math.abs(feetPos.y - pos.y) * 2 +
+                    _waterDistanceScore(bot, feetPos, 3)
+                candidates.push({ pos: feetPos, score })
+            }
+        }
+    }
+
+    candidates.sort((a, b) => a.score - b.score)
+    return candidates[0]?.pos ?? null
+}
+
+function _resolveStandPosition(bot, targetX, targetZ, radius = 2) {
+    const baseY = Math.floor(bot.entity.position.y)
+    const candidates = []
+    for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+            for (let dy = -2; dy <= 2; dy++) {
+                const feetPos = bot.entity.position.floored().offset(
+                    Math.floor(targetX) - Math.floor(bot.entity.position.x) + dx,
+                    dy,
+                    Math.floor(targetZ) - Math.floor(bot.entity.position.z) + dz
+                )
+                const feet = bot.blockAt(feetPos)
+                const body = bot.blockAt(feetPos.offset(0, 1, 0))
+                const floor = bot.blockAt(feetPos.offset(0, -1, 0))
+                if (!feet || !body || !floor) continue
+                if (feet.name !== 'air' || body.name !== 'air') continue
+                if (floor.name === 'air' || floor.name === 'water' || floor.name === 'flowing_water') continue
+                if (Math.abs(feetPos.y - baseY) > 1) continue
+
+                const score =
+                    Math.abs(feetPos.x - targetX) +
+                    Math.abs(feetPos.z - targetZ) +
+                    Math.abs(feetPos.y - baseY) * 2
+                candidates.push({ pos: feetPos, score })
+            }
+        }
+    }
+
+    candidates.sort((a, b) => a.score - b.score)
+    return candidates[0]?.pos ?? null
+}
+
+function _hasNearbyWater(bot, pos, radius) {
+    for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+            const block = bot.blockAt(pos.offset(dx, 0, dz))
+            const below = bot.blockAt(pos.offset(dx, -1, dz))
+            if (block?.name === 'water' || block?.name === 'flowing_water') return true
+            if ((block?.name === 'air' || block?.name === 'cave_air') && (below?.name === 'water' || below?.name === 'flowing_water')) return true
+        }
+    }
+    return false
+}
+
+function _waterDistanceScore(bot, pos, radius) {
+    let best = radius + 1
+    for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+            const block = bot.blockAt(pos.offset(dx, 0, dz))
+            const below = bot.blockAt(pos.offset(dx, -1, dz))
+            const isNearbyWater =
+                block?.name === 'water' || block?.name === 'flowing_water' ||
+                ((block?.name === 'air' || block?.name === 'cave_air') && (below?.name === 'water' || below?.name === 'flowing_water'))
+            if (!isNearbyWater) continue
+            const dist = Math.sqrt(dx * dx + dz * dz)
+            if (dist < best) best = dist
+        }
+    }
+    return best
 }
 
 function _sleep(ms) {

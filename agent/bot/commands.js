@@ -8,6 +8,8 @@ const { startSmelting, stopSmelting } = require('./smelting')
 const { applyCraftDecision } = require('./crafting')
 const { equipBestLoadout, equipSpecific, unequipAll, unequipSpecific } = require('./equipment')
 const { startCombat, stopCombat } = require('./combat')
+const { startHunting, stopHunting } = require('./hunting')
+const { startGetFood, stopGetFood } = require('./food_collect')
 const { findNearestPlayer } = require('./world')
 const { setHome, goHome, back } = require('./home')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
@@ -95,8 +97,22 @@ function handle(bot, msg) {
             bridge.sendState(bot, 'action_done')
             break
 
+        case 'hunt':
+            startHunting(bot, msg.goal ?? _parseGoal(msg.args, ['count', 'duration']))
+            break
+
+        case 'stophunt':
+            stopHunting(bot)
+            bridge.sendState(bot, 'action_done')
+            break
+
         case 'getfood':
-            bridge.sendState(bot, 'food_low')
+            startGetFood(bot, msg.goal ?? _parseGoal(msg.args, ['count', 'duration']))
+            break
+
+        case 'stopgetfood':
+            stopGetFood(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'sethome':
@@ -311,7 +327,13 @@ function handle(bot, msg) {
 
 // 從 chat args 解析 goal，e.g. ['logs', '20'] → { logs: 20 }
 function _parseGoal(args, validKeys) {
-    if (!args || args.length < 2) return {}
+    if (!args || args.length === 0) return {}
+    if (args.length === 1) {
+        const only = parseInt(args[0], 10)
+        const numericKeys = validKeys.filter(k => k !== 'duration')
+        if (!isNaN(only) && numericKeys.length === 1) return { [numericKeys[0]]: only }
+        return {}
+    }
     const key = args[0]
     const val = parseInt(args[1], 10)
     if (validKeys.includes(key) && !isNaN(val)) return { [key]: val }
