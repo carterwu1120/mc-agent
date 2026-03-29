@@ -9,6 +9,7 @@ from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
 from agent.skills import activity_stuck as activity_stuck_skill
 from agent.skills import food as food_skill
+from agent.skills import planner as planner_skill
 from agent.executor import PlanExecutor
 
 load_dotenv()
@@ -34,6 +35,7 @@ HANDLERS = {
     "food_low":       food_skill.handle,
     "action_done":    _on_done,
     "activity_done":  _on_done,
+    "chat":           planner_skill.handle,
 }
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM

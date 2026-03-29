@@ -6,12 +6,19 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
 背包已滿，請決定最佳處理方式。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 {"action": "drop", "items": ["diorite", "tuff"]}
-{"action": "plan", "commands": ["stopmine", "home", "deposit 1", "back", "mine diamond 41"]}
+{"action": "plan", "commands": ["stop指令", "home", "deposit 1", "back", "resume指令"]}
 {"action": "continue"}
 
 選 plan 的時機：有已分類的箱子且還有空間（freeSlots > 0），且背包沒有明顯可以丟棄的垃圾時。
 commands 裡的 chest id（如 deposit 1）從下方提供的箱子資訊取得。
-mine 的最後一個數字填入剩餘目標（原目標 - 已完成數量）。
+resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
+
+【各活動對應的 stop / resume 指令格式】
+- mining   → stop: stopmine  / resume: mine <ore> <count>     例：mine diamond 41
+- chopping → stop: stopchop  / resume: chop logs <count>      例：chop logs 20
+- fishing  → stop: stopfish  / resume: fish catches <count>   例：fish catches 30
+- smelting → stop: stopsmelt / resume: smelt <material>       例：smelt iron
+- idle     → 不需要 stop，resume 留空（只執行 home deposit back）
 
 【絕對不能丟的物品】
 - 食物（cooked_beef、bread、fish 等）
