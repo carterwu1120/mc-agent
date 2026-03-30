@@ -6,6 +6,7 @@ class PlanExecutor:
     def __init__(self):
         self._running = False
         self._done = asyncio.Event()
+        self._current_command = None
 
     async def execute(self, commands: list, ws) -> None:
         self._running = True
@@ -15,6 +16,7 @@ class PlanExecutor:
                 print('[Executor] 計畫已中止')
                 break
             msg = _parse(cmd_str)
+            self._current_command = msg
             print(f'[Executor] 執行: {cmd_str}')
             await ws.send(json.dumps(msg))
             self._done.clear()
@@ -23,14 +25,49 @@ class PlanExecutor:
             except asyncio.TimeoutError:
                 print(f'[Executor] 等待 "{cmd_str}" 超時，中止計畫')
                 break
+            finally:
+                self._current_command = None
         self._running = False
         print('[Executor] 計畫執行完畢')
 
-    def signal_done(self) -> None:
-        self._done.set()
+    def signal_done(self, state: dict | None = None) -> None:
+        if not self._current_command:
+            self._done.set()
+            return
+
+        event_type = (state or {}).get('type')
+        command = self._current_command.get('command')
+
+        immediate_commands = {
+            'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood', 'stopsurface',
+            'home', 'back', 'sethome', 'equip', 'unequip', 'deposit', 'withdraw', 'readchest', 'setchest', 'labelchest',
+            'makechest', 'chat',
+        }
+        if event_type == 'action_done':
+            if command in immediate_commands:
+                self._done.set()
+            return
+
+        if event_type != 'activity_done':
+            return
+
+        expected_activity = {
+            'mine': 'mining',
+            'chop': 'chopping',
+            'fish': 'fishing',
+            'smelt': 'smelting',
+            'combat': 'combat',
+            'hunt': 'hunting',
+            'getfood': 'getfood',
+            'surface': 'surface',
+        }.get(command)
+
+        if expected_activity and (state or {}).get('activity') == expected_activity:
+            self._done.set()
 
     def abort(self) -> None:
         self._running = False
+        self._current_command = None
         self._done.set()
 
     def is_running(self) -> bool:

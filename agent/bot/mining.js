@@ -115,6 +115,10 @@ function _setEscapeMovements(bot) {
     bot.pathfinder.setMovements(movements)
 }
 
+function _shouldAbort(expectedGen = null) {
+    return !isMining || (expectedGen !== null && _loopGen !== expectedGen)
+}
+
 activityStack.register('mining', _pause)
 
 function _pause(_bot) {
@@ -156,9 +160,16 @@ function stopMining(bot) {
     isMining = false
     _isPaused = false
     _loopGen++  // invalidate current loop so it skips its own pop
+    _currentGoal = {}
     _digFailed.clear()
     _unavailablePickaxe.clear()
     _lavaOres.clear()
+    try {
+        bot.pathfinder?.setGoal(null)
+    } catch (_) {}
+    try {
+        bot.clearControlStates?.()
+    } catch (_) {}
     console.log('[Mine] 停止挖礦')
     activityStack.pop(bot)
 }
@@ -225,6 +236,7 @@ async function _loop(bot, goal = {}) {
                 console.log(`[Mine] 目標 ${block.name} at y=${pos.y}`)
                 try {
                     await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 8000)
+                    if (_shouldAbort(_myGen)) return
                     const fresh = bot.blockAt(pos)
                     if (!fresh || !['stone', 'cobblestone'].includes(fresh.name)) {
                         _digFailed.add(pos.toString())
@@ -238,13 +250,16 @@ async function _loop(bot, goal = {}) {
                         break
                     }
                     await bot.dig(fresh)
+                    if (_shouldAbort(_myGen)) return
                     _digFailed.delete(pos.toString())
                     _targetCount++
                     activityStack.updateProgress({ count: _targetCount })
                     stoneSearchFails = 0
                     console.log(`[Mine] 挖下 ${fresh.name} (目標 ${_targetCount}/${goal.count})`)
                     await _sleep(300)
+                    if (_shouldAbort(_myGen)) return
                     await _collectNearby(bot, pos, 4)
+                    if (_shouldAbort(_myGen)) return
                 } catch (e) {
                     console.log(`[Mine] 挖石頭失敗: ${e.message}`)
                     _digFailed.add(pos.toString())
@@ -256,7 +271,7 @@ async function _loop(bot, goal = {}) {
             const beforeY = Math.floor(bot.entity.position.y)
             console.log('[Mine] 附近沒有石頭，往下潛尋找')
             await _stepDown(bot, beforeY - 3, tunnelYaw)
-            if (!isMining) return
+            if (_shouldAbort(_myGen)) return
             const afterY = Math.floor(bot.entity.position.y)
             if (afterY >= beforeY) {
                 stoneSearchFails++
@@ -283,6 +298,7 @@ async function _loop(bot, goal = {}) {
                     Math.floor(bot.entity.position.x), bestY,
                     Math.floor(bot.entity.position.z), 3
                 ), 20000)
+                if (_shouldAbort(_myGen)) return
             } catch (e) {
                 console.log('[Mine] 無法上升到目標高度:', e.message)
             }
@@ -290,6 +306,7 @@ async function _loop(bot, goal = {}) {
             if (Math.floor(bot.entity.position.y) < bestY - 3) {
                 console.log('[Mine] 上升失敗（仍遠離目標高度），向上挖掘逃脫...')
                 await _digEscape(bot, bestY)
+                if (_shouldAbort(_myGen)) return
                 isMining = false
                 bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
                 break
@@ -299,7 +316,7 @@ async function _loop(bot, goal = {}) {
             if (water.isEscaping()) { await _sleep(500); continue }
             // 主動作：挖階梯往下
             await _stepDown(bot, bestY, tunnelYaw)
-            if (!isMining) return
+            if (_shouldAbort(_myGen)) return
 
             // 偵測卡住：Y 沒有下降就累計，超過 3 次換方向
             const afterY = Math.floor(bot.entity.position.y)
@@ -322,6 +339,7 @@ async function _loop(bot, goal = {}) {
                         const digY = Math.min(2, Math.floor(bot.entity.position.y) - bestY)
                         console.log(`[Mine] 四方受阻，嘗試往下直挖 ${digY} 格`)
                         await _digEscape(bot, Math.floor(bot.entity.position.y) - digY)
+                        if (_shouldAbort(_myGen)) return
                         descentHardFails++
                         lastDescentY = null
                     }
@@ -350,7 +368,7 @@ async function _loop(bot, goal = {}) {
                 _setMovements(bot)
                 try {
                     await _goto(bot, new goals.GoalNear(orePos.x, orePos.y, orePos.z, 1), 12000)
-                    if (!isMining) return
+                    if (_shouldAbort(_myGen)) return
                     const fresh = bot.blockAt(orePos)
                     if (!fresh || !fresh.name.endsWith('_ore')) continue
                     if (_hasAdjacentLava(bot, fresh.position)) {
@@ -360,8 +378,10 @@ async function _loop(bot, goal = {}) {
                     }
                     const required = _requiredPickaxe(fresh.name)
                     const ok = await ensurePickaxeTier(bot, required)
+                    if (_shouldAbort(_myGen)) return
                     if (!ok) continue
                     await bot.dig(fresh)
+                    if (_shouldAbort(_myGen)) return
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) {
                         _targetCount++
@@ -369,7 +389,9 @@ async function _loop(bot, goal = {}) {
                     }
                     console.log(`[Mine] 挖下 ${fresh.name}${isTarget ? ` (目標 ${_targetCount}/${goal.count})` : ''}`)
                     await _sleep(300)
+                    if (_shouldAbort(_myGen)) return
                     await _collectNearby(bot, orePos, 4)
+                    if (_shouldAbort(_myGen)) return
                 } catch (_) {}
             }
 
@@ -418,6 +440,7 @@ async function _loop(bot, goal = {}) {
                         await _sleep(200)
                         try {
                             await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 12000)
+                            if (_shouldAbort(_myGen)) return
                         } catch (e2) {
                             console.log(`[Mine] 無法導航到礦石: ${e2.message}`)
                             _digFailed.add(pos.toString())
@@ -430,7 +453,7 @@ async function _loop(bot, goal = {}) {
                     }
                 }
 
-                if (!isMining) return
+                if (_shouldAbort(_myGen)) return
 
                 const fresh = bot.blockAt(pos)
                 if (!fresh || !fresh.name.endsWith('_ore')) continue
@@ -438,7 +461,7 @@ async function _loop(bot, goal = {}) {
                 try {
                     const required = _requiredPickaxe(fresh.name)
                     const ok = await ensurePickaxeTier(bot, required)
-                    if (_loopGen !== _myGen) return  // smelting started a new loop, exit this one
+                    if (_shouldAbort(_myGen)) return
                     if (!ok) {
                         console.log(`[Mine] 材料不足無法取得 ${required}，跳過需要它的礦`)
                         _unavailablePickaxe.add(required)
@@ -451,6 +474,7 @@ async function _loop(bot, goal = {}) {
                         continue
                     }
                     await bot.dig(fresh)
+                    if (_shouldAbort(_myGen)) return
                     _digFailed.delete(pos.toString())
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) {
@@ -459,7 +483,9 @@ async function _loop(bot, goal = {}) {
                     }
                     console.log(`[Mine] 挖下 ${fresh.name}${isTarget ? ` (目標 ${_targetCount}/${goal.count})` : ''}`)
                     await _sleep(300)
+                    if (_shouldAbort(_myGen)) return
                     await _collectNearby(bot, pos, 4)
+                    if (_shouldAbort(_myGen)) return
                 } catch (e) {
                     console.log('[Mine] 挖掘失敗:', e.message)
                     _digFailed.add(pos.toString())
@@ -492,7 +518,9 @@ async function _loop(bot, goal = {}) {
                             try {
                                 const required = _requiredPickaxe(freshWide.name)
                                 await ensurePickaxeTier(bot, required)
+                                if (_shouldAbort(_myGen)) return
                                 await bot.dig(freshWide)
+                                if (_shouldAbort(_myGen)) return
                                 _digFailed.delete(wp.toString())
                                 const isTarget = goal.target && freshWide.name.includes(goal.target)
                                 if (isTarget) {
@@ -513,7 +541,7 @@ async function _loop(bot, goal = {}) {
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
                 if (!bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))) {
                     const ok = await ensureToolFor(bot, 'stone')
-                    if (_loopGen !== _myGen) return
+                    if (_shouldAbort(_myGen)) return
                     if (!ok) {
                         console.log('[Mine] 無法取得稿子，停止並請求決策')
                         isMining = false
@@ -522,7 +550,7 @@ async function _loop(bot, goal = {}) {
                     }
                 }
                 const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal, _myGen)
-                if (!isMining || _loopGen !== _myGen) return
+                if (_shouldAbort(_myGen)) return
                 if (tunneled) _digFailed.clear()
                 if (!tunneled) {
                     tunnelFailCount++
@@ -578,12 +606,14 @@ async function _loop(bot, goal = {}) {
                         if (bestY !== null && Math.floor(bot.entity.position.y) < bestY) {
                             console.log('[Mine] 低於目標高度且四周受阻，疊回 bestY...')
                             await _digEscape(bot, bestY)
+                            if (_shouldAbort(_myGen)) return
                             tunnelFailCount = 0
                             tunnelYaw = bot.entity.yaw
                             continue
                         }
                         console.log('[Mine] 四個方向都無法繼續，向上挖掘逃脫...')
                         await _digEscape(bot, Math.floor(bot.entity.position.y) + 20)
+                        if (_shouldAbort(_myGen)) return
                         isMining = false
                         bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
                         break
@@ -845,12 +875,16 @@ function _sleep(ms) {
 
 // pathfinder.goto 若超過 ms 毫秒沒有結果就拋出 timeout，並取消 pathfinder
 function _goto(bot, goal, ms = 8000) {
+    if (!isMining) {
+        return Promise.reject(new Error('mining aborted'))
+    }
     let done = false
     let timer = null
     const gotoPromise = bot.pathfinder.goto(goal).then(
         v => {
             done = true
             if (timer) clearTimeout(timer)
+            if (!isMining) throw new Error('mining aborted')
             return v
         },
         e => {

@@ -110,7 +110,9 @@ async function _loop(bot, goal = {}) {
                 continue
             }
             console.log('[Wood] 附近找不到木頭，送出 activity_stuck')
-            isChopping = false
+            // Keep chopping on the activity stack so a recovery action
+            // such as surface/back can finish and then resume chopping.
+            activityStack.pause(bot)
             bridge.sendState(bot, 'activity_stuck', {
                 activity_name: 'chopping',
                 reason: 'no_trees',

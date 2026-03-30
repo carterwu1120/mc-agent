@@ -28,7 +28,7 @@ llm: LLMClient = GeminiClient()
 executor = PlanExecutor()
 
 async def _on_done(_state: dict, _llm: LLMClient):
-    executor.signal_done()
+    executor.signal_done(_state)
     return None
 
 # ── 各事件對應的 skill handler ────────────────────────────
