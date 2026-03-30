@@ -69,6 +69,7 @@ async function _loop(bot, goal = {}) {
     _isPaused = false
     const skipped = new Set()  // 完全無法到達的樹根位置
     const startTime = Date.now()
+    let goalReached = false
 
     while (isChopping) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
@@ -133,7 +134,7 @@ async function _loop(bot, goal = {}) {
 
             // 先水平走近（不挖掘，避免拿錯工具挖礦）
             try {
-                await bot.pathfinder.goto(new goals.GoalNear(pos.x, bot.entity.position.y, pos.z, 3))
+                await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3))
             } catch (e) { /* 走不到也繼續，試試疊方塊 */ }
 
             // 如果目標比現在高超過 2 格，手動疊方塊上去
@@ -158,6 +159,13 @@ async function _loop(bot, goal = {}) {
                 activityStack.updateProgress({ logs: _logsCollected })
                 await _sleep(500)
                 await _collectNearby(bot, pos, 4)
+                if (goal.logs && _logsCollected >= goal.logs) {
+                    console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
+                    goalReached = true
+                    isChopping = false
+                    bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
+                    break
+                }
             } catch (e) {
                 console.log('[Wood] 砍樹失敗:', e.message)
                 await _sleep(400)
@@ -191,6 +199,7 @@ async function _loop(bot, goal = {}) {
         // 砍完後：撿附近掉落物、種樹苗
         await _collectNearby(bot, rootPos, 8)
         await _plantSapling(bot, rootPos, treeLogName)
+        if (goalReached) break
     }
 
     if (!_isPaused) activityStack.pop(bot)

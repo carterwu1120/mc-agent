@@ -1,5 +1,7 @@
 import asyncio
 import json
+import re
+from collections import deque
 import websockets
 from dotenv import load_dotenv
 
@@ -11,6 +13,7 @@ from agent.skills import activity_stuck as activity_stuck_skill
 from agent.skills import food as food_skill
 from agent.skills import planner as planner_skill
 from agent.skills import self_task as self_task_skill
+from agent.skills import task_arbitration as task_arbitration_skill
 from agent.executor import PlanExecutor
 
 load_dotenv()
@@ -44,6 +47,38 @@ _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call
 _last_self_task_at = 0.0
 SELF_TASK_COOLDOWN = 60.0
 _idle_started_at: float | None = None
+_queued_player_tasks: deque[str] = deque()
+
+
+def _augment_state(state: dict, player_task: str | None = None) -> dict:
+    copied = dict(state)
+    copied["queued_tasks"] = list(_queued_player_tasks)
+    copied["player_task"] = player_task
+    return copied
+
+
+def _stop_command_for_activity(activity: str | None) -> dict | None:
+    mapping = {
+        "fishing": {"command": "stopfish"},
+        "chopping": {"command": "stopchop"},
+        "mining": {"command": "stopmine"},
+        "smelting": {"command": "stopsmelt"},
+        "combat": {"command": "stopcombat"},
+        "hunting": {"command": "stophunt"},
+        "getfood": {"command": "stopgetfood"},
+    }
+    return mapping.get(activity or "")
+
+
+def _is_system_chat_message(message: str) -> bool:
+    if not message:
+        return False
+    lowered = message.strip().lower()
+    if re.match(r"^teleported\s+.+\s+to\s+agent]?$", lowered):
+        return True
+    if re.match(r"^gave\s+.+\s+to\s+agent]?$", lowered):
+        return True
+    return False
 
 
 async def _handle_and_send(state: dict, handler, ws) -> None:
@@ -91,6 +126,45 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         _thinking.discard(event_type)
 
 
+async def _handle_player_chat(state: dict, ws) -> None:
+    message = state.get("message", "")
+    if _is_system_chat_message(message):
+        print(f"[TaskArb] 忽略系統聊天: {message}")
+        return
+
+    activity = state.get("activity", "idle")
+    busy = activity != "idle" or executor.is_running()
+
+    if busy:
+        arb_state = _augment_state(state, player_task=state.get("message"))
+        decision = await task_arbitration_skill.handle(arb_state, llm)
+        if decision:
+            text = decision.get("text", "").strip()
+            choice = decision.get("decision")
+            if choice == "queue":
+                _queued_player_tasks.append(state.get("message", ""))
+                print(f"[TaskArb] 玩家任務已排隊: {state.get('message')}")
+                return
+            if choice == "defer":
+                if text:
+                    await ws.send(json.dumps({"command": "chat", "text": text}))
+                print(f"[TaskArb] 暫緩玩家任務: {state.get('message')}")
+                return
+            if choice == "interrupt":
+                if text:
+                    await ws.send(json.dumps({"command": "chat", "text": text}))
+                if executor.is_running():
+                    print("[TaskArb] 中止目前計畫，改執行玩家任務")
+                    executor.abort()
+                stop_cmd = _stop_command_for_activity(activity)
+                if stop_cmd:
+                    await ws.send(json.dumps(stop_cmd))
+                state = {**state, "activity": "idle", "stack": []}
+
+    planner_state = _augment_state(state, player_task=state.get("message"))
+    await _handle_and_send(planner_state, planner_skill.handle, ws)
+
+
 async def run():
     while True:
         try:
@@ -105,11 +179,28 @@ async def run():
                           f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})  "
                           f"hp={state.get('health')}  food={state.get('food')}")
 
+                    if (
+                        event_type == "tick"
+                        and state.get("activity") == "idle"
+                        and not executor.is_running()
+                        and _queued_player_tasks
+                        and "chat" not in _thinking
+                    ):
+                        queued_message = _queued_player_tasks.popleft()
+                        print(f"[TaskArb] 取出排隊玩家任務: {queued_message}")
+                        queued_state = _augment_state({**state, "type": "chat", "message": queued_message}, player_task=queued_message)
+                        asyncio.create_task(_handle_and_send(queued_state, planner_skill.handle, ws))
+                        continue
+
                     handler = HANDLERS.get(event_type)
                     if not handler:
                         continue
                     if event_type in _thinking:
                         print(f"[Agent] {event_type} LLM 仍在處理中，跳過")
+                        continue
+
+                    if event_type == "chat":
+                        asyncio.create_task(_handle_player_chat(state, ws))
                         continue
 
                     asyncio.create_task(_handle_and_send(state, handler, ws))
