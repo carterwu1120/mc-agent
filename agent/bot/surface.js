@@ -1,7 +1,6 @@
-const { goals, Movements } = require('mineflayer-pathfinder')
+const { Movements } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
-const { ensureToolFor } = require('./crafting')
 
 const NON_SOLID = new Set([
     'air', 'cave_air', 'void_air', 'water', 'lava',
@@ -11,6 +10,7 @@ const NON_SOLID = new Set([
 
 let isSurfacing = false
 let _isPaused = false
+let _runToken = 0
 
 function _worldMinY(bot) {
     return bot.game?.minY ?? -64
@@ -125,87 +125,73 @@ async function startSurfacing(bot, goal = {}) {
     }
     isSurfacing = true
     _isPaused = false
+    _runToken += 1
     activityStack.push(bot, 'surface', goal, (b) => _resumeSurfacing(b, goal))
     console.log('[Surface] 開始前往地表')
-    _run(bot, goal)
+    _run(bot, goal, _runToken)
 }
 
 function _resumeSurfacing(bot, goal) {
     if (isSurfacing) return
     isSurfacing = true
     _isPaused = false
+    _runToken += 1
     console.log('[Surface] 恢復前往地表')
-    _run(bot, goal)
+    _run(bot, goal, _runToken)
 }
 
-function stopSurfacing(_bot) {
+function stopSurfacing(bot) {
     if (!isSurfacing) return
     isSurfacing = false
     _isPaused = false
+    _runToken += 1
+    try {
+        bot.pathfinder?.setGoal(null)
+    } catch (_) {}
+    try {
+        bot.clearControlStates?.()
+    } catch (_) {}
     console.log('[Surface] 停止前往地表')
 }
 
-async function _run(bot, goal = {}) {
+async function _run(bot, goal = {}, token) {
     try {
         const radius = Number.isFinite(goal.radius) ? goal.radius : 24
-        let lastY = Math.floor(bot.entity.position.y)
-        let stuckTicks = 0
-
-        for (let i = 0; i < 160 && isSurfacing; i++) {
-            if (_isSurfaceLike(bot)) {
-                console.log('[Surface] 已抵達地表')
-                bridge.sendState(bot, 'activity_done', { activity: 'surface', reason: 'goal_reached' })
-                return
-            }
-
-            const feet = bot.entity.position.floored()
-
-            for (const dy of [2, 1]) {
-                const block = bot.blockAt(feet.offset(0, dy, 0))
-                if (!block || block.hardness < 0 || block.boundingBox !== 'block') continue
-                try {
-                    await ensureToolFor(bot, block.name)
-                    await bot.dig(block)
-                } catch (_) {}
-            }
-
-            _setEscapeMovements(bot)
-            try {
-                await bot.pathfinder.goto(new goals.GoalBlock(feet.x, feet.y + 1, feet.z))
-            } catch (_) {}
-
-            await _sleep(150)
-
-            const nowY = Math.floor(bot.entity.position.y)
-            if (nowY <= lastY) {
-                stuckTicks += 1
-            } else {
-                stuckTicks = 0
-                lastY = nowY
-            }
-
-            if (stuckTicks >= 6) {
-                break
-            }
+        const target = findSurfaceSpot(bot, radius)
+        if (!target || !isSurfacing || token !== _runToken) {
+            bridge.sendState(bot, 'activity_stuck', {
+                activity_name: 'surface',
+                reason: 'timeout',
+                detail: '找不到可靠的可站立地表位置',
+            })
+            return
         }
 
-        const target = findSurfaceSpot(bot, radius)
-        if (target && isSurfacing) {
-            console.log(`[Surface] 嘗試前往較近地表 (${target.x}, ${target.y}, ${target.z})`)
-            await bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, 1))
-            if (_isSurfaceLike(bot)) {
-                console.log('[Surface] 已抵達地表')
-                bridge.sendState(bot, 'activity_done', { activity: 'surface', reason: 'goal_reached' })
-                return
-            }
+        _setEscapeMovements(bot)
+        bot.pathfinder?.setGoal(null)
+        console.log(`[Surface] 傳送到地表 (${target.x}, ${target.y}, ${target.z})`)
+        bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
+        await _sleep(500)
+        if (token !== _runToken || !isSurfacing) return
+
+        const pos = bot.entity.position
+        const arrived = Math.abs(pos.x - target.x) <= 1
+            && Math.abs(pos.y - target.y) <= 1
+            && Math.abs(pos.z - target.z) <= 1
+
+        if (arrived && _isSurfaceLike(bot)) {
+            console.log('[Surface] 已抵達地表')
+            bridge.sendState(bot, 'activity_done', { activity: 'surface', reason: 'goal_reached' })
+            return
         }
 
         bridge.sendState(bot, 'activity_stuck', {
             activity_name: 'surface',
             reason: 'timeout',
-            detail: '無法逐步上爬到露天地表，且找不到可靠的補充路徑',
+            detail: '已嘗試傳送到附近地表，但未成功到達有效露天地表位置',
         })
     } catch (e) {
+        if (token !== _runToken || !isSurfacing) return
         console.log(`[Surface] 失敗: ${e.message}`)
         bridge.sendState(bot, 'activity_stuck', {
             activity_name: 'surface',
@@ -213,6 +199,7 @@ async function _run(bot, goal = {}) {
             detail: e.message,
         })
     } finally {
+        if (token !== _runToken) return
         const paused = _isPaused
         isSurfacing = false
         _isPaused = false

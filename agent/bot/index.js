@@ -39,6 +39,9 @@ function _wrapPathfinderDebug(bot) {
 
     const originalGoto = bot.pathfinder.goto.bind(bot.pathfinder)
     const originalSetGoal = bot.pathfinder.setGoal.bind(bot.pathfinder)
+    const originalBestHarvestTool = typeof bot.pathfinder.bestHarvestTool === 'function'
+        ? bot.pathfinder.bestHarvestTool.bind(bot.pathfinder)
+        : null
 
     bot.pathfinder.goto = function wrappedGoto(goal, dynamic) {
         const caller = _pathfinderCallerLabel()
@@ -57,6 +60,18 @@ function _wrapPathfinderDebug(bot) {
         const target = goal ? [goal?.x, goal?.y, goal?.z].filter(v => v !== undefined).join(', ') : ''
         console.log(`[Path] setGoal by ${caller} -> ${goalName}${target ? ` (${target})` : ''}`)
         return originalSetGoal(goal, dynamic)
+    }
+
+    if (originalBestHarvestTool) {
+        bot.pathfinder.bestHarvestTool = function wrappedBestHarvestTool(block) {
+            if (!block) return null
+            try {
+                return originalBestHarvestTool(block)
+            } catch (err) {
+                console.log(`[Path] bestHarvestTool failed: ${err.message}`)
+                return null
+            }
+        }
     }
 
     bot.pathfinder.__debugWrapped = true

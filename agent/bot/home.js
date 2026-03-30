@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const { Movements } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 
 const DATA_FILE = path.join(__dirname, '..', 'data', 'home.json')
@@ -27,6 +28,18 @@ function setHome(bot) {
 
 let _returnPos = null  // position recorded when goHome is called
 
+function _resetPathfinder(bot) {
+    try {
+        bot.pathfinder?.setGoal(null)
+    } catch (_) {}
+    try {
+        bot.pathfinder?.setMovements(new Movements(bot))
+    } catch (_) {}
+    try {
+        bot.clearControlStates?.()
+    } catch (_) {}
+}
+
 function goHome(bot) {
     const home = _load()
     if (!home) {
@@ -36,6 +49,7 @@ function goHome(bot) {
     }
     const pos = bot.entity.position
     _returnPos = { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }
+    _resetPathfinder(bot)
     console.log(`[Home] 傳送回基地 (${home.x}, ${home.y}, ${home.z})，記住當前位置 (${_returnPos.x}, ${_returnPos.y}, ${_returnPos.z})`)
     bot.chat(`/tp ${bot.username} ${home.x} ${home.y} ${home.z}`)
     return true
@@ -65,6 +79,7 @@ function back(bot) {
     const dist = Math.sqrt((pos.x - sp.x) ** 2 + (pos.y - sp.y) ** 2 + (pos.z - sp.z) ** 2)
     console.log(`[Back] 返回 (${sp.x}, ${sp.y}, ${sp.z})，距離 ${dist.toFixed(0)} 格`)
     if (dist > 10) {
+        _resetPathfinder(bot)
         bot.chat(`/tp ${bot.username} ${sp.x} ${sp.y} ${sp.z}`)
     }
     setTimeout(() => activityStack.resumeCurrent(bot), 1000)

@@ -27,6 +27,7 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 【規則】
 - 多個活動依序排入 commands 陣列
 - 若當前有活動進行中（activity != idle），先加入對應 stop 指令再排新活動
+- 若玩家只是在說停止、停下、先停、stop，優先規劃停止當前活動；若目前沒有活動就回 chat
 - 若玩家明確要求你靠近他、過去找他、跟上他，規劃 come 指令；若知道玩家名稱就用 come <player>
 - 若玩家要求你回到地面、地表、陸地、上去，優先規劃 surface
 - 玩家沒說數量時用合理預設值（木頭 32，礦石 16，釣魚 20）
@@ -56,6 +57,28 @@ SURFACE_PATTERNS = [
     r"上去",
     r"回到陸地",
 ]
+
+STOP_PATTERNS = [
+    r"^\s*stop\s*$",
+    r"^\s*停止\s*$",
+    r"^\s*停下(來)?\s*$",
+    r"^\s*先停(下來)?\s*$",
+    r"^\s*不要做了\s*$",
+]
+
+
+def _stop_command_for_activity(activity: str) -> str | None:
+    stop_map = {
+        "fishing": "stopfish",
+        "chopping": "stopchop",
+        "mining": "stopmine",
+        "smelting": "stopsmelt",
+        "surface": "stopsurface",
+        "combat": "stopcombat",
+        "hunting": "stophunt",
+        "getfood": "stopgetfood",
+    }
+    return stop_map.get(activity)
 
 
 def _maybe_plan_come(message: str, activity: str, player_name: str | None) -> dict | None:
@@ -107,6 +130,15 @@ def _maybe_plan_surface(message: str, activity: str) -> dict | None:
     return {"action": "plan", "commands": commands}
 
 
+def _maybe_plan_stop(message: str, activity: str) -> dict | None:
+    if not any(re.search(pattern, message.lower() if pattern.startswith(r"^\s*stop") else message) for pattern in STOP_PATTERNS):
+        return None
+    stop_cmd = _stop_command_for_activity(activity)
+    if not stop_cmd:
+        return {"action": "chat", "text": "目前沒有正在進行的活動可停止。"}
+    return {"action": "plan", "commands": [stop_cmd]}
+
+
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     message = state.get("message", "")
     player_name = state.get("from")
@@ -139,6 +171,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
             return shortcut
         shortcut = _maybe_plan_surface(message, activity)
+        if shortcut:
+            print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
+            return shortcut
+        shortcut = _maybe_plan_stop(message, activity)
         if shortcut:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
             return shortcut
