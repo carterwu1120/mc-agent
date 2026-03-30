@@ -12,6 +12,7 @@ const { startHunting, stopHunting } = require('./hunting')
 const { startGetFood, stopGetFood } = require('./food_collect')
 const { findNearestPlayer } = require('./world')
 const { setHome, goHome, back } = require('./home')
+const { startSurfacing, stopSurfacing } = require('./surface')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
 
 function handle(bot, msg) {
@@ -128,6 +129,15 @@ function handle(bot, msg) {
         case 'back':
             back(bot)
             setTimeout(() => bridge.sendState(bot, 'action_done'), 1500)
+            break
+
+        case 'surface':
+            startSurfacing(bot, msg.goal ?? {})
+            break
+
+        case 'stopsurface':
+            stopSurfacing(bot)
+            bridge.sendState(bot, 'action_done')
             break
 
         case 'makechest':

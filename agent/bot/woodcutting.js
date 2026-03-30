@@ -109,8 +109,16 @@ async function _loop(bot, goal = {}) {
                 skipped.clear()
                 continue
             }
-            console.log('[Wood] 附近找不到木頭，停止')
+            console.log('[Wood] 附近找不到木頭，送出 activity_stuck')
             isChopping = false
+            bridge.sendState(bot, 'activity_stuck', {
+                activity_name: 'chopping',
+                reason: 'no_trees',
+                suggested_actions: ['back', 'home', 'idle'],
+                detail: Math.floor(bot.entity.position.y) < 60
+                    ? '目前位置偏地下，可能需要先回到地表或前一個位置再砍樹'
+                    : '目前附近沒有可砍的樹，可能需要移動到其他區域',
+            })
             break
         }
 

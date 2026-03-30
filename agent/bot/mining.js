@@ -846,17 +846,28 @@ function _sleep(ms) {
 // pathfinder.goto 若超過 ms 毫秒沒有結果就拋出 timeout，並取消 pathfinder
 function _goto(bot, goal, ms = 8000) {
     let done = false
+    let timer = null
     const gotoPromise = bot.pathfinder.goto(goal).then(
-        v => { done = true; return v },
-        e => { if (!done) throw e }  // 若已 timeout 則靜默吞掉舊 goal 的 rejection
+        v => {
+            done = true
+            if (timer) clearTimeout(timer)
+            return v
+        },
+        e => {
+            if (timer) clearTimeout(timer)
+            if (!done) throw e
+        }  // 若已 timeout 則靜默吞掉舊 goal 的 rejection
     )
     return Promise.race([
         gotoPromise,
-        new Promise((_, reject) => setTimeout(() => {
-            done = true
-            bot.pathfinder.setGoal(null)  // 正確取消 pathfinder，避免殘留 goal 干擾下一次 goto
-            reject(new Error('pathfinder timeout'))
-        }, ms)),
+        new Promise((_, reject) => {
+            timer = setTimeout(() => {
+                if (done) return
+                done = true
+                bot.pathfinder.setGoal(null)  // 正確取消 pathfinder，避免殘留 goal 干擾下一次 goto
+                reject(new Error('pathfinder timeout'))
+            }, ms)
+        }),
     ])
 }
 

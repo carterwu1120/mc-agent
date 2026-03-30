@@ -63,6 +63,7 @@ def _stop_command_for_activity(activity: str | None) -> dict | None:
         "chopping": {"command": "stopchop"},
         "mining": {"command": "stopmine"},
         "smelting": {"command": "stopsmelt"},
+        "surface": {"command": "stopsurface"},
         "combat": {"command": "stopcombat"},
         "hunting": {"command": "stophunt"},
         "getfood": {"command": "stopgetfood"},

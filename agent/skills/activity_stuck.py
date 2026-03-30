@@ -4,7 +4,7 @@ from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
 
 ALLOWED_COMMANDS = {
-    "chop", "mine", "chat", "idle", "home", "withdraw", "fishing_decision"
+    "chop", "mine", "chat", "idle", "home", "back", "surface", "withdraw", "fishing_decision"
 }
 
 
@@ -19,6 +19,35 @@ def _extract_first_json_object(text: str) -> dict:
         except json.JSONDecodeError:
             pass
         idx = text.find("{", idx + 1)
+    raise json.JSONDecodeError("No valid JSON object found", text, 0)
+
+
+def _parse_json_with_repair(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        return _extract_first_json_object(text)
+    except json.JSONDecodeError:
+        pass
+
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        open_braces = stripped.count("{")
+        close_braces = stripped.count("}")
+        if open_braces > close_braces:
+            repaired = stripped + ("}" * (open_braces - close_braces))
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+            try:
+                return _extract_first_json_object(repaired)
+            except json.JSONDecodeError:
+                pass
+
     raise json.JSONDecodeError("No valid JSON object found", text, 0)
 
 
@@ -134,6 +163,39 @@ SYSTEM_PROMPTS = {
 - 禁止回覆 fish、smelt
 """,
 
+    "chopping": """你是 Minecraft 機器人的砍樹卡住處理助手。
+機器人在砍樹時附近找不到可砍的樹，請根據目前狀態決定下一步。
+每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
+只能回覆以下其中一種 JSON（不要加任何其他文字）：
+{"command": "back", "text": "...理由..."}
+{"command": "surface", "text": "...理由..."}
+{"command": "home", "text": "...理由..."}
+{"command": "chat", "text": "...提醒內容..."}
+{"command": "idle", "text": "...理由..."}
+
+決策原則：
+- 若目前明顯在地底或附近沒有樹，但這次任務仍是砍樹，優先用 surface；若不確定 surface 是否可行，再用 back 回到先前位置
+- 若已設定 home 且判斷回基地更合理，可用 home
+- 若沒有明確安全的下一步，才用 chat 或 idle
+- 不要回 chop；目前 chopping activity 已經卡住，先脫離目前位置再說
+""",
+
+    "surface": """你是 Minecraft 機器人的回到地表卡住處理助手。
+機器人在前往地表時因路徑或地形問題中斷，請根據目前狀態決定下一步。
+每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
+只能回覆以下其中一種 JSON（不要加任何其他文字）：
+{"command": "back", "text": "...理由..."}
+{"command": "home", "text": "...理由..."}
+{"command": "chat", "text": "...提醒內容..."}
+{"command": "idle", "text": "...理由..."}
+
+決策原則：
+- 若目前有可用的上一個位置，優先用 back
+- 若已設定 home 且回基地更安全或更可靠，可用 home
+- 若沒有明確安全的下一步，才用 chat 或 idle
+- 不要再次回覆 surface，避免在相同條件下重複失敗
+""",
+
     "fishing": """你是 Minecraft 機器人的釣魚卡住處理助手。
 機器人因拋竿方向或站位問題無法正常釣魚，請根據當前地圖與狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
@@ -171,6 +233,7 @@ REASON_DESC = {
     'cannot_cook_food': '有生食但目前無法完成烹飪流程',
     'bad_cast': '拋竿角度或站位不佳，無法正常落水',
     'no_bobber': '拋竿後持續找不到浮標，可能站位或拋竿位置異常',
+    'no_trees': '附近找不到可砍的樹，可能目前位置不適合進行砍樹',
     'timeout':   '操作超時',
 }
 
@@ -254,19 +317,21 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-        try:
-            decision = json.loads(clean)
-        except json.JSONDecodeError:
-            decision = _extract_first_json_object(clean)
+        decision = _parse_json_with_repair(clean)
         decision = _normalize_decision(activity, reason, needed_for, missing, missing_count, decision)
         if not _is_valid_decision(decision):
             print(f"[Skill/activity_stuck] 無效 decision，忽略: {decision}")
             return None
-        result = []
         text = decision.get("text", "").strip()
+        command = decision.get("command")
+        result = []
+        if command == "chat":
+            if text:
+                result.append({"command": "chat", "text": text})
+            return result or None
         if text:
             result.append({"command": "chat", "text": text})
-        if decision.get("command") != "idle":
+        if command != "idle":
             cmd = {k: v for k, v in decision.items() if k != "text"}
             result.append(cmd)
         return result if result else None

@@ -18,6 +18,7 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 - stopmine / stopchop / stopfish / stopsmelt / stopcombat  停止對應活動
 - home                                   傳送回基地
 - back                                   返回上次活動位置
+- surface                                移動到附近地表 / 陸地
 - deposit <chest_id>                     存入箱子（需提供 chest id）
 - withdraw <item> [count] <chest_id>     從箱子取出
 - equip                                  裝備最佳武裝
@@ -27,6 +28,7 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 - 多個活動依序排入 commands 陣列
 - 若當前有活動進行中（activity != idle），先加入對應 stop 指令再排新活動
 - 若玩家明確要求你靠近他、過去找他、跟上他，規劃 come 指令；若知道玩家名稱就用 come <player>
+- 若玩家要求你回到地面、地表、陸地、上去，優先規劃 surface
 - 玩家沒說數量時用合理預設值（木頭 32，礦石 16，釣魚 20）
 - 玩家問問題、打招呼、或說的不是任務指令時，回傳 chat
 - 只輸出 JSON，不要加任何解釋或其他文字
@@ -41,6 +43,18 @@ COME_PATTERNS = [
     r"來找我",
     r"跟我來",
     r"跟上",
+]
+
+SURFACE_PATTERNS = [
+    r"\bsurface\b",
+    r"\bgo to surface\b",
+    r"\bgo above ground\b",
+    r"回到地面",
+    r"回地表",
+    r"到地面",
+    r"到地表",
+    r"上去",
+    r"回到陸地",
 ]
 
 
@@ -68,6 +82,28 @@ def _maybe_plan_come(message: str, activity: str, player_name: str | None) -> di
     else:
         commands.append("come")
 
+    return {"action": "plan", "commands": commands}
+
+
+def _maybe_plan_surface(message: str, activity: str) -> dict | None:
+    lowered = message.lower()
+    if not any(re.search(pattern, lowered if pattern.startswith(r"\b") else message) for pattern in SURFACE_PATTERNS):
+        return None
+
+    commands: list[str] = []
+    stop_map = {
+        "fishing": "stopfish",
+        "chopping": "stopchop",
+        "mining": "stopmine",
+        "smelting": "stopsmelt",
+        "combat": "stopcombat",
+        "hunting": "stophunt",
+        "getfood": "stopgetfood",
+    }
+    stop_cmd = stop_map.get(activity)
+    if stop_cmd:
+        commands.append(stop_cmd)
+    commands.append("surface")
     return {"action": "plan", "commands": commands}
 
 
@@ -99,6 +135,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     try:
         print(f"[Planner] 玩家: {message}")
         shortcut = _maybe_plan_come(message, activity, player_name)
+        if shortcut:
+            print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
+            return shortcut
+        shortcut = _maybe_plan_surface(message, activity)
         if shortcut:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
             return shortcut
