@@ -10,6 +10,7 @@ from agent.skills import craft_decision as craft_decision_skill
 from agent.skills import activity_stuck as activity_stuck_skill
 from agent.skills import food as food_skill
 from agent.skills import planner as planner_skill
+from agent.skills import self_task as self_task_skill
 from agent.executor import PlanExecutor
 
 load_dotenv()
@@ -33,18 +34,39 @@ HANDLERS = {
     "craft_decision": craft_decision_skill.handle,
     "activity_stuck": activity_stuck_skill.handle,
     "food_low":       food_skill.handle,
+    "tick":           self_task_skill.handle,
     "action_done":    _on_done,
     "activity_done":  _on_done,
     "chat":           planner_skill.handle,
 }
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
+_last_self_task_at = 0.0
+SELF_TASK_COOLDOWN = 60.0
+_idle_started_at: float | None = None
 
 
 async def _handle_and_send(state: dict, handler, ws) -> None:
     event_type = state.get("type")
+    global _last_self_task_at
+    global _idle_started_at
     _thinking.add(event_type)
     try:
+        if event_type == "tick":
+            now = asyncio.get_running_loop().time()
+            if executor.is_running():
+                return
+            if state.get("activity") != "idle":
+                _idle_started_at = None
+                return
+            if _idle_started_at is None:
+                _idle_started_at = now
+                return
+            if now - _idle_started_at < SELF_TASK_COOLDOWN:
+                return
+            if now - _last_self_task_at < SELF_TASK_COOLDOWN:
+                return
+            _last_self_task_at = now
         print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         result = await handler(state, llm)
         if not result:

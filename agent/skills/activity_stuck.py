@@ -3,6 +3,10 @@ import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
 
+ALLOWED_COMMANDS = {
+    "chop", "mine", "chat", "idle", "home", "withdraw", "fishing_decision"
+}
+
 
 def _extract_first_json_object(text: str) -> dict:
     decoder = json.JSONDecoder()
@@ -48,6 +52,43 @@ def _normalize_decision(activity: str, reason: str, needed_for: str | None, miss
                     count = desired_count
                 decision = {**decision, "args": [target, str(count)]}
     return decision
+
+
+def _is_valid_decision(decision: dict) -> bool:
+    command = decision.get("command")
+    if command not in ALLOWED_COMMANDS:
+        return False
+
+    if command == "mine":
+        args = decision.get("args") or []
+        return (
+            isinstance(args, list)
+            and len(args) >= 2
+            and isinstance(args[0], str)
+            and isinstance(args[1], str)
+        )
+
+    if command == "chop":
+        goal = decision.get("goal") or {}
+        args = decision.get("args") or []
+        return (
+            (isinstance(goal, dict) and isinstance(goal.get("logs"), int | float))
+            or (isinstance(args, list) and len(args) >= 1)
+        )
+
+    if command == "withdraw":
+        args = decision.get("args") or []
+        return isinstance(args, list) and len(args) >= 2
+
+    if command == "fishing_decision":
+        action = decision.get("action")
+        if action == "stop":
+            return True
+        if action == "move":
+            return isinstance(decision.get("x"), int | float) and isinstance(decision.get("z"), int | float)
+        return False
+
+    return True
 
 SYSTEM_PROMPTS = {
     "mining": """你是 Minecraft 機器人的挖礦卡住處理助手。
@@ -218,6 +259,9 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         except json.JSONDecodeError:
             decision = _extract_first_json_object(clean)
         decision = _normalize_decision(activity, reason, needed_for, missing, missing_count, decision)
+        if not _is_valid_decision(decision):
+            print(f"[Skill/activity_stuck] 無效 decision，忽略: {decision}")
+            return None
         result = []
         text = decision.get("text", "").strip()
         if text:
