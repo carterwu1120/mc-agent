@@ -3,6 +3,12 @@ const { Vec3 } = require('vec3')
 
 let _craftDecision = null
 let _placedTablePos = null
+let _lastTeleportLikeAt = 0
+
+const REPLACEABLE_BLOCKS = new Set([
+    'air', 'cave_air', 'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
+    'dead_bush', 'snow', 'vine', 'torch', 'wall_torch',
+])
 
 function applyCraftDecision(decision) {
     _craftDecision = decision
@@ -320,6 +326,9 @@ async function compactCompressibleItems(bot) {
 async function _placeCraftingTable(bot, tableBlockId) {
     const item = bot.inventory.items().find(i => i.name === 'crafting_table')
     if (!item) return null
+    if (Date.now() - _lastTeleportLikeAt < 1200) {
+        await _sleep(800)
+    }
     await bot.equip(item, 'hand')
 
     const pos = bot.entity.position.floored()
@@ -337,9 +346,10 @@ async function _placeCraftingTable(bot, tableBlockId) {
 
         const spacePos = ground.position.offset(0, 1, 0)
         if (spacePos.distanceTo(bot.entity.position) > 4) continue
+        if (_isOccupiedByEntity(bot, spacePos)) continue
 
         const space = bot.blockAt(spacePos)
-        const isOpen = space && (space.name === 'air' || space.name === 'cave_air')
+        const isOpen = space && REPLACEABLE_BLOCKS.has(space.name)
         candidates.push({ ground, spacePos, needDig: !isOpen, space })
     }
 
@@ -351,18 +361,20 @@ async function _placeCraftingTable(bot, tableBlockId) {
             if (!space || space.boundingBox !== 'block') continue
             try { await bot.dig(space) } catch (_) { continue }
             const fresh = bot.blockAt(spacePos)
-            if (!fresh || (fresh.name !== 'air' && fresh.name !== 'cave_air')) continue
+            if (!fresh || !REPLACEABLE_BLOCKS.has(fresh.name)) continue
         }
 
         try {
-            await bot.equip(item, 'hand')
+            const freshItem = bot.inventory.items().find(i => i.name === 'crafting_table')
+            if (!freshItem) break
+            await bot.equip(freshItem, 'hand')
             await bot.lookAt(ground.position.offset(0.5, 1, 0.5))
             await bot.placeBlock(ground, new Vec3(0, 1, 0))
             await _sleep(400)
-            const placed = bot.findBlock({ matching: tableBlockId, maxDistance: 4 })
-            if (placed) {
+            const placed = bot.blockAt(spacePos)
+            if (placed && placed.type === tableBlockId) {
                 console.log('[Craft] 放置工作檯')
-                _placedTablePos = placed.position.clone()
+                _placedTablePos = spacePos.clone()
                 return placed
             }
         } catch (e) {
@@ -372,6 +384,16 @@ async function _placeCraftingTable(bot, tableBlockId) {
 
     console.log('[Craft] 找不到放置位置')
     return null
+}
+
+function _isOccupiedByEntity(bot, pos) {
+    return Object.values(bot.entities).some(e => {
+        if (!e?.position) return false
+        const dx = Math.abs(e.position.x - (pos.x + 0.5))
+        const dy = Math.abs(e.position.y - pos.y)
+        const dz = Math.abs(e.position.z - (pos.z + 0.5))
+        return dx < 0.8 && dy < 1.8 && dz < 0.8
+    })
 }
 
 async function _reclaimCraftingTable(bot) {
@@ -536,4 +558,8 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensureSword, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, reclaimCraftingTable: _reclaimCraftingTable, compactCompressibleItems, chooseCraft, applyCraftDecision }
+function noteTeleportLikeAction() {
+    _lastTeleportLikeAt = Date.now()
+}
+
+module.exports = { ensureAxe, ensurePickaxe, ensureShovel, ensureSword, ensurePickaxeTier, ensureToolFor, convertLogsToPlanks, ensureCraftingTable, reclaimCraftingTable: _reclaimCraftingTable, compactCompressibleItems, chooseCraft, applyCraftDecision, noteTeleportLikeAction }

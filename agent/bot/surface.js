@@ -1,6 +1,7 @@
 const { Movements } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
+const { noteTeleportLikeAction } = require('./crafting')
 
 const NON_SOLID = new Set([
     'air', 'cave_air', 'void_air', 'water', 'lava',
@@ -170,6 +171,7 @@ async function _run(bot, goal = {}, token) {
         _setEscapeMovements(bot)
         bot.pathfinder?.setGoal(null)
         console.log(`[Surface] 傳送到地表 (${target.x}, ${target.y}, ${target.z})`)
+        noteTeleportLikeAction()
         bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
         await _sleep(500)
         if (token !== _runToken || !isSurfacing) return

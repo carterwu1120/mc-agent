@@ -1,6 +1,10 @@
 const _stack = []             // stack frames, last element = top (current activity)
 const _registry = new Map()  // name → pauseFn(bot)
 
+function _stackLabel() {
+    return _stack.map(frame => frame.activity).join(' > ') || 'idle'
+}
+
 // ── Registration ─────────────────────────────────────────────────────────────
 
 function register(name, pauseFn) {
@@ -18,14 +22,17 @@ function push(bot, name, goal, resumeFn) {
         ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z }
         : null
     _stack.push({ activity: name, goal: { ...goal }, progress: {}, startPos, startTime: Date.now(), resumeFn })
+    console.log(`[Activity] push ${name} -> ${_stackLabel()}`)
 }
 
 // Pop the top frame and resume the previous activity (if any).
 function pop(bot) {
     if (_stack.length === 0) return
-    _stack.pop()
+    const popped = _stack.pop()
+    console.log(`[Activity] pop ${popped.activity} -> ${_stackLabel()}`)
     if (_stack.length > 0) {
         const prev = _stack[_stack.length - 1]
+        console.log(`[Activity] resume ${prev.activity}`)
         if (prev.resumeFn) prev.resumeFn(bot)
     }
 }
@@ -35,6 +42,7 @@ function pop(bot) {
 function pause(bot) {
     const top = _stack[_stack.length - 1]
     if (!top) return
+    console.log(`[Activity] pause ${top.activity}`)
     const pauseFn = _registry.get(top.activity)
     if (pauseFn) pauseFn(bot)
 }
@@ -43,7 +51,10 @@ function pause(bot) {
 // Used by inventory.js after it finishes a transient interruption.
 function resumeCurrent(bot) {
     const top = _stack[_stack.length - 1]
-    if (top && top.resumeFn) top.resumeFn(bot)
+    if (top) {
+        console.log(`[Activity] resumeCurrent ${top.activity}`)
+        if (top.resumeFn) top.resumeFn(bot)
+    }
 }
 
 // ── Progress / goal updates ───────────────────────────────────────────────────

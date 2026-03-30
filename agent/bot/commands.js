@@ -6,6 +6,7 @@ const { startChopping, stopChopping } = require('./woodcutting')
 const { startMining, stopMining } = require('./mining')
 const { startSmelting, stopSmelting } = require('./smelting')
 const { applyCraftDecision } = require('./crafting')
+const { noteTeleportLikeAction } = require('./crafting')
 const { equipBestLoadout, equipSpecific, unequipAll, unequipSpecific } = require('./equipment')
 const { startCombat, stopCombat } = require('./combat')
 const { startHunting, stopHunting } = require('./hunting')
@@ -272,16 +273,19 @@ function handle(bot, msg) {
             if (args.length >= 3 && args.slice(0, 3).every(a => !isNaN(a))) {
                 // !tp x y z
                 const [x, y, z] = args.map(Number)
+                noteTeleportLikeAction()
                 bot.chat(`/tp ${bot.username} ${x} ${y} ${z}`)
                 console.log(`[Action] 傳送到座標 ${x} ${y} ${z}`)
             } else if (args.length >= 1) {
                 // !tp playername
+                noteTeleportLikeAction()
                 bot.chat(`/tp ${bot.username} ${args[0]}`)
                 console.log(`[Action] 傳送到玩家 ${args[0]}`)
             } else {
                 // !tp → 傳送到最近的玩家
                 const player = findNearestPlayer(bot)
                 if (player) {
+                    noteTeleportLikeAction()
                     bot.chat(`/tp ${bot.username} ${player.username}`)
                     console.log(`[Action] 傳送到 ${player.username}`)
                 } else {

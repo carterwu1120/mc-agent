@@ -2,6 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { Movements } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
+const { noteTeleportLikeAction } = require('./crafting')
 
 const DATA_FILE = path.join(__dirname, '..', 'data', 'home.json')
 
@@ -50,6 +51,7 @@ function goHome(bot) {
     const pos = bot.entity.position
     _returnPos = { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }
     _resetPathfinder(bot)
+    noteTeleportLikeAction()
     console.log(`[Home] 傳送回基地 (${home.x}, ${home.y}, ${home.z})，記住當前位置 (${_returnPos.x}, ${_returnPos.y}, ${_returnPos.z})`)
     bot.chat(`/tp ${bot.username} ${home.x} ${home.y} ${home.z}`)
     return true
@@ -80,6 +82,7 @@ function back(bot) {
     console.log(`[Back] 返回 (${sp.x}, ${sp.y}, ${sp.z})，距離 ${dist.toFixed(0)} 格`)
     if (dist > 10) {
         _resetPathfinder(bot)
+        noteTeleportLikeAction()
         bot.chat(`/tp ${bot.username} ${sp.x} ${sp.y} ${sp.z}`)
     }
     setTimeout(() => activityStack.resumeCurrent(bot), 1000)
