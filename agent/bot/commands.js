@@ -14,6 +14,7 @@ const { startGetFood, stopGetFood } = require('./food_collect')
 const { findNearestPlayer } = require('./world')
 const { setHome, goHome, back } = require('./home')
 const { startSurfacing, stopSurfacing } = require('./surface')
+const { startExploring, stopExploring } = require('./explore')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
 
 function handle(bot, msg) {
@@ -138,6 +139,15 @@ function handle(bot, msg) {
 
         case 'stopsurface':
             stopSurfacing(bot)
+            bridge.sendState(bot, 'action_done')
+            break
+
+        case 'explore':
+            startExploring(bot, msg.goal ?? _parseExploreGoal(msg.args))
+            break
+
+        case 'stopexplore':
+            stopExploring(bot)
             bridge.sendState(bot, 'action_done')
             break
 
@@ -367,6 +377,11 @@ function _parseSmeltGoal(args) {
     if (!args || args.length === 0) return {}
     if (args[0] === 'duration' && args[1]) return { duration: parseInt(args[1], 10) }
     if (args.length >= 2) return { target: args[0], count: parseInt(args[1], 10) }
+    return { target: args[0] }
+}
+
+function _parseExploreGoal(args) {
+    if (!args || args.length === 0) return { target: 'trees' }
     return { target: args[0] }
 }
 

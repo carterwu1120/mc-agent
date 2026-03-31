@@ -39,7 +39,7 @@ class PlanExecutor:
         command = self._current_command.get('command')
 
         immediate_commands = {
-            'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood', 'stopsurface',
+            'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore',
             'home', 'back', 'sethome', 'equip', 'unequip', 'deposit', 'withdraw', 'readchest', 'setchest', 'labelchest',
             'makechest', 'chat',
         }
@@ -60,6 +60,7 @@ class PlanExecutor:
             'hunt': 'hunting',
             'getfood': 'getfood',
             'surface': 'surface',
+            'explore': 'explore',
         }.get(command)
 
         if expected_activity and (state or {}).get('activity') == expected_activity:

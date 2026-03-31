@@ -25,6 +25,8 @@ const LOG_TO_SAPLING = {
     mangrove_log: 'mangrove_propagule',
 }
 
+const TREE_SEARCH_RADII = [32, 64]
+
 activityStack.register('chopping', _pause)
 
 function _pause(_bot) {
@@ -96,13 +98,21 @@ async function _loop(bot, goal = {}) {
             if (axe) await bot.equip(axe, 'hand')
         }
 
-        const candidates = bot.findBlocks({
-            matching: b => b.name && b.name.endsWith('_log'),
-            maxDistance: 32,
-            count: 20,
-        })
-
-        const rootPos = candidates.find(p => !skipped.has(_posKey(p)))
+        let rootPos = null
+        for (const radius of TREE_SEARCH_RADII) {
+            const candidates = bot.findBlocks({
+                matching: b => b.name && b.name.endsWith('_log'),
+                maxDistance: radius,
+                count: radius > 32 ? 40 : 20,
+            })
+            rootPos = candidates.find(p => !skipped.has(_posKey(p))) ?? null
+            if (rootPos) {
+                if (radius > TREE_SEARCH_RADII[0]) {
+                    console.log(`[Wood] 近距離無樹，擴大搜尋到 ${radius} 格`)
+                }
+                break
+            }
+        }
 
         if (!rootPos) {
             if (skipped.size > 0) {
@@ -116,10 +126,12 @@ async function _loop(bot, goal = {}) {
             bridge.sendState(bot, 'activity_stuck', {
                 activity_name: 'chopping',
                 reason: 'no_trees',
-                suggested_actions: ['back', 'home', 'idle'],
+                suggested_actions: Math.floor(bot.entity.position.y) < 60
+                    ? ['surface', 'back', 'home', 'idle']
+                    : ['explore', 'home', 'idle'],
                 detail: Math.floor(bot.entity.position.y) < 60
                     ? '目前位置偏地下，可能需要先回到地表或前一個位置再砍樹'
-                    : '目前附近沒有可砍的樹，可能需要移動到其他區域',
+                    : '目前附近沒有可砍的樹，可能需要探索其他地表區域',
             })
             break
         }

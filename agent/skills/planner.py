@@ -15,10 +15,11 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 - fish catches <count>                   釣魚   例：fish catches 30
 - smelt <material>                       冶煉   例：smelt iron
 - combat                                 開始戰鬥
-- stopmine / stopchop / stopfish / stopsmelt / stopcombat  停止對應活動
+- stopmine / stopchop / stopfish / stopsmelt / stopcombat / stopsurface / stopexplore  停止對應活動
 - home                                   傳送回基地
 - back                                   返回上次活動位置
 - surface                                移動到附近地表 / 陸地
+- explore <target>                       探索附近新區域，例：explore trees
 - deposit <chest_id>                     存入箱子（需提供 chest id）
 - withdraw <item> [count] <chest_id>     從箱子取出
 - equip                                  裝備最佳武裝
@@ -74,6 +75,7 @@ def _stop_command_for_activity(activity: str) -> str | None:
         "mining": "stopmine",
         "smelting": "stopsmelt",
         "surface": "stopsurface",
+        "explore": "stopexplore",
         "combat": "stopcombat",
         "hunting": "stophunt",
         "getfood": "stopgetfood",
@@ -92,6 +94,8 @@ def _maybe_plan_come(message: str, activity: str, player_name: str | None) -> di
         "chopping": "stopchop",
         "mining": "stopmine",
         "smelting": "stopsmelt",
+        "surface": "stopsurface",
+        "explore": "stopexplore",
         "combat": "stopcombat",
         "hunting": "stophunt",
         "getfood": "stopgetfood",
@@ -119,6 +123,8 @@ def _maybe_plan_surface(message: str, activity: str) -> dict | None:
         "chopping": "stopchop",
         "mining": "stopmine",
         "smelting": "stopsmelt",
+        "surface": "stopsurface",
+        "explore": "stopexplore",
         "combat": "stopcombat",
         "hunting": "stophunt",
         "getfood": "stopgetfood",

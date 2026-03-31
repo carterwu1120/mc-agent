@@ -4,7 +4,7 @@ from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
 
 ALLOWED_COMMANDS = {
-    "chop", "mine", "chat", "idle", "home", "back", "surface", "withdraw", "fishing_decision"
+    "chop", "mine", "chat", "idle", "home", "back", "surface", "explore", "withdraw", "fishing_decision"
 }
 
 
@@ -47,6 +47,47 @@ def _parse_json_with_repair(text: str) -> dict:
                 return _extract_first_json_object(repaired)
             except json.JSONDecodeError:
                 pass
+
+    # Salvage a common failure mode where the model starts with a valid
+    # {"command": "...", "text": "..."} object and then appends unrelated prose
+    # before closing the JSON object properly.
+    command_match = re.search(r'"command"\s*:\s*"([^"]+)"', text)
+    if command_match:
+        salvaged = {"command": command_match.group(1)}
+
+        text_key = text.find('"text"')
+        if text_key != -1:
+            first_quote = text.find('"', text_key + len('"text"'))
+            if first_quote != -1:
+                second_quote = text.find('"', first_quote + 1)
+                if second_quote != -1:
+                    text_start = second_quote + 1
+                    text_end = text.find('"', text_start)
+                    if text_end != -1:
+                        salvaged["text"] = text[text_start:text_end]
+
+        args_match = re.search(r'"args"\s*:\s*\[\s*"([^"]+)"(?:\s*,\s*"([^"]+)")?', text)
+        if args_match:
+            salvaged["args"] = [v for v in args_match.groups() if v is not None]
+
+        action_match = re.search(r'"action"\s*:\s*"([^"]+)"', text)
+        if action_match:
+            salvaged["action"] = action_match.group(1)
+
+        x_match = re.search(r'"x"\s*:\s*(-?\d+(?:\.\d+)?)', text)
+        if x_match:
+            salvaged["x"] = float(x_match.group(1))
+
+        z_match = re.search(r'"z"\s*:\s*(-?\d+(?:\.\d+)?)', text)
+        if z_match:
+            salvaged["z"] = float(z_match.group(1))
+
+        logs_match = re.search(r'"logs"\s*:\s*(\d+)', text)
+        if logs_match:
+            salvaged["goal"] = {"logs": int(logs_match.group(1))}
+
+        if salvaged.get("command"):
+            return salvaged
 
     raise json.JSONDecodeError("No valid JSON object found", text, 0)
 
@@ -109,6 +150,14 @@ def _is_valid_decision(decision: dict) -> bool:
         args = decision.get("args") or []
         return isinstance(args, list) and len(args) >= 2
 
+    if command == "explore":
+        args = decision.get("args") or []
+        goal = decision.get("goal") or {}
+        return (
+            (isinstance(args, list) and len(args) >= 1 and isinstance(args[0], str))
+            or (isinstance(goal, dict) and isinstance(goal.get("target"), str))
+        )
+
     if command == "fishing_decision":
         action = decision.get("action")
         if action == "stop":
@@ -169,15 +218,19 @@ SYSTEM_PROMPTS = {
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 {"command": "back", "text": "...理由..."}
 {"command": "surface", "text": "...理由..."}
+{"command": "explore", "args": ["trees"], "text": "...理由..."}
 {"command": "home", "text": "...理由..."}
 {"command": "chat", "text": "...提醒內容..."}
 {"command": "idle", "text": "...理由..."}
 
 決策原則：
 - 若目前明顯在地底或附近沒有樹，但這次任務仍是砍樹，優先用 surface；若不確定 surface 是否可行，再用 back 回到先前位置
+- 若已經在地表但附近沒有樹，優先回覆 explore trees，移動到新的地表區域繼續砍樹任務
 - 若已設定 home 且判斷回基地更合理，可用 home
 - 若沒有明確安全的下一步，才用 chat 或 idle
 - 不要回 chop；目前 chopping activity 已經卡住，先脫離目前位置再說
+- 不要只因為現在是夜晚、白天、天色變化，就選擇 home、idle 或放棄任務
+- 只有在 prompt 中有明確危險證據（例如 danger_score 很高、附近 hostile、血量/飢餓危險）時，才可以把安全性當成主要理由
 """,
 
     "surface": """你是 Minecraft 機器人的回到地表卡住處理助手。
@@ -194,6 +247,8 @@ SYSTEM_PROMPTS = {
 - 若已設定 home 且回基地更安全或更可靠，可用 home
 - 若沒有明確安全的下一步，才用 chat 或 idle
 - 不要再次回覆 surface，避免在相同條件下重複失敗
+- 不要只因為現在是夜晚、白天、天色變化，就選擇 home、idle 或放棄任務
+- 只有在 prompt 中有明確危險證據（例如 danger_score 很高、附近 hostile、血量/飢餓危險）時，才可以把安全性當成主要理由
 """,
 
     "fishing": """你是 Minecraft 機器人的釣魚卡住處理助手。
