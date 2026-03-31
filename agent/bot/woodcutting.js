@@ -37,12 +37,20 @@ function _pause(_bot) {
 
 async function startChopping(bot, goal = {}) {
     if (isChopping) {
+        if (activityStack.isStale('chopping', 15000)) {
+            console.log('[Wood] 偵測到殘留狀態，重置 chopping')
+            isChopping = false
+            _isPaused = false
+            activityStack.forget('chopping')
+        } else {
         console.log('[Wood] 已在砍樹中')
         return
+        }
     }
     isChopping = true
     _logsCollected = 0
     activityStack.push(bot, 'chopping', goal, (b) => _resumeChopping(b, goal))
+    activityStack.markStarted('chopping', 'start')
     console.log('[Wood] 開始砍樹')
     _loop(bot, goal)
 }
@@ -53,6 +61,7 @@ function _resumeChopping(bot, originalGoal) {
         ? Math.max(1, originalGoal.logs - _logsCollected)
         : undefined
     isChopping = true
+    activityStack.markStarted('chopping', 'resume')
     activityStack.updateTopGoal(remainingLogs
         ? { ...originalGoal, logs: remainingLogs }
         : originalGoal)
@@ -64,6 +73,7 @@ function stopChopping(_bot) {
     if (!isChopping) return
     isChopping = false
     _isPaused = false
+    activityStack.markStopped('chopping', 'stop')
     console.log('[Wood] 停止砍樹')
 }
 
@@ -74,6 +84,7 @@ async function _loop(bot, goal = {}) {
     let goalReached = false
 
     while (isChopping) {
+        activityStack.touch('chopping', 'loop')
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Wood] 達到時間目標 ${goal.duration}s，停止`)
             isChopping = false
@@ -149,6 +160,7 @@ async function _loop(bot, goal = {}) {
 
             const block = bot.blockAt(pos)
             if (!block || !block.name.endsWith('_log')) continue
+            activityStack.touch('chopping', 'tree_target')
 
             const movements = new Movements(bot)
             movements.canDig = false
@@ -177,6 +189,7 @@ async function _loop(bot, goal = {}) {
             try {
                 await bot.dig(fresh)
                 _logsCollected++
+                activityStack.touch('chopping', 'collected_log')
                 console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}（共 ${_logsCollected} 根）`)
                 activityStack.updateProgress({ logs: _logsCollected })
                 await _sleep(500)

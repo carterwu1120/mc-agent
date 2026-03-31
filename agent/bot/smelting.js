@@ -35,13 +35,23 @@ function _pause(_bot) {
 
 async function startSmelting(bot, goal = {}) {
     if (isSmelting) {
+        if (activityStack.isStale('smelting', 20000)) {
+            console.log('[Smelt] 偵測到殘留狀態，重置 smelting')
+            isSmelting = false
+            _isPaused = false
+            _inputPending = false
+            _placedFurnacePos = null
+            activityStack.forget('smelting')
+        } else {
         console.log('[Smelt] 已在燒製中')
         return
+        }
     }
     isSmelting = true
     _smeltedCount = 0
     _inputPending = false
     activityStack.push(bot, 'smelting', goal, (b) => _resumeSmelting(b, goal))
+    activityStack.markStarted('smelting', 'start')
     console.log(`[Smelt] 開始燒製 goal=${JSON.stringify(goal)}`)
     _loop(bot, goal)
 }
@@ -52,6 +62,7 @@ function _resumeSmelting(bot, originalGoal) {
         ? Math.max(1, originalGoal.count - _smeltedCount)
         : undefined
     isSmelting = true
+    activityStack.markStarted('smelting', 'resume')
     activityStack.updateTopGoal(remainingCount
         ? { ...originalGoal, count: remainingCount }
         : originalGoal)
@@ -63,6 +74,7 @@ function stopSmelting(_bot) {
     if (!isSmelting) return
     isSmelting = false
     _isPaused = false
+    activityStack.markStopped('smelting', 'stop')
     console.log('[Smelt] 停止燒製')
 }
 
@@ -75,6 +87,7 @@ async function _loop(bot, goal = {}) {
     const startTime = Date.now()
 
     while (isSmelting) {
+        activityStack.touch('smelting', 'loop')
         // 停止條件
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Smelt] 達到時間目標 ${goal.duration}s，停止`)
@@ -100,6 +113,7 @@ async function _loop(bot, goal = {}) {
         // 走過去
         try {
             const p = furnaceBlock.position
+            activityStack.touch('smelting', 'goto_furnace')
             await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 2))
         } catch (e) {
             console.log('[Smelt] 無法走到熔爐:', e.message)
@@ -127,6 +141,7 @@ async function _loop(bot, goal = {}) {
                 try {
                     await furnace.takeOutput()
                     _smeltedCount += prevOut.count
+                    activityStack.touch('smelting', 'take_output')
                     _inputPending = !!furnace.slots[0]
                     activityStack.updateProgress({ smelted: _smeltedCount })
                     console.log(`[Smelt] 取出遺留產物 ${prevOut.name} x${prevOut.count}（共 ${_smeltedCount}）`)
@@ -169,6 +184,7 @@ async function _loop(bot, goal = {}) {
                     const fuelCount = Math.min(fuelItem.count, 64)
                     try {
                         await furnace.putFuel(fuelItem.type, null, fuelCount)
+                        activityStack.touch('smelting', 'put_fuel')
                         console.log(`[Smelt] 放入燃料 ${fuelItem.name} x${fuelCount}`)
                     } catch (e) {
                         if (!e.message?.includes('destination full')) throw e
@@ -192,6 +208,7 @@ async function _loop(bot, goal = {}) {
                     try {
                         await furnace.putInput(inputItem.type, null, count)
                         _inputPending = true
+                        activityStack.touch('smelting', 'put_input')
                         console.log(`[Smelt] 放入 ${inputItem.name} x${count}（背包共 ${totalAvail}${goal.count ? `，目標剩 ${goal.count - _smeltedCount}` : ''}）`)
                     } catch (e) {
                         if (!e.message?.includes('destination full')) throw e

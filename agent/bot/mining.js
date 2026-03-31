@@ -119,6 +119,24 @@ function _shouldAbort(expectedGen = null) {
     return !isMining || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
+function _resetStaleMining(bot, reason = 'stale') {
+    console.log(`[Mine] 偵測到殘留狀態，重置 mining (${reason})`)
+    isMining = false
+    _isPaused = false
+    _loopGen++
+    _currentGoal = {}
+    _digFailed.clear()
+    _unavailablePickaxe.clear()
+    _lavaOres.clear()
+    try {
+        bot.pathfinder?.setGoal(null)
+    } catch (_) {}
+    try {
+        bot.clearControlStates?.()
+    } catch (_) {}
+    activityStack.forget('mining')
+}
+
 activityStack.register('mining', _pause)
 
 function _pause(_bot) {
@@ -129,8 +147,12 @@ function _pause(_bot) {
 
 async function startMining(bot, goal = {}) {
     if (isMining) {
+        if (activityStack.isStale('mining', 15000)) {
+            _resetStaleMining(bot, 'start_guard')
+        } else {
         console.log('[Mine] 已在挖礦中')
         return
+        }
     }
     if (goal.count !== undefined && !Number.isFinite(goal.count)) delete goal.count
     _currentGoal = goal
@@ -140,6 +162,7 @@ async function startMining(bot, goal = {}) {
     _lavaOres.clear()
     isMining = true
     activityStack.push(bot, 'mining', goal, (b) => _resumeMining(b, goal))
+    activityStack.markStarted('mining', 'start')
     console.log('[Mine] 開始挖礦')
     _loop(bot, goal)
 }
@@ -150,6 +173,7 @@ function _resumeMining(bot, originalGoal) {
         ? Math.max(1, originalGoal.count - _targetCount)
         : undefined
     isMining = true
+    activityStack.markStarted('mining', 'resume')
     activityStack.updateTopGoal(remaining ? { ...originalGoal, count: remaining } : originalGoal)
     console.log('[Mine] 恢復挖礦')
     _loop(bot, originalGoal)
@@ -170,6 +194,7 @@ function stopMining(bot) {
     try {
         bot.clearControlStates?.()
     } catch (_) {}
+    activityStack.markStopped('mining', 'stop')
     console.log('[Mine] 停止挖礦')
     activityStack.pop(bot)
 }
@@ -189,6 +214,7 @@ async function _loop(bot, goal = {}) {
     let stoneSearchFails = 0
 
     while (isMining) {
+        activityStack.touch('mining', 'loop')
         if (eating.isEating()) {
             await _sleep(250)
             continue
@@ -242,6 +268,7 @@ async function _loop(bot, goal = {}) {
                         _digFailed.add(pos.toString())
                         continue
                     }
+                    activityStack.touch('mining', 'stone_target')
                     const ok = await ensureToolFor(bot, 'stone')
                     if (!ok) {
                         console.log('[Mine] 無法取得稿子，停止並請求決策')
@@ -253,6 +280,7 @@ async function _loop(bot, goal = {}) {
                     if (_shouldAbort(_myGen)) return
                     _digFailed.delete(pos.toString())
                     _targetCount++
+                    activityStack.touch('mining', 'dug_block')
                     activityStack.updateProgress({ count: _targetCount })
                     stoneSearchFails = 0
                     console.log(`[Mine] 挖下 ${fresh.name} (目標 ${_targetCount}/${goal.count})`)
