@@ -48,6 +48,7 @@ _last_self_task_at = 0.0
 SELF_TASK_COOLDOWN = 60.0
 _idle_started_at: float | None = None
 _queued_player_tasks: deque[str] = deque()
+_latest_state: dict = {}
 
 
 def _augment_state(state: dict, player_task: str | None = None) -> dict:
@@ -80,6 +81,42 @@ def _is_system_chat_message(message: str) -> bool:
         return True
     if re.match(r"^gave\s+.+\s+to\s+agent]?$", lowered):
         return True
+    if re.match(r"^set\s+the\s+time\s+to\s+\d+]?$", lowered):
+        return True
+    return False
+
+
+def _distance_sq(a: dict | None, b: dict | None) -> float:
+    ax = float((a or {}).get("x", 0.0))
+    ay = float((a or {}).get("y", 0.0))
+    az = float((a or {}).get("z", 0.0))
+    bx = float((b or {}).get("x", 0.0))
+    by = float((b or {}).get("y", 0.0))
+    bz = float((b or {}).get("z", 0.0))
+    return (ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2
+
+
+def _is_stale_response(event_type: str, request_state: dict) -> bool:
+    if not _latest_state:
+        return False
+
+    current_activity = _latest_state.get("activity", "idle")
+    request_activity = request_state.get("activity", "idle")
+    current_pos = _latest_state.get("pos") or {}
+    request_pos = request_state.get("pos") or {}
+    moved_far = _distance_sq(current_pos, request_pos) > 12 ** 2
+
+    if event_type == "craft_decision":
+        return current_activity != request_activity or moved_far
+
+    if event_type == "activity_stuck":
+        same_activity = current_activity == request_activity
+        same_reason = _latest_state.get("detail") == request_state.get("detail")
+        return (not same_activity) or (not same_reason)
+
+    if event_type == "tick":
+        return current_activity != request_activity
+
     return False
 
 
@@ -107,6 +144,9 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         result = await handler(state, llm)
         if not result:
+            return
+        if _is_stale_response(event_type, state):
+            print(f"[Agent] 忽略過期的 {event_type} 回應")
             return
         # Plan response: execute commands sequentially
         if isinstance(result, dict) and result.get('action') == 'plan':
@@ -175,6 +215,8 @@ async def run():
                 print("[Agent] 已連線！等待 state...")
                 async for raw in ws:
                     state = json.loads(raw)
+                    _latest_state.clear()
+                    _latest_state.update(state)
                     event_type = state.get("type")
                     pos = state.get("pos") or {}
                     print(f"[State] type={event_type}  "
