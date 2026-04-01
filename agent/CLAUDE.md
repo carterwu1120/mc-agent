@@ -142,19 +142,23 @@ activityStack.resumeCurrent(bot)
 
 | Type | Meaning | Python handles? |
 |------|---------|----------------|
-| `tick` | Heartbeat every 2s | No |
-| `activity_done` | Goal reached, bot idles | **No** — bot just waits |
-| `activity_stuck` | Stuck mid-activity | **Yes** — LLM decides recovery |
-| `inventory_full` | Inventory full | Yes |
+| `tick` | Heartbeat every 2s | Yes — self_task (idle only, 60s cooldown) |
+| `activity_done` | Goal reached, bot idles | Yes — signals PlanExecutor |
+| `action_done` | Instant action completed | Yes — signals PlanExecutor |
+| `activity_stuck` | Stuck mid-activity | Yes — LLM decides recovery |
+| `inventory_full` | Inventory full | Yes — LLM decides drop/plan |
 | `craft_decision` | Needs crafting decision | Yes |
-| `food_low` | Food < 10 & idle & no food in inventory | Yes |
-| `chat` | Player sent a message | No (logged only) |
+| `food_low` | Food < 10 & idle & no food in inventory | Yes — deterministic, no LLM |
+| `chat` | Player sent a message | Yes — planner skill (natural language → commands) |
 
-**Key rule:** `activity_done` (goal reached) is NOT routed to Python. The bot idles and waits for the next command. Only `activity_stuck` triggers LLM intervention.
+**Key rule:** `activity_done` (goal reached) is NOT routed to LLM — it only signals `PlanExecutor` to advance to next step. Only `activity_stuck` triggers LLM intervention.
+
+**Direct `!` commands bypass Python entirely** — JS handles them without notifying Python. `task_memory` is only populated when tasks are started via natural language (through planner skill + executor).
 
 ### Bridge State Sent to Python
 
 Every `sendState` call includes:
+- `mode` — current operating mode (`companion` / `survival` / `workflow`)
 - `activity` — top frame name or `'idle'` (backward compat)
 - `stack` — full frame array without `resumeFn` (for LLM context)
 - `pos`, `health`, `food`, `inventory`, `entities`, `chests`
@@ -172,14 +176,15 @@ Example `stack` value:
 
 All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new activities as a `case` in the switch. Existing commands:
 
-`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `getfood`, `sethome`, `home`, `back`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`, `setchest`, `labelchest`, `readchest`, `deposit`, `withdraw`
+`fish`, `stopfish`, `chop`, `stopchop`, `mine`, `stopmine`, `smelt`, `stopsmelt`, `combat`, `stopcombat`, `hunt`, `stophunt`, `getfood`, `stopgetfood`, `surface`, `stopsurface`, `explore`, `stopexplore`, `sethome`, `home`, `back`, `equip`, `unequip`, `come`, `look`, `tp`, `bury`, `clear`, `inv`, `setchest`, `labelchest`, `readchest`, `deposit`, `withdraw`, `makechest`, `setmode`, `resumetask`
 
 ### Other Key Modules
 
 | Module | Purpose |
 |--------|---------|
-| `bridge.js` | WebSocket server, `sendState(bot, type, extra)` |
+| `bridge.js` | WebSocket server, `sendState(bot, type, extra)` — includes `mode` field |
 | `activity.js` | LIFO activity stack manager |
+| `mode.js` | Operating mode: `getMode()`, `setMode(m)` — persisted to `agent/data/mode.json`. Values: `companion`, `survival`, `workflow` |
 | `water.js` | Background water escape monitor (3-phase: swim up, pathfind dry, horizontal push) |
 | `eating.js` | Auto-eats when food < 18, triggered by `bot.on('health')` |
 | `inventory.js` | Pauses top activity when full, asks LLM via `inventory_full` |
@@ -198,16 +203,22 @@ All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new act
 
 ```python
 HANDLERS = {
-    "fishing_stuck":  fishing_skill.handle,
     "inventory_full": inventory_skill.handle,
     "craft_decision": craft_decision_skill.handle,
     "activity_stuck": activity_stuck_skill.handle,
+    "food_low":       food_skill.handle,
+    "tick":           self_task_skill.handle,
+    "action_done":    _on_done,    # signals PlanExecutor
+    "activity_done":  _on_done,   # signals PlanExecutor
+    "chat":           planner_skill.handle,
 }
 ```
 
-Handlers receive `state: dict` (full bot state) and `llm: LLMClient`. Return a list of command dicts or `None`. Each command is sent back to JS and routed through `commands.js`.
+Handlers receive `state: dict` (full bot state) and `llm: LLMClient`. Return a list of command dicts, a plan dict, or `None`.
 
-`activity_done` is intentionally NOT in HANDLERS — goal completion requires no LLM decision.
+**Plan response** (`{"action": "plan", "commands": [...], "goal": "..."}`) is routed to `PlanExecutor`, which sequences commands waiting for `action_done`/`activity_done` between steps. The `goal` string is saved to `task_memory`.
+
+**task_memory** (`agent/task_memory.py`) — persists current task to `agent/data/task.json`. Fields: `id`, `goal`, `commands`, `currentStep`, `status` (`running`/`interrupted`/`done`/`failed`), `interruptedBy`. Only populated when tasks go through the planner/executor path — direct `!` commands bypass Python and are not tracked.
 
 ### Skill Pattern (`agent/skills/`)
 
@@ -240,16 +251,29 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 
 ### Available LLM Commands
 
-`fish`, `chop`, `mine` (args: ore type), `smelt` (args: material), `combat`, `getfood`, `equip`, `come`, `home`, `back`, `labelchest` (args: id label), `readchest` (args: [id]), `deposit` (args: chest_id), `withdraw` (args: item [count] chest_id), `chat`, `idle`
+`fish`, `chop`, `mine` (args: ore type count), `smelt` (args: material), `combat`, `hunt`, `getfood`, `surface`, `explore`, `equip`, `come`, `home`, `back`, `setmode` (args: mode), `labelchest` (args: id label), `readchest` (args: [id]), `deposit` (args: chest_id), `withdraw` (args: item [count] chest_id), `makechest`, `chat`, `idle`
 
 ### Existing Skills
 
 | File | Triggered by | Purpose |
 |------|-------------|---------|
-| `inventory.py` | `inventory_full` | Drop items or compact inventory |
+| `inventory.py` | `inventory_full` | Drop/plan — LLM decides drop, deposit+resume plan, or continue |
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
-| `activity_stuck.py` | `activity_stuck` | Activity-specific recovery (mining/smelting/fishing), supports structured dependency failures via `missing`, `needed_for`, `suggested_actions`, `detail` |
-| `food.py` | `food_low` | 補充食物：烤生肉 → 打動物 → 釣魚（確定性邏輯，不呼叫 LLM）|
+| `activity_stuck.py` | `activity_stuck` | Activity-specific recovery (mining/smelting/fishing/chopping/surface) |
+| `food.py` | `food_low` | 補充食物（確定性邏輯，不呼叫 LLM） |
+| `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復 |
+| `self_task.py` | `tick` (idle, 60s) | 自主任務規劃；companion mode 不執行；workflow mode 自動恢復中斷任務 |
+| `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
+
+### Operating Modes (`agent/data/mode.json`)
+
+| Mode | `self_task` 行為 | 說明 |
+|------|-----------------|------|
+| `companion` | 不執行 | 純跟隨/支援玩家，不自主規劃 |
+| `survival` | 執行（補食/補工具） | 預設模式，自主維持基本生存 |
+| `workflow` | 執行 + 自動恢復中斷任務 | 任務導向，idle 時自動繼續未完成計畫 |
+
+切換：`!setmode companion` / `!setmode survival` / `!setmode workflow`（或 LLM 送 `setmode` 指令）
 
 ### LLM Clients (`agent/brain/`)
 

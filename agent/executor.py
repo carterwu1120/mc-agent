@@ -1,5 +1,6 @@
 import asyncio
 import json
+from agent import task_memory
 
 
 class PlanExecutor:
@@ -8,13 +9,16 @@ class PlanExecutor:
         self._done = asyncio.Event()
         self._current_command = None
 
-    async def execute(self, commands: list, ws) -> None:
+    async def execute(self, commands: list, ws, goal: str = "") -> None:
         self._running = True
+        if goal:
+            task_memory.save(goal, commands)
         print(f'[Executor] 開始執行計畫：{commands}')
-        for cmd_str in commands:
+        for i, cmd_str in enumerate(commands):
             if not self._running:
                 print('[Executor] 計畫已中止')
                 break
+            task_memory.update_step(i)
             msg = _parse(cmd_str)
             self._current_command = msg
             print(f'[Executor] 執行: {cmd_str}')
@@ -27,6 +31,8 @@ class PlanExecutor:
                 break
             finally:
                 self._current_command = None
+        if self._running:
+            task_memory.done()
         self._running = False
         print('[Executor] 計畫執行完畢')
 

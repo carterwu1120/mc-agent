@@ -2,6 +2,7 @@ import json
 import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
+from agent import task_memory
 
 SYSTEM_PROMPT = """你是 Minecraft 陪玩型 agent 的自主任務規劃助手。
 機器人目前沒有玩家直接指定的新任務，請根據它自己的狀態，決定下一個最合理的生存/補給任務。
@@ -120,6 +121,22 @@ def _is_valid_plan_result(result: dict) -> bool:
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     if state.get("activity") != "idle":
         return None
+
+    mode = state.get("mode", "survival")
+
+    # companion mode：不自主規劃
+    if mode == "companion":
+        return None
+
+    # workflow mode：優先恢復未完成任務
+    if mode == "workflow":
+        task = task_memory.load()
+        if task and task.get("status") == "interrupted":
+            remaining = task["commands"][task["currentStep"]:]
+            if remaining:
+                print(f"[SelfTask] workflow 模式，自動恢復任務: {task['goal']}")
+                return {"action": "plan", "commands": remaining, "goal": task["goal"]}
+
 
     prompt = (
         "請根據以下機器人狀態摘要，決定下一個自主任務。\n\n"

@@ -2,6 +2,7 @@ import json
 import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
+from agent import task_memory
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 玩家用自然語言下達指令，你要轉換成機器人可執行的指令序列。
@@ -35,6 +36,15 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 - 玩家問問題、打招呼、或說的不是任務指令時，回傳 chat
 - 只輸出 JSON，不要加任何解釋或其他文字
 """
+
+RESUME_PATTERNS = [
+    r"^\s*繼續\s*$",
+    r"^\s*continue\s*$",
+    r"^\s*resume\s*$",
+    r"^\s*resumetask\s*$",
+    r"^\s*繼續任務\s*$",
+    r"^\s*繼續上次的\s*$",
+]
 
 COME_PATTERNS = [
     r"\bcome here\b",
@@ -141,7 +151,7 @@ def _maybe_plan_stop(message: str, activity: str) -> dict | None:
         return None
     stop_cmd = _stop_command_for_activity(activity)
     if not stop_cmd:
-        return {"action": "chat", "text": "目前沒有正在進行的活動可停止。"}
+        return {"command": "chat", "text": "目前沒有正在進行的活動可停止。"}
     return {"action": "plan", "commands": [stop_cmd]}
 
 
@@ -149,6 +159,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     message = state.get("message", "")
     player_name = state.get("from")
     activity = state.get("activity", "idle")
+    mode = state.get("mode", "survival")
     pos = state.get("pos") or {}
     health = state.get("health", "?")
     food = state.get("food", "?")
@@ -159,12 +170,19 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     progress = top.get("progress", {})
     goal_str = f"目標：{goal}，進度：{progress}" if goal else "（無目標）"
 
+    interrupted_task = task_memory.load()
+    task_ctx = (
+        f"（有未完成任務：{interrupted_task['goal']}，第 {interrupted_task['currentStep']} 步）"
+        if interrupted_task and interrupted_task.get("status") == "interrupted"
+        else ""
+    )
+
     prompt = (
         f"玩家說：「{message}」\n\n"
-        f"機器人目前狀態：活動={activity}，"
+        f"機器人目前狀態：活動={activity}，模式={mode}，"
         f"位置=({pos.get('x',0):.0f}, {pos.get('y',0):.0f}, {pos.get('z',0):.0f})，"
         f"血量={health}/20，飢餓={food}/20。\n"
-        f"當前任務：{goal_str}\n\n"
+        f"當前任務：{goal_str}{task_ctx}\n\n"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請根據玩家的話決定要做什麼。"
     )
@@ -172,6 +190,17 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     response = None
     try:
         print(f"[Planner] 玩家: {message}")
+
+        # 繼續未完成任務
+        if any(re.search(p, message, re.IGNORECASE) for p in RESUME_PATTERNS):
+            task = task_memory.load()
+            if task and task.get('status') == 'interrupted':
+                remaining = task['commands'][task['currentStep']:]
+                if remaining:
+                    print(f"[Planner] 恢復任務: {task['goal']} 從步驟 {task['currentStep']}")
+                    return {"action": "plan", "commands": remaining, "goal": task['goal']}
+            return {"command": "chat", "text": "目前沒有未完成的任務可以繼續。"}
+
         shortcut = _maybe_plan_come(message, activity, player_name)
         if shortcut:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")

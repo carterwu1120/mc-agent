@@ -2,6 +2,7 @@ const { WebSocketServer } = require('ws')
 const { getActivity, getStack } = require('./activity')
 const { getChests } = require('./chest')
 const { getHome } = require('./home')
+const { getMode } = require('./mode')
 
 const TREE_BLOCK_NAMES = [
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
@@ -57,6 +58,7 @@ function sendState(bot, type, extra = {}) {
     if (!agentSocket || agentSocket.readyState !== 1) return
     const state = {
         type,
+        mode: getMode(),
         activity: getActivity(),
         stack: getStack(),
         pos: bot.entity ? bot.entity.position : null,

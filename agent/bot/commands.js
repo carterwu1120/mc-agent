@@ -16,6 +16,7 @@ const { setHome, goHome, back } = require('./home')
 const { startSurfacing, stopSurfacing } = require('./surface')
 const { startExploring, stopExploring } = require('./explore')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
+const { setMode } = require('./mode')
 
 function handle(bot, msg) {
     console.log('[Action]', JSON.stringify(msg))
@@ -322,6 +323,19 @@ function handle(bot, msg) {
             buryItems(bot, items)
             break
         }
+
+        case 'setmode': {
+            const m = msg.args?.[0]
+            if (setMode(m)) bot.chat(`模式已切換為 ${m}`)
+            else bot.chat('模式選項：companion / survival / workflow')
+            bridge.sendState(bot, 'action_done')
+            break
+        }
+
+        case 'resumetask':
+            // Python executor 接管後續；JS 只需回報 action_done
+            bridge.sendState(bot, 'action_done')
+            break
 
         case 'tidy': {
             const { tidyInventory } = require('./inventory')

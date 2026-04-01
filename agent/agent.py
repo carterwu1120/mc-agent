@@ -15,6 +15,7 @@ from agent.skills import planner as planner_skill
 from agent.skills import self_task as self_task_skill
 from agent.skills import task_arbitration as task_arbitration_skill
 from agent.executor import PlanExecutor
+from agent import task_memory
 
 load_dotenv()
 init_logger("brain")
@@ -49,6 +50,41 @@ SELF_TASK_COOLDOWN = 60.0
 _idle_started_at: float | None = None
 _queued_player_tasks: deque[str] = deque()
 _latest_state: dict = {}
+
+
+def _save_current_task_to_memory(state: dict) -> None:
+    """把目前 activity stack 的頂層任務存進 task_memory，供之後 resume。"""
+    stack = state.get("stack", [])
+    if not stack:
+        return
+    top = stack[-1]
+    activity = top.get("activity", "")
+    goal = top.get("goal", {})
+    progress = top.get("progress", {})
+
+    resume_cmd_map = {
+        "fishing":  lambda g, p: f"fish catches {max(1, g.get('catches',0) - p.get('catches',0))}",
+        "chopping": lambda g, p: f"chop logs {max(1, g.get('logs',0) - p.get('logs',0))}",
+        "mining":   lambda g, p: f"mine {g.get('target','iron')} {max(1, g.get('count',0) - p.get('count',0))}",
+        "smelting": lambda g, p: f"smelt {g.get('target','iron')} {max(1, g.get('count',0) - p.get('smelted',0))}",
+        "hunting":  lambda g, p: f"hunt count {max(1, g.get('count',0) - p.get('count',0))}",
+        "getfood":  lambda g, p: f"getfood count {max(1, g.get('count',0) - p.get('count',0))}",
+    }
+
+    resume_fn = resume_cmd_map.get(activity)
+    if not resume_fn:
+        return  # combat / surface / explore 等無法意義恢復，不存
+
+    try:
+        resume_cmd = resume_fn(goal, progress)
+    except Exception:
+        return
+
+    goal_str = f"{activity} {goal}"
+    task_memory.interrupt("player_interrupt")
+    task_memory.save(goal_str, [resume_cmd])
+    task_memory.interrupt("player_interrupt")  # save 會重設 status，再標記一次
+    print(f"[TaskMem] 儲存任務: {goal_str} → [{resume_cmd}]")
 
 
 def _augment_state(state: dict, player_task: str | None = None) -> dict:
@@ -151,11 +187,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         # Plan response: execute commands sequentially
         if isinstance(result, dict) and result.get('action') == 'plan':
             commands = result.get('commands', [])
+            goal = result.get('goal', '')
             if commands:
                 if executor.is_running():
                     print('[Agent] 計畫執行中，中止舊計畫')
                     executor.abort()
-                asyncio.create_task(executor.execute(commands, ws))
+                    # 只有不含自動恢復的事件才標記 interrupted（玩家打斷由 _handle_player_chat 處理）
+                asyncio.create_task(executor.execute(commands, ws, goal=goal))
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
@@ -198,6 +236,8 @@ async def _handle_player_chat(state: dict, ws) -> None:
                 if executor.is_running():
                     print("[TaskArb] 中止目前計畫，改執行玩家任務")
                     executor.abort()
+                # 儲存目前任務（不管 executor 是否在跑）
+                _save_current_task_to_memory(state)
                 stop_cmd = _stop_command_for_activity(activity)
                 if stop_cmd:
                     await ws.send(json.dumps(stop_cmd))
