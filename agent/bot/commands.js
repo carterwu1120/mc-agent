@@ -56,67 +56,95 @@ function handle(bot, msg) {
             break
         }
 
-        case 'fish':
-            startFishing(bot, msg.goal ?? _parseGoal(msg.args, ['catches', 'duration']))
+        case 'fish': {
+            const fishGoal = msg.goal ?? _parseGoal(msg.args, ['catches', 'duration'])
+            startFishing(bot, fishGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'fishing', goal: fishGoal })
             break
+        }
 
         case 'stopfish':
             stopFishing(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'fishing' })
             break
 
-        case 'chop':
-            startChopping(bot, msg.goal ?? _parseGoal(msg.args, ['logs', 'duration']))
+        case 'chop': {
+            const chopGoal = msg.goal ?? _parseGoal(msg.args, ['logs', 'duration'])
+            startChopping(bot, chopGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'chopping', goal: chopGoal })
             break
+        }
 
         case 'stopchop':
             stopChopping(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'chopping' })
             break
 
-        case 'mine':
-            startMining(bot, msg.goal ?? _parseMineGoal(msg.args))
+        case 'mine': {
+            const mineGoal = msg.goal ?? _parseMineGoal(msg.args)
+            startMining(bot, mineGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'mining', goal: mineGoal })
             break
+        }
 
         case 'stopmine':
             stopMining(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'mining' })
             break
 
-        case 'smelt':
-            startSmelting(bot, msg.goal ?? _parseSmeltGoal(msg.args))
+        case 'smelt': {
+            const smeltGoal = msg.goal ?? _parseSmeltGoal(msg.args)
+            startSmelting(bot, smeltGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'smelting', goal: smeltGoal })
             break
+        }
 
         case 'stopsmelt':
             stopSmelting(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'smelting' })
             break
 
-        case 'combat':
-            startCombat(bot, msg.goal ?? _parseGoal(msg.args, ['duration']))
+        case 'combat': {
+            const combatGoal = msg.goal ?? _parseGoal(msg.args, ['duration'])
+            startCombat(bot, combatGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'combat', goal: combatGoal })
             break
+        }
 
         case 'stopcombat':
             stopCombat(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'combat' })
             break
 
-        case 'hunt':
-            startHunting(bot, msg.goal ?? _parseGoal(msg.args, ['count', 'duration']))
+        case 'hunt': {
+            const huntGoal = msg.goal ?? _parseGoal(msg.args, ['count', 'duration'])
+            startHunting(bot, huntGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'hunting', goal: huntGoal })
             break
+        }
 
         case 'stophunt':
             stopHunting(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'hunting' })
             break
 
-        case 'getfood':
-            startGetFood(bot, msg.goal ?? _parseGoal(msg.args, ['count', 'duration']))
+        case 'getfood': {
+            const getfoodGoal = msg.goal ?? _parseGoal(msg.args, ['count', 'duration'])
+            startGetFood(bot, getfoodGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'getfood', goal: getfoodGoal })
             break
+        }
 
         case 'stopgetfood':
             stopGetFood(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'getfood' })
             break
 
         case 'sethome':
@@ -134,22 +162,30 @@ function handle(bot, msg) {
             setTimeout(() => bridge.sendState(bot, 'action_done'), 1500)
             break
 
-        case 'surface':
-            startSurfacing(bot, msg.goal ?? {})
+        case 'surface': {
+            const surfaceGoal = msg.goal ?? {}
+            startSurfacing(bot, surfaceGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'surface', goal: surfaceGoal })
             break
+        }
 
         case 'stopsurface':
             stopSurfacing(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'surface' })
             break
 
-        case 'explore':
-            startExploring(bot, msg.goal ?? _parseExploreGoal(msg.args))
+        case 'explore': {
+            const exploreGoal = msg.goal ?? _parseExploreGoal(msg.args)
+            startExploring(bot, exploreGoal)
+            bridge.sendState(bot, 'task_started', { activityName: 'explore', goal: exploreGoal })
             break
+        }
 
         case 'stopexplore':
             stopExploring(bot)
             bridge.sendState(bot, 'action_done')
+            bridge.sendState(bot, 'task_stopped', { activityName: 'explore' })
             break
 
         case 'makechest':

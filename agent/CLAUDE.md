@@ -143,17 +143,19 @@ activityStack.resumeCurrent(bot)
 | Type | Meaning | Python handles? |
 |------|---------|----------------|
 | `tick` | Heartbeat every 2s | Yes — self_task (idle only, 60s cooldown) |
-| `activity_done` | Goal reached, bot idles | Yes — signals PlanExecutor |
+| `activity_done` | Goal reached, bot idles | Yes — signals PlanExecutor + marks task done |
 | `action_done` | Instant action completed | Yes — signals PlanExecutor |
+| `task_started` | Activity started (via `!` command or LLM) | Yes — saves to task_memory for resume |
+| `task_stopped` | Activity manually stopped | Yes — marks task_memory interrupted |
 | `activity_stuck` | Stuck mid-activity | Yes — LLM decides recovery |
 | `inventory_full` | Inventory full | Yes — LLM decides drop/plan |
 | `craft_decision` | Needs crafting decision | Yes |
 | `food_low` | Food < 10 & idle & no food in inventory | Yes — deterministic, no LLM |
 | `chat` | Player sent a message | Yes — planner skill (natural language → commands) |
 
-**Key rule:** `activity_done` (goal reached) is NOT routed to LLM — it only signals `PlanExecutor` to advance to next step. Only `activity_stuck` triggers LLM intervention.
+**Key rule:** `activity_done` is NOT routed to LLM — it signals `PlanExecutor` and marks task done. Only `activity_stuck` triggers LLM intervention.
 
-**Direct `!` commands bypass Python entirely** — JS handles them without notifying Python. `task_memory` is only populated when tasks are started via natural language (through planner skill + executor).
+**`task_started` / `task_stopped`** — sent by `commands.js` for all activity start/stop commands (including direct `!` commands). Python stores the task in `task_memory` so the player can say "繼續" to resume even after manual `!mine` / `!stopmine`.
 
 ### Bridge State Sent to Python
 

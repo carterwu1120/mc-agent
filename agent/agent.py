@@ -30,7 +30,44 @@ executor = PlanExecutor()
 
 async def _on_done(_state: dict, _llm: LLMClient):
     executor.signal_done(_state)
+    if _state.get('type') == 'activity_done':
+        task_memory.done()
     return None
+
+
+async def _on_task_started(state: dict, _llm: LLMClient):
+    """JS 啟動 activity 時通知 Python，存進 task_memory 供之後 resume。"""
+    activity = state.get('activityName', '')
+    goal = state.get('goal') or {}
+    _build_and_save_task(activity, goal)
+    return None
+
+
+async def _on_task_stopped(state: dict, _llm: LLMClient):
+    """JS 手動停止 activity 時標記 interrupted。"""
+    task_memory.interrupt('manual_stop')
+    return None
+
+
+def _build_and_save_task(activity: str, goal: dict) -> None:
+    resume_cmd_map = {
+        'fishing':  lambda g: f"fish catches {g.get('catches', 20)}",
+        'chopping': lambda g: f"chop logs {g.get('logs', 32)}",
+        'mining':   lambda g: f"mine {g.get('target', 'iron')} {g.get('count', 16)}",
+        'smelting': lambda g: f"smelt {g.get('target', 'iron')} {g.get('count', 8)}",
+        'hunting':  lambda g: f"hunt count {g.get('count', 8)}",
+        'getfood':  lambda g: f"getfood count {g.get('count', 8)}",
+    }
+    fn = resume_cmd_map.get(activity)
+    if not fn:
+        return
+    try:
+        resume_cmd = fn(goal)
+    except Exception:
+        return
+    goal_str = f"{activity} {goal}"
+    task_memory.save(goal_str, [resume_cmd])
+    print(f"[TaskMem] 記錄任務: {goal_str}")
 
 # ── 各事件對應的 skill handler ────────────────────────────
 HANDLERS = {
@@ -41,6 +78,8 @@ HANDLERS = {
     "tick":           self_task_skill.handle,
     "action_done":    _on_done,
     "activity_done":  _on_done,
+    "task_started":   _on_task_started,
+    "task_stopped":   _on_task_stopped,
     "chat":           planner_skill.handle,
 }
 
