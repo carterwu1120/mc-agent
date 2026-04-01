@@ -29,8 +29,12 @@ llm: LLMClient = GeminiClient()
 executor = PlanExecutor()
 
 async def _on_done(_state: dict, _llm: LLMClient):
-    executor.signal_done(_state)
-    if _state.get('type') == 'activity_done':
+    if executor.is_running() and executor.is_in_stuck_recovery():
+        executor.resume_after_stuck()
+    else:
+        executor.signal_done(_state)
+    # Only mark done if NOT inside executor run (standalone activity)
+    if _state.get('type') == 'activity_done' and not executor.is_running():
         task_memory.done()
     return None
 
@@ -216,6 +220,24 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if now - _last_self_task_at < SELF_TASK_COOLDOWN:
                 return
             _last_self_task_at = now
+        # Inject plan context before activity_stuck handler if executor is running
+        if event_type == "activity_stuck" and executor.is_running():
+            task = task_memory.load()
+            if task and task.get("steps"):
+                state = dict(state)
+                idx = task.get("currentStep", 0)
+                steps = task["steps"]
+                state["plan_context"] = {
+                    "goal": task.get("goal"),
+                    "total_steps": len(steps),
+                    "current_step": idx,
+                    "current_cmd": steps[idx]["cmd"] if idx < len(steps) else None,
+                    "done_steps": [s["cmd"] for s in steps if s["status"] == "done"],
+                    "pending_steps": [s["cmd"] for s in steps if s["status"] == "pending"],
+                }
+                print(f"[Agent] 注入 plan_context: 第 {idx+1}/{len(steps)} 步")
+            executor.notify_stuck()
+
         print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         result = await handler(state, llm)
         if not result:
@@ -231,12 +253,18 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 if executor.is_running():
                     print('[Agent] 計畫執行中，中止舊計畫')
                     executor.abort()
-                    # 只有不含自動恢復的事件才標記 interrupted（玩家打斷由 _handle_player_chat 處理）
                 asyncio.create_task(executor.execute(commands, ws, goal=goal))
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
         for a in actions:
+            if isinstance(a, dict) and a.get("action") == "replan":
+                if executor.is_running():
+                    print(f"[Agent] activity_stuck replan: {a.get('commands')}")
+                    executor.replan(a.get("commands", []))
+                else:
+                    print("[Agent] 收到 replan 但 executor 未執行，忽略")
+                continue
             print(f"[Agent] 送出決策: {a}")
             await ws.send(json.dumps(a))
     except Exception as e:

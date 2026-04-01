@@ -7,6 +7,13 @@ ALLOWED_COMMANDS = {
     "chop", "mine", "chat", "idle", "home", "back", "surface", "explore", "withdraw", "fishing_decision"
 }
 
+PLAN_CONTEXT_SUFFIX = """
+【當前執行計畫】處於多步驟計畫執行中。除了常規決策外，也可以回傳重新規劃：
+{"action": "replan", "commands": ["new step 1", "new step 2"], "text": "...理由..."}
+commands 陣列替換目前未完成的所有步驟（包含當前失敗的步驟）。
+只有在單步恢復無法解決問題時才使用 replan。
+"""
+
 
 def _extract_first_json_object(text: str) -> dict:
     decoder = json.JSONDecoder()
@@ -335,6 +342,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     suggested_actions = state.get("suggested_actions", [])
     detail = state.get("detail")
     missing_count = state.get("missing_count")
+    plan_context = state.get("plan_context")
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
     reason_desc = REASON_DESC.get(reason, reason)
@@ -354,25 +362,50 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     if activity == "fishing":
         prompt = _build_fishing_prompt(state, health, food)
     else:
+        plan_section = ""
+        if plan_context:
+            done = ', '.join(plan_context.get('done_steps', [])) or '（無）'
+            pending = ', '.join(plan_context.get('pending_steps', [])) or '（無）'
+            plan_section = (
+                f"\n【計畫進度】目標：{plan_context.get('goal', '?')}\n"
+                f"共 {plan_context.get('total_steps', '?')} 步，"
+                f"當前第 {plan_context.get('current_step', 0) + 1} 步：{plan_context.get('current_cmd', '?')}\n"
+                f"已完成：{done}\n"
+                f"待執行：{pending}\n"
+            )
         prompt = (
             f"機器人在執行「{activity}」時中斷（原因：{reason_desc}）\n"
             f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
             f"背包內容：\n{inv_summary}\n\n"
-            f"{extra}\n\n"
+            f"{extra}"
+            f"{plan_section}\n"
             f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
             f"請決定機器人接下來要做什麼。"
         )
+
+    system = SYSTEM_PROMPTS.get(activity, SYSTEM_PROMPT_FALLBACK)
+    if plan_context:
+        system = system + PLAN_CONTEXT_SUFFIX
 
     response = None
     try:
         print(f"[Skill/activity_stuck] Prompt:\n{prompt}\n---")
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
-            system=SYSTEM_PROMPTS.get(activity, SYSTEM_PROMPT_FALLBACK),
+            system=system,
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         decision = _parse_json_with_repair(clean)
+
+        # Replan response — pass through directly without command validation
+        if decision.get("action") == "replan" and decision.get("commands"):
+            result = []
+            if decision.get("text"):
+                result.append({"command": "chat", "text": decision["text"]})
+            result.append({"action": "replan", "commands": decision["commands"]})
+            return result
+
         decision = _normalize_decision(activity, reason, needed_for, missing, missing_count, decision)
         if not _is_valid_decision(decision):
             print(f"[Skill/activity_stuck] 無效 decision，忽略: {decision}")

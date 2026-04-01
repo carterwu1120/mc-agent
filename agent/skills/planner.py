@@ -195,10 +195,15 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         if any(re.search(p, message, re.IGNORECASE) for p in RESUME_PATTERNS):
             task = task_memory.load()
             if task and task.get('status') == 'interrupted':
-                remaining = task['commands'][task['currentStep']:]
-                if remaining:
-                    print(f"[Planner] 恢復任務: {task['goal']} 從步驟 {task['currentStep']}")
-                    return {"action": "plan", "commands": remaining, "goal": task['goal']}
+                steps = task.get("steps")
+                if steps:
+                    remaining_cmds = [s["cmd"] for s in steps if s["status"] not in ("done",)]
+                else:
+                    remaining_cmds = task['commands'][task['currentStep']:]
+                if remaining_cmds:
+                    done_steps = [s["cmd"] for s in (steps or []) if s["status"] == "done"]
+                    print(f"[Planner] 恢復任務: {task['goal']} — 已完成: {done_steps}, 剩餘: {remaining_cmds}")
+                    return {"action": "plan", "commands": remaining_cmds, "goal": task['goal']}
             return {"command": "chat", "text": "目前沒有未完成的任務可以繼續。"}
 
         shortcut = _maybe_plan_come(message, activity, player_name)
