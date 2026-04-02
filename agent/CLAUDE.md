@@ -218,9 +218,27 @@ HANDLERS = {
 
 Handlers receive `state: dict` (full bot state) and `llm: LLMClient`. Return a list of command dicts, a plan dict, or `None`.
 
-**Plan response** (`{"action": "plan", "commands": [...], "goal": "..."}`) is routed to `PlanExecutor`, which sequences commands waiting for `action_done`/`activity_done` between steps. The `goal` string is saved to `task_memory`.
+**Plan response** (`{"action": "plan", "commands": [...], "goal": "..."}`) is routed to `PlanExecutor`, which sequences commands waiting for `action_done`/`activity_done` between steps. Each step's status is tracked in `task_memory`. On completion, bot chats a summary (e.g. "完成！equip✓ getfood✓ mine✓").
 
-**task_memory** (`agent/task_memory.py`) — persists current task to `agent/data/task.json`. Fields: `id`, `goal`, `commands`, `currentStep`, `status` (`running`/`interrupted`/`done`/`failed`), `interruptedBy`. Only populated when tasks go through the planner/executor path — direct `!` commands bypass Python and are not tracked.
+**Replan response** (`{"action": "replan", "commands": [...]}`) — only valid from `activity_stuck` skill during executor run. Replaces remaining steps in executor without stopping the plan. Sent to `executor.replan()`.
+
+**task_memory** (`agent/task_memory.py`) — persists current task to `agent/data/task.json`. Schema:
+```json
+{
+  "id": "abc12345",
+  "goal": "幫我挖鑽石",
+  "commands": ["equip", "getfood", "mine diamond 10"],
+  "steps": [
+    {"cmd": "equip",          "status": "done",    "error": null},
+    {"cmd": "getfood",        "status": "done",    "error": null},
+    {"cmd": "mine diamond 10","status": "running", "error": null}
+  ],
+  "currentStep": 2,
+  "status": "running",
+  "interruptedBy": null
+}
+```
+`status` per step: `pending` / `running` / `done` / `failed`. On resume, skips already-done steps. Populated by both executor (via planner) and `task_started` events (direct `!` commands).
 
 ### Skill Pattern (`agent/skills/`)
 
@@ -263,9 +281,10 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
 | `activity_stuck.py` | `activity_stuck` | Activity-specific recovery (mining/smelting/fishing/chopping/surface) |
 | `food.py` | `food_low` | 補充食物（確定性邏輯，不呼叫 LLM） |
-| `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復 |
+| `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復（跳過已 done 步驟） |
 | `self_task.py` | `tick` (idle, 60s) | 自主任務規劃；companion mode 不執行；workflow mode 自動恢復中斷任務 |
 | `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
+| `activity_stuck.py` | `activity_stuck` | 單步恢復；executor 執行中時附帶 plan_context，LLM 可回傳 `{"action":"replan","commands":[...]}` 替換剩餘步驟 |
 
 ### Operating Modes (`agent/data/mode.json`)
 

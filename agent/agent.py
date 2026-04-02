@@ -40,7 +40,10 @@ async def _on_done(_state: dict, _llm: LLMClient):
 
 
 async def _on_task_started(state: dict, _llm: LLMClient):
-    """JS 啟動 activity 時通知 Python，存進 task_memory 供之後 resume。"""
+    """JS 啟動 activity 時通知 Python，存進 task_memory 供之後 resume。
+    若 executor 正在執行多步計畫，不覆蓋（executor 自己管理 task_memory）。"""
+    if executor.is_running():
+        return None
     activity = state.get('activityName', '')
     goal = state.get('goal') or {}
     _build_and_save_task(activity, goal)
@@ -137,20 +140,6 @@ def _augment_state(state: dict, player_task: str | None = None) -> dict:
     return copied
 
 
-def _stop_command_for_activity(activity: str | None) -> dict | None:
-    mapping = {
-        "fishing": {"command": "stopfish"},
-        "chopping": {"command": "stopchop"},
-        "mining": {"command": "stopmine"},
-        "smelting": {"command": "stopsmelt"},
-        "surface": {"command": "stopsurface"},
-        "explore": {"command": "stopexplore"},
-        "combat": {"command": "stopcombat"},
-        "hunting": {"command": "stophunt"},
-        "getfood": {"command": "stopgetfood"},
-    }
-    return mapping.get(activity or "")
-
 
 def _is_system_chat_message(message: str) -> bool:
     if not message:
@@ -177,6 +166,9 @@ def _distance_sq(a: dict | None, b: dict | None) -> float:
 
 def _is_stale_response(event_type: str, request_state: dict) -> bool:
     if not _latest_state:
+        return False
+    # Never discard activity_stuck response while executor is waiting for it
+    if event_type == "activity_stuck" and executor.is_in_stuck_recovery():
         return False
 
     current_activity = _latest_state.get("activity", "idle")
@@ -305,10 +297,10 @@ async def _handle_player_chat(state: dict, ws) -> None:
                     executor.abort()
                 # 儲存目前任務（不管 executor 是否在跑）
                 _save_current_task_to_memory(state)
-                stop_cmd = _stop_command_for_activity(activity)
-                if stop_cmd:
-                    await ws.send(json.dumps(stop_cmd))
-                state = {**state, "activity": "idle", "stack": []}
+                # Don't send stop directly — planner includes stop as first plan step
+                # so the executor waits for action_done before issuing new commands.
+                # Sending stop outside executor caused the old activity to remain on
+                # the JS stack when the next command arrived.
 
     planner_state = _augment_state(state, player_task=state.get("message"))
     await _handle_and_send(planner_state, planner_skill.handle, ws)

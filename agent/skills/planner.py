@@ -14,7 +14,7 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 - mine <ore> <count>                     挖礦   例：mine diamond 10、mine iron 20
 - chop logs <count>                      砍木頭 例：chop logs 20
 - fish catches <count>                   釣魚   例：fish catches 30
-- smelt <material>                       冶煉   例：smelt iron
+- smelt <material> [count]               冶煉   例：smelt beef 6（烤6塊牛排）、smelt raw_iron 10（煉10個鐵）；務必帶數量
 - combat                                 開始戰鬥
 - stopmine / stopchop / stopfish / stopsmelt / stopcombat / stopsurface / stopexplore  停止對應活動
 - home                                   傳送回基地
@@ -32,7 +32,8 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
 - 若玩家只是在說停止、停下、先停、stop，優先規劃停止當前活動；若目前沒有活動就回 chat
 - 若玩家明確要求你靠近他、過去找他、跟上他，規劃 come 指令；若知道玩家名稱就用 come <player>
 - 若玩家要求你回到地面、地表、陸地、上去，優先規劃 surface
-- 玩家沒說數量時用合理預設值（木頭 32，礦石 16，釣魚 20）
+- 玩家沒說數量時用合理預設值（木頭 32，礦石 16，釣魚 20，冶煉依玩家需求數量）
+- smelt 指令必須帶數量，不可省略，否則會把所有原料全部放入熔爐
 - 玩家問問題、打招呼、或說的不是任務指令時，回傳 chat
 - 只輸出 JSON，不要加任何解釋或其他文字
 """

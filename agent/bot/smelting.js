@@ -19,6 +19,18 @@ const SMELTABLE = {
     sand: 'glass',                  cobblestone: 'stone',
 }
 
+// Map cooked/output names back to raw input names (for LLM commands like "smelt steak")
+const SMELT_ALIAS = Object.fromEntries(
+    Object.entries(SMELTABLE).map(([raw, cooked]) => [cooked, raw])
+)
+// Also map common English food aliases
+Object.assign(SMELT_ALIAS, {
+    steak: 'beef',
+    iron: 'raw_iron',
+    gold: 'raw_gold',
+    copper: 'raw_copper',
+})
+
 const FUEL_PRIORITY = [
     'coal', 'charcoal',
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log',
@@ -162,9 +174,10 @@ async function _loop(bot, goal = {}) {
             }
 
             // 找背包裡可燒的材料
+            const rawTarget = goal.target ? (SMELT_ALIAS[goal.target] || goal.target) : null
             const smeltableItems = bot.inventory.items().filter(i => {
                 if (!SMELTABLE[i.name]) return false
-                if (goal.target) return i.name.includes(goal.target)
+                if (rawTarget) return i.name === rawTarget || i.name.includes(rawTarget)
                 return true
             })
 

@@ -190,7 +190,10 @@ class PlanExecutor:
                 parts.append(f"{label}→重規")
         if parts:
             text = "完成！" + " ".join(parts)
-            await ws.send(json.dumps({"command": "chat", "text": text}))
+            try:
+                await ws.send(json.dumps({"command": "chat", "text": text}))
+            except Exception:
+                pass
             print(f'[Executor] 摘要: {text}')
 
 
