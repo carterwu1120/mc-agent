@@ -3,6 +3,7 @@ const { getActivity } = require('./activity')
 
 let _escaping = false
 let _escapingLava = false
+let _escapingSuffocation = false
 let _lastCheck = 0
 let _escapeCooldownUntil = 0
 const CHECK_INTERVAL = 500
@@ -254,6 +255,63 @@ async function _tryEscapeLava(bot) {
     _escapingLava = false
 }
 
+function _isSolid(block) {
+    if (!block) return false
+    if (block.boundingBox !== 'block') return false
+    if (_isLiquid(block.name)) return false
+    return true
+}
+
+function _isSuffocating(bot) {
+    const feet = bot.entity.position.floored()
+    const head = feet.offset(0, 1, 0)
+    const feetBlock = bot.blockAt(feet)
+    const headBlock = bot.blockAt(head)
+    return _isSolid(feetBlock) || _isSolid(headBlock)
+}
+
+async function _tryEscapeSuffocation(bot) {
+    if (_escapingSuffocation) return
+    _escapingSuffocation = true
+    console.log('[Hazard] 偵測到被困在實心方塊中，嘗試挖出！')
+
+    bot.pathfinder?.setGoal(null)
+
+    const pos = bot.entity.position.floored()
+    // Priority: dig feet block first, then head, then above head, then surrounding
+    const targets = [
+        pos,
+        pos.offset(0, 1, 0),
+        pos.offset(0, 2, 0),
+        pos.offset(0, -1, 0),
+        pos.offset(1, 0, 0), pos.offset(-1, 0, 0),
+        pos.offset(0, 0, 1), pos.offset(0, 0, -1),
+    ]
+
+    for (const target of targets) {
+        const block = bot.blockAt(target)
+        if (!block || !_isSolid(block)) continue
+        if (block.name === 'bedrock') continue
+        try {
+            console.log(`[Hazard] 挖掉 ${block.name} at (${target.x}, ${target.y}, ${target.z})`)
+            await bot.dig(block, true)
+            await _sleep(100)
+        } catch (e) {
+            console.log(`[Hazard] 挖掘失敗: ${e.message}`)
+        }
+        if (!_isSuffocating(bot)) break
+    }
+
+    if (_isSuffocating(bot)) {
+        console.log('[Hazard] 無法挖出，嘗試跳躍逃脫')
+        bot.setControlState('jump', true)
+        await _sleep(1000)
+        bot.setControlState('jump', false)
+    }
+
+    _escapingSuffocation = false
+}
+
 function startMonitor(bot) {
     bot.on('physicsTick', () => {
         if (getActivity() === 'fishing') return
@@ -262,13 +320,19 @@ function startMonitor(bot) {
         if (now - _lastCheck < CHECK_INTERVAL) return
         _lastCheck = now
 
+        // 窒息優先（被傳送進牆裡）
+        if (!_escapingSuffocation && !_escapingLava && !_escaping && _isSuffocating(bot)) {
+            _tryEscapeSuffocation(bot).catch(e => console.log('[Hazard] 窒息逃脫失敗:', e.message))
+            return
+        }
+
         // 岩漿優先（更危險）
-        if (!_escapingLava && !_escaping && bot.entity.isInLava) {
+        if (!_escapingLava && !_escaping && !_escapingSuffocation && bot.entity.isInLava) {
             _tryEscapeLava(bot).catch(e => console.log('[Hazard] 岩漿逃脫失敗:', e.message))
             return
         }
 
-        if (!_escaping && !_escapingLava && bot.entity.isInWater && Date.now() > _escapeCooldownUntil) {
+        if (!_escaping && !_escapingLava && !_escapingSuffocation && bot.entity.isInWater && Date.now() > _escapeCooldownUntil) {
             _tryEscape(bot).catch(e => console.log('[Water] 逃脫失敗:', e.message))
         }
     })
@@ -277,7 +341,7 @@ function startMonitor(bot) {
 }
 
 function isEscaping() {
-    return _escaping || _escapingLava
+    return _escaping || _escapingLava || _escapingSuffocation
 }
 
 module.exports = { startMonitor, isEscaping }
