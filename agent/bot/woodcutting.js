@@ -187,10 +187,16 @@ async function _loop(bot, goal = {}) {
             activityStack.touch('chopping', 'tree_target')
 
             const movements = new Movements(bot)
-            movements.canDig = false
+            movements.canDig = true
+            // Only allow digging leaves — not stone/ore — while navigating to tree
+            movements.blocksToAvoid = new Set()
+            movements.canDigBlock = (block) => {
+                if (block?.name?.includes('leaves')) return true
+                return false
+            }
             bot.pathfinder.setMovements(movements)
 
-            // 先水平走近（不挖掘，避免拿錯工具挖礦）
+            // 先水平走近（遇到樹葉可以挖開，但不挖礦石）
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3))
             } catch (e) { /* 走不到也繼續，試試疊方塊 */ }
