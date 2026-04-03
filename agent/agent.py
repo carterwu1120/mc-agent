@@ -30,7 +30,9 @@ executor = PlanExecutor()
 
 async def _on_done(_state: dict, _llm: LLMClient):
     if executor.is_running() and executor.is_in_stuck_recovery():
-        executor.resume_after_stuck()
+        # Use activity-aware check: don't mark step done for recovery actions
+        # (e.g. surface completing during a chop step)
+        executor.signal_done_after_stuck(_state)
     else:
         executor.signal_done(_state)
     # Only mark done if NOT inside executor run (standalone activity)

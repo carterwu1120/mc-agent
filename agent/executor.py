@@ -141,6 +141,40 @@ class PlanExecutor:
         if expected_activity and (state or {}).get('activity') == expected_activity:
             self._done.set()
 
+    def signal_done_after_stuck(self, state: dict | None = None) -> None:
+        """Called during stuck recovery instead of signal_done.
+        Only unblocks the executor if the completing activity matches the
+        original step's expected activity. Recovery actions (e.g. surface
+        completing during a chop step) keep the executor waiting."""
+        event_type = (state or {}).get('type')
+
+        if event_type == 'action_done':
+            # Immediate recovery action finished — clear stuck flag and unblock
+            self._in_stuck_recovery = False
+            self._done.set()
+            return
+
+        if event_type == 'activity_done':
+            command = (self._current_command or {}).get('command')
+            expected_activity = {
+                'mine': 'mining',
+                'chop': 'chopping',
+                'fish': 'fishing',
+                'smelt': 'smelting',
+                'combat': 'combat',
+                'hunt': 'hunting',
+                'getfood': 'getfood',
+                'surface': 'surface',
+                'explore': 'explore',
+            }.get(command)
+            completing = (state or {}).get('activity')
+            if expected_activity and completing == expected_activity:
+                # Original step finished after recovery — unblock
+                self._in_stuck_recovery = False
+                self._done.set()
+            # else: recovery action finished (e.g. surface during chop step)
+            # Keep waiting — original activity will send its own activity_done
+
     def notify_stuck(self) -> None:
         """Signal that activity_stuck fired. Pauses executor until resume or replan."""
         if self._running:
