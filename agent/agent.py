@@ -319,6 +319,8 @@ async def run():
                     _latest_state.clear()
                     _latest_state.update(state)
                     event_type = state.get("type")
+                    if event_type == "tick":
+                        executor.heartbeat()
                     pos = state.get("pos") or {}
                     print(f"[State] type={event_type}  "
                           f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})  "

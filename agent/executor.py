@@ -3,6 +3,9 @@ import json
 from agent import task_memory
 
 
+HEARTBEAT_TIMEOUT = 30.0   # seconds without a tick before declaring JS unresponsive
+POLL_INTERVAL    = 10.0   # how often to check heartbeat while waiting
+
 class PlanExecutor:
     def __init__(self):
         self._running = False
@@ -14,6 +17,11 @@ class PlanExecutor:
         self._current_step_index = 0
         self._ws = None
         self._step_results: list[dict] = []
+        self._last_heartbeat: float = 0.0
+
+    def heartbeat(self) -> None:
+        """Called on every tick event to confirm JS is still alive."""
+        self._last_heartbeat = asyncio.get_event_loop().time()
 
     async def execute(self, commands: list, ws, goal: str = "") -> None:
         self._running = True
@@ -50,21 +58,32 @@ class PlanExecutor:
             try:
                 done_task = asyncio.ensure_future(self._done.wait())
                 stuck_task = asyncio.ensure_future(self._stuck_event.wait())
-                finished, _ = await asyncio.wait(
-                    [done_task, stuck_task],
-                    timeout=_step_timeout(cmd_str),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                done_task.cancel()
-                stuck_task.cancel()
 
-                if not finished:
-                    # Real timeout — neither event fired
-                    print(f'[Executor] 等待 "{cmd_str}" 超時，中止計畫')
-                    task_memory.mark_step_failed(i, "timeout")
-                    self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "timeout"})
-                    timed_out = True
-                    break
+                # Poll in short intervals, checking heartbeat between each.
+                # Activity runs as long as JS keeps sending ticks — no fixed timeout.
+                while True:
+                    finished, _ = await asyncio.wait(
+                        [done_task, stuck_task],
+                        timeout=POLL_INTERVAL,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if finished:
+                        break  # done or stuck fired — proceed normally
+                    # Neither fired yet — check JS is still alive
+                    now = asyncio.get_event_loop().time()
+                    if self._last_heartbeat > 0 and now - self._last_heartbeat > HEARTBEAT_TIMEOUT:
+                        print(f'[Executor] JS 無回應超過 {HEARTBEAT_TIMEOUT}s，中止計畫')
+                        done_task.cancel()
+                        stuck_task.cancel()
+                        task_memory.mark_step_failed(i, "timeout")
+                        self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "timeout"})
+                        timed_out = True
+                        break
+                    print(f'[Executor] 等待 "{cmd_str}" 中... (上次心跳 {now - self._last_heartbeat:.0f}s 前)')
+
+                if not timed_out:
+                    done_task.cancel()
+                    stuck_task.cancel()
 
                 if self._stuck_event.is_set() and not self._done.is_set():
                     # Paused for stuck handling — wait for resume or replan
@@ -230,28 +249,6 @@ class PlanExecutor:
                 pass
             print(f'[Executor] 摘要: {text}')
 
-
-_STEP_TIMEOUTS = {
-    'mine':    600,
-    'chop':    600,
-    'fish':    600,
-    'hunt':    300,
-    'getfood': 300,
-    'surface':  90,
-    'explore':  180,
-}
-
-def _step_timeout(cmd_str: str) -> float:
-    parts = cmd_str.split()
-    command = parts[0]
-    if command == 'smelt':
-        # ~10s per item + 60s buffer for furnace placement/fuel
-        try:
-            count = int(parts[-1]) if len(parts) >= 2 else 8
-        except ValueError:
-            count = 8
-        return float(count * 12 + 60)
-    return float(_STEP_TIMEOUTS.get(command, 120))
 
 
 def _parse(cmd_str: str) -> dict:
