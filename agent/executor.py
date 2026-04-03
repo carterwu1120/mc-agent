@@ -237,13 +237,20 @@ _STEP_TIMEOUTS = {
     'fish':    600,
     'hunt':    300,
     'getfood': 300,
-    'smelt':   300,
     'surface':  90,
     'explore':  180,
 }
 
 def _step_timeout(cmd_str: str) -> float:
-    command = cmd_str.split()[0]
+    parts = cmd_str.split()
+    command = parts[0]
+    if command == 'smelt':
+        # ~10s per item + 60s buffer for furnace placement/fuel
+        try:
+            count = int(parts[-1]) if len(parts) >= 2 else 8
+        except ValueError:
+            count = 8
+        return float(count * 12 + 60)
     return float(_STEP_TIMEOUTS.get(command, 120))
 
 
