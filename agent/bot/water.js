@@ -6,7 +6,9 @@ let _escapingLava = false
 let _escapingSuffocation = false
 let _lastCheck = 0
 let _escapeCooldownUntil = 0
+let _inWaterSince = 0   // timestamp when bot first entered water this stretch
 const CHECK_INTERVAL = 500
+const WATER_DEBOUNCE = 1500  // ms in water before triggering escape
 
 function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
@@ -332,8 +334,16 @@ function startMonitor(bot) {
             return
         }
 
-        if (!_escaping && !_escapingLava && !_escapingSuffocation && bot.entity.isInWater && Date.now() > _escapeCooldownUntil) {
-            _tryEscape(bot).catch(e => console.log('[Water] 逃脫失敗:', e.message))
+        if (!_escaping && !_escapingLava && !_escapingSuffocation && Date.now() > _escapeCooldownUntil) {
+            if (bot.entity.isInWater) {
+                if (_inWaterSince === 0) _inWaterSince = now
+                if (now - _inWaterSince >= WATER_DEBOUNCE) {
+                    _inWaterSince = 0
+                    _tryEscape(bot).catch(e => console.log('[Water] 逃脫失敗:', e.message))
+                }
+            } else {
+                _inWaterSince = 0
+            }
         }
     })
 
