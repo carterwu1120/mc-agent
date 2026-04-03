@@ -79,7 +79,9 @@ class PlanExecutor:
                         self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "timeout"})
                         timed_out = True
                         break
-                    print(f'[Executor] 等待 "{cmd_str}" 中... (上次心跳 {now - self._last_heartbeat:.0f}s 前)')
+                    elapsed = now - self._last_heartbeat
+                    if elapsed > 10:
+                        print(f'[Executor] 等待 "{cmd_str}" 中... (上次心跳 {elapsed:.0f}s 前)')
 
                 if not timed_out:
                     done_task.cancel()
