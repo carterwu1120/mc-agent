@@ -52,7 +52,7 @@ class PlanExecutor:
                 stuck_task = asyncio.ensure_future(self._stuck_event.wait())
                 finished, _ = await asyncio.wait(
                     [done_task, stuck_task],
-                    timeout=120.0,
+                    timeout=_step_timeout(cmd_str),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 done_task.cancel()
@@ -229,6 +229,22 @@ class PlanExecutor:
             except Exception:
                 pass
             print(f'[Executor] 摘要: {text}')
+
+
+_STEP_TIMEOUTS = {
+    'mine':    600,
+    'chop':    600,
+    'fish':    600,
+    'hunt':    300,
+    'getfood': 300,
+    'smelt':   300,
+    'surface':  90,
+    'explore':  180,
+}
+
+def _step_timeout(cmd_str: str) -> float:
+    command = cmd_str.split()[0]
+    return float(_STEP_TIMEOUTS.get(command, 120))
 
 
 def _parse(cmd_str: str) -> dict:
