@@ -359,6 +359,10 @@ async function _placeCraftingTable(bot, tableBlockId) {
     for (const { ground, spacePos, needDig, space } of candidates) {
         if (needDig) {
             if (!space || space.boundingBox !== 'block') continue
+            try {
+                const tool = bot.pathfinder.bestHarvestTool(space)
+                if (tool) await bot.equip(tool, 'hand')
+            } catch (_) {}
             try { await bot.dig(space) } catch (_) { continue }
             const fresh = bot.blockAt(spacePos)
             if (!fresh || !REPLACEABLE_BLOCKS.has(fresh.name)) continue
