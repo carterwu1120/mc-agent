@@ -3,6 +3,7 @@ const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
 const { ensureAxe, ensureToolFor } = require('./crafting')
 const bridge = require('./bridge')
+const { findSurfaceSpot } = require('./surface')
 
 let isChopping = false
 let _isPaused = false
@@ -97,6 +98,29 @@ async function _loop(bot, goal = {}) {
             bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
             break
         }
+        // 如果在地底或水中，先浮出地表再找樹
+        if (bot.entity.position.y < 60 || bot.entity.isInWater) {
+            console.log(`[Wood] 位置 Y=${Math.floor(bot.entity.position.y)}，先前往地表`)
+            const spot = findSurfaceSpot(bot, 24)
+            if (spot) {
+                try {
+                    await bot.pathfinder.goto(new goals.GoalBlock(spot.x, spot.y, spot.z))
+                } catch (_) {}
+            }
+            if (!isChopping) break
+            if (bot.entity.position.y < 60 || bot.entity.isInWater) {
+                // Still underground — send stuck so LLM can call surface
+                console.log('[Wood] 無法自行回到地表，送出 activity_stuck')
+                activityStack.pause(bot)
+                bridge.sendState(bot, 'activity_stuck', {
+                    activity_name: 'chopping',
+                    reason: '位於地底或水中，附近找不到可砍的樹，可能目前位置不適合進行砍樹',
+                    detail: 'underground',
+                })
+                break
+            }
+        }
+
         // 每次迴圈檢查斧頭（斧頭壞掉或第一次有材料時自動合成）
         if (!bot.inventory.items().some(i => i.name.endsWith('_axe'))) {
             const ok = await ensureAxe(bot)
