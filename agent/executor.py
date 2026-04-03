@@ -87,6 +87,10 @@ class PlanExecutor:
                     done_task.cancel()
                     stuck_task.cancel()
 
+                # abort() sets both _done and _running=False — detect and bail out
+                if not self._running:
+                    break
+
                 if self._stuck_event.is_set() and not self._done.is_set():
                     # Paused for stuck handling — wait for resume or replan
                     print(f'[Executor] 步驟 {i} 因 activity_stuck 暫停，等待 LLM 決策...')

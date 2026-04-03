@@ -202,6 +202,19 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                 else:
                     remaining_cmds = task['commands'][task['currentStep']:]
                 if remaining_cmds:
+                    # If the first resume command matches the current running activity,
+                    # JS already auto-resumed it — skip that step to avoid double-push
+                    first_cmd = remaining_cmds[0].split()[0]
+                    current_activity = activity  # from state
+                    activity_for_cmd = {
+                        'chop': 'chopping', 'mine': 'mining', 'fish': 'fishing',
+                        'smelt': 'smelting', 'hunt': 'hunting', 'getfood': 'getfood',
+                    }.get(first_cmd)
+                    if activity_for_cmd and current_activity == activity_for_cmd:
+                        print(f"[Planner] 恢復任務: {task['goal']} — 已在執行 {current_activity}，跳過重複指令")
+                        remaining_cmds = remaining_cmds[1:]
+                    if not remaining_cmds:
+                        return {"command": "chat", "text": "任務已在執行中。"}
                     done_steps = [s["cmd"] for s in (steps or []) if s["status"] == "done"]
                     print(f"[Planner] 恢復任務: {task['goal']} — 已完成: {done_steps}, 剩餘: {remaining_cmds}")
                     return {"action": "plan", "commands": remaining_cmds, "goal": task['goal']}
