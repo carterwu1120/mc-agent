@@ -783,6 +783,7 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
         // 目標比目前位置高時，啟用疊方塊讓 pathfinder 能墊上去
         if (feetPos.y > base.y) _setEscapeMovements(bot)
         else _setMovements(bot)
+        if (_shouldAbort(expectedGen)) return false  // 被 stopMining 中止，不要清除其他 activity 的路徑
         bot.pathfinder.setGoal(null)  // 清除 setMovements 可能觸發的殘留 goal
         const prevPos = bot.entity.position.clone()
         try {

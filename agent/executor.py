@@ -18,12 +18,15 @@ class PlanExecutor:
         self._ws = None
         self._step_results: list[dict] = []
         self._last_heartbeat: float = 0.0
+        self._run_id: int = 0
 
     def heartbeat(self) -> None:
         """Called on every tick event to confirm JS is still alive."""
         self._last_heartbeat = asyncio.get_event_loop().time()
 
     async def execute(self, commands: list, ws, goal: str = "") -> None:
+        self._run_id += 1
+        my_run_id = self._run_id
         self._running = True
         self._ws = ws
         self._replan_commands = None
@@ -87,9 +90,9 @@ class PlanExecutor:
                     done_task.cancel()
                     stuck_task.cancel()
 
-                # abort() sets both _done and _running=False — detect and bail out
-                if not self._running:
-                    break
+                # abort() increments _run_id — detect superseded run and bail out
+                if self._run_id != my_run_id:
+                    return
 
                 if self._stuck_event.is_set() and not self._done.is_set():
                     # Paused for stuck handling — wait for resume or replan
@@ -125,7 +128,9 @@ class PlanExecutor:
             i += 1
 
         if self._running:
-            task_memory.done()
+            task = task_memory.load()
+            if task and task.get('status') == 'running':
+                task_memory.done()
             await self._send_summary(ws)
         self._running = False
         print('[Executor] 計畫執行完畢')
@@ -223,6 +228,7 @@ class PlanExecutor:
     def abort(self) -> None:
         if self._running:
             task_memory.mark_step_failed(self._current_step_index, "aborted")
+        self._run_id += 1  # invalidate any running execute() coroutine
         self._running = False
         self._current_command = None
         self._replan_commands = None

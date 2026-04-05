@@ -35,9 +35,12 @@ async def _on_done(_state: dict, _llm: LLMClient):
         executor.signal_done_after_stuck(_state)
     else:
         executor.signal_done(_state)
-    # Only mark done if NOT inside executor run (standalone activity)
+    # Only mark done if NOT inside executor run (standalone activity),
+    # and only if task_memory is actually tracking this activity (not an interrupted task for something else)
     if _state.get('type') == 'activity_done' and not executor.is_running():
-        task_memory.done()
+        task = task_memory.load()
+        if task and task.get('status') == 'running':
+            task_memory.done()
     return None
 
 
@@ -184,8 +187,11 @@ def _is_stale_response(event_type: str, request_state: dict) -> bool:
 
     if event_type == "activity_stuck":
         same_activity = current_activity == request_activity
-        same_reason = _latest_state.get("detail") == request_state.get("detail")
-        return (not same_activity) or (not same_reason)
+        # Only compare reason if latest state is also activity_stuck — ticks don't carry detail
+        if _latest_state.get("type") == "activity_stuck":
+            same_reason = _latest_state.get("detail") == request_state.get("detail")
+            return (not same_activity) or (not same_reason)
+        return not same_activity
 
     if event_type == "tick":
         return current_activity != request_activity
@@ -271,6 +277,12 @@ async def _handle_player_chat(state: dict, ws) -> None:
     message = state.get("message", "")
     if _is_system_chat_message(message):
         print(f"[TaskArb] 忽略系統聊天: {message}")
+        return
+
+    # Resume commands are meta-commands — skip arbitration entirely
+    if any(re.search(p, message, re.IGNORECASE) for p in planner_skill.RESUME_PATTERNS):
+        planner_state = _augment_state(state, player_task=message)
+        await _handle_and_send(planner_state, planner_skill.handle, ws)
         return
 
     activity = state.get("activity", "idle")
