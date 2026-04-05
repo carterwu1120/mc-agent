@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 from collections import deque
 import websockets
@@ -20,7 +21,7 @@ from agent import task_memory
 load_dotenv()
 init_logger("brain")
 
-WS_URL = "ws://localhost:3001"
+WS_URL = os.environ.get("BOT_WS_URL", "ws://localhost:3001")
 
 # ── 在這裡切換 LLM ────────────────────────────────────────
 llm: LLMClient = GeminiClient()

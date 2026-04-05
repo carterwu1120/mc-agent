@@ -1,0 +1,10 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+COPY agent/bot/package.json agent/bot/package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY agent/bot/ ./
+
+CMD ["node", "index.js"]

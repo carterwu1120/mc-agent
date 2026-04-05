@@ -1,0 +1,30 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    environment:
+      MC_HOST: ${MC_HOST:-localhost}
+      MC_PORT: ${MC_PORT:-25565}
+      MC_USERNAME: ${MC_USERNAME:-Agent}
+      MC_VERSION: ${MC_VERSION:-1.20.1}
+      MC_AUTH: ${MC_AUTH:-offline}
+    volumes:
+      - ./agent/data:/app/data
+      - ./agent/logs:/app/logs
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}
+      BOT_WS_URL: ws://bot:3001
+    volumes:
+      - ./agent/data:/app/agent/data
+      - ./agent/logs:/app/agent/logs
+    depends_on:
+      - bot
+    restart: unless-stopped
