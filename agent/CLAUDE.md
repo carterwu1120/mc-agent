@@ -154,6 +154,7 @@ activityStack.resumeCurrent(bot)
 | `chat` | Player sent a message | Yes — planner skill (natural language → commands) |
 | `player_died` | Bot health → 0 (detected via `bot.on('health')`) | Yes — aborts executor, saves death info to `agent/data/death.json` |
 | `player_respawned` | Bot respawned (registered inside `bot.once('spawn')`) | Yes — LLM respawn skill decides recovery plan |
+| `tool_low_durability` | Main hand tool durability ≤ 10% (checked every 5s, 60s cooldown) | Yes — LLM decides: equip backup, craft new, or idle |
 
 **Key rule:** `activity_done` is NOT routed to LLM — it signals `PlanExecutor` and marks task done. Only `activity_stuck` triggers LLM intervention.
 
@@ -291,6 +292,7 @@ Canonical definitions live in `agent/skills/commands_ref.py`. Use `command_list(
 | `food.py` | `food_low` | 補充食物（確定性邏輯，不呼叫 LLM） |
 | `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復（跳過已 done 步驟） |
 | `respawn.py` | `player_respawned` | LLM 決定重生後恢復計畫（tp 回原位 / 直接繼續 / equip / idle） |
+| `tool_durability.py` | `tool_low_durability` | LLM 決定工具耐久不足時的處理（換備用工具 / 合成新工具 / idle） |
 | `self_task.py` | `tick` (idle, 60s) | 自主任務規劃；companion mode 不執行；workflow mode 自動恢復中斷任務 |
 | `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
 

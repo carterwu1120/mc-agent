@@ -92,6 +92,18 @@ bot.once('spawn', () => {
 
     setInterval(() => bridge.sendState(bot, 'tick'), 2000)
 
+    let _lastDurabilityWarn = 0
+    setInterval(() => {
+        const item = bot.heldItem
+        if (!item || !item.maxDurability) return
+        const pct = Math.round(((item.maxDurability - item.durabilityUsed) / item.maxDurability) * 100)
+        if (pct <= 10 && Date.now() - _lastDurabilityWarn > 60000) {
+            _lastDurabilityWarn = Date.now()
+            console.log(`[Durability] ${item.name} 耐久度剩餘 ${pct}%，通知 agent`)
+            bridge.sendState(bot, 'tool_low_durability', { item: item.name, durability_pct: pct })
+        }
+    }, 5000)
+
     // Register respawn listener only after first join, so it won't fire on initial spawn
     bot.on('spawn', () => {
         _pendingDeathInfo = null

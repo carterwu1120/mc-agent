@@ -217,15 +217,28 @@ def summary_json(state: dict, mode: str = "companion_survival") -> str:
     return json.dumps(summarize_state(state, mode=mode), ensure_ascii=False, indent=2)
 
 
+def _fmt_item(item) -> str:
+    """Format an equipment item (name string or {name, durability_pct} dict)."""
+    if item is None:
+        return '無'
+    if isinstance(item, str):
+        return item
+    name = item.get('name') or '無'
+    pct = item.get('durability_pct')
+    if pct is not None:
+        return f"{name} ({pct}%)"
+    return name
+
+
 def equipment_summary(state: dict) -> str:
     """Format current equipment as a human-readable string for LLM prompts."""
     equipment = state.get('equipment') or {}
     armor = equipment.get('armor') or {}
     lines = [
-        f"主手：{equipment.get('main_hand') or '空'}",
-        f"頭盔：{armor.get('head') or '無'}",
-        f"胸甲：{armor.get('torso') or '無'}",
-        f"護腿：{armor.get('legs') or '無'}",
-        f"靴子：{armor.get('feet') or '無'}",
+        f"主手：{_fmt_item(equipment.get('main_hand'))}",
+        f"頭盔：{_fmt_item(armor.get('head'))}",
+        f"胸甲：{_fmt_item(armor.get('torso'))}",
+        f"護腿：{_fmt_item(armor.get('legs'))}",
+        f"靴子：{_fmt_item(armor.get('feet'))}",
     ]
     return "\n".join(lines)

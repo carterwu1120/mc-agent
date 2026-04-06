@@ -15,15 +15,27 @@ function _hasNearbyBlock(bot, names, maxDistance = 8) {
     return !!bot.findBlock({ matching: ids, maxDistance })
 }
 
+function _durabilityPct(item) {
+    if (!item || !item.maxDurability) return null
+    return Math.round(((item.maxDurability - item.durabilityUsed) / item.maxDurability) * 100)
+}
+
+function _itemInfo(item) {
+    if (!item) return null
+    const pct = _durabilityPct(item)
+    return pct !== null ? { name: item.name, durability_pct: pct } : { name: item.name }
+}
+
 function _equipmentState(bot) {
+    const slots = bot.inventory.slots
     return {
-        main_hand: bot.heldItem?.name ?? null,
-        off_hand: bot.inventory.slots[45]?.name ?? null,
+        main_hand: _itemInfo(bot.heldItem),
+        off_hand:  _itemInfo(slots[45]),
         armor: {
-            head: bot.inventory.slots[5]?.name ?? null,
-            torso: bot.inventory.slots[6]?.name ?? null,
-            legs: bot.inventory.slots[7]?.name ?? null,
-            feet: bot.inventory.slots[8]?.name ?? null,
+            head:  _itemInfo(slots[5]),
+            torso: _itemInfo(slots[6]),
+            legs:  _itemInfo(slots[7]),
+            feet:  _itemInfo(slots[8]),
         },
     }
 }

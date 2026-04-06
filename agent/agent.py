@@ -17,6 +17,7 @@ from agent.skills import planner as planner_skill
 from agent.skills import self_task as self_task_skill
 from agent.skills import task_arbitration as task_arbitration_skill
 from agent.skills import respawn as respawn_skill
+from agent.skills import tool_durability as tool_durability_skill
 from agent.executor import PlanExecutor
 from agent import task_memory
 
@@ -155,8 +156,9 @@ HANDLERS = {
     "activity_done":  _on_done,
     "task_started":   _on_task_started,
     "task_stopped":   _on_task_stopped,
-    "player_died":    _on_player_died,
-    "player_respawned": _on_player_respawned,
+    "player_died":        _on_player_died,
+    "player_respawned":   _on_player_respawned,
+    "tool_low_durability": tool_durability_skill.handle,
     "chat":           planner_skill.handle,
 }
 
