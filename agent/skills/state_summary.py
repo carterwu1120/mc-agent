@@ -87,9 +87,18 @@ def _resources(counter: Counter) -> dict:
     }
 
 
+def _item_name(item) -> str | None:
+    """Extract item name from either a plain string or {name, durability_pct} dict."""
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        return item.get("name")
+    return item
+
+
 def _has_good_weapon(counter: Counter, equipment: dict) -> bool:
     names = set(counter.keys())
-    main_hand = ((equipment or {}).get("main_hand"))
+    main_hand = _item_name((equipment or {}).get("main_hand"))
     if main_hand:
         names.add(main_hand)
     return any(name.endswith(("_sword", "_axe")) and name.startswith(GOOD_WEAPON_PREFIXES) for name in names)
@@ -99,8 +108,9 @@ def _has_good_armor(counter: Counter, equipment: dict) -> bool:
     pieces = set()
     armor = ((equipment or {}).get("armor") or {})
     for piece in armor.values():
-        if piece:
-            pieces.add(piece)
+        name = _item_name(piece)
+        if name:
+            pieces.add(name)
     for name in counter:
         if any(name.endswith(suffix) for suffix in ("_helmet", "_chestplate", "_leggings", "_boots")):
             pieces.add(name)
