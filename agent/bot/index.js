@@ -3,6 +3,7 @@ const minecraftProtocolForge = require('minecraft-protocol-forge')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { initLogger } = require('./logger')
 const bridge = require('./bridge')
+const activityStack = require('./activity')
 const { handle } = require('./commands')
 const eating = require('./eating')
 const inventory = require('./inventory')
@@ -90,6 +91,13 @@ bot.once('spawn', () => {
     ;(async () => { await combat.craftMissingArmor(bot); await combat.equipArmor(bot); await combat.equipWeapon(bot) })()
 
     setInterval(() => bridge.sendState(bot, 'tick'), 2000)
+
+    // Register respawn listener only after first join, so it won't fire on initial spawn
+    bot.on('spawn', () => {
+        _pendingDeathInfo = null
+        console.log(`[Bot] 重生！位置：${JSON.stringify(bot.entity.position)}`)
+        bridge.sendState(bot, 'player_respawned', { spawnPos: bot.entity.position })
+    })
 })
 
 bot.once('health', () => {
@@ -107,6 +115,26 @@ bot.on('chat', (username, message) => {
     }
 
     bridge.sendState(bot, 'chat', { from: username, message })
+})
+
+let _pendingDeathInfo = null
+
+bot.on('health', () => {
+    if (bot.health > 0 || _pendingDeathInfo !== null) return
+
+    const stack = activityStack.getStack()
+    // Use bottom frame (original long-running task), not top (which may be combat/transient)
+    const baseFrame = stack.length > 0 ? stack[0] : null
+    const topFrame = stack.length > 0 ? stack[stack.length - 1] : null
+    _pendingDeathInfo = {
+        cause: bot.entity?.isInLava ? 'lava' : (bot.entity?.isInWater ? 'drowning' : 'other'),
+        deathPos: bot.entity?.position ? { ...bot.entity.position } : null,
+        startPos: baseFrame?.startPos ?? null,
+        lastActivity: baseFrame?.activity ?? null,
+        lastGoal: baseFrame?.goal ?? null,
+    }
+    console.log(`[Bot] 死亡！原因：${_pendingDeathInfo.cause}，startPos：${JSON.stringify(_pendingDeathInfo.startPos)}`)
+    bridge.sendState(bot, 'player_died', _pendingDeathInfo)
 })
 
 bot.on('error', (err) => console.error(`[Error] ${err.message}`))

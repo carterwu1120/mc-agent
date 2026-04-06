@@ -30,8 +30,12 @@ function _equipmentState(bot) {
 
 const wss = new WebSocketServer({ port: 3001 })
 let agentSocket = null
+let _initialized = false
+
+function isInitialized() { return _initialized }
 
 function init(bot, onAction) {
+    _initialized = true
     wss.on('connection', (ws) => {
         console.log('[WS] Agent 已連線')
         agentSocket = ws
@@ -90,4 +94,4 @@ function sendState(bot, type, extra = {}) {
     agentSocket.send(JSON.stringify(state))
 }
 
-module.exports = { init, sendState }
+module.exports = { init, sendState, isInitialized }

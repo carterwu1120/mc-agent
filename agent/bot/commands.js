@@ -339,6 +339,7 @@ function handle(bot, msg) {
                     console.log('[Action] 找不到玩家')
                 }
             }
+            setTimeout(() => bridge.sendState(bot, 'action_done'), 500)
             break
         }
 

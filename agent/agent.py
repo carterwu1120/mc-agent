@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pathlib
 import re
 from collections import deque
 import websockets
@@ -22,6 +23,7 @@ load_dotenv()
 init_logger("brain")
 
 WS_URL = os.environ.get("BOT_WS_URL", "ws://localhost:3001")
+DEATH_FILE = pathlib.Path(__file__).parent / 'data' / 'death.json'
 
 # ── 在這裡切換 LLM ────────────────────────────────────────
 llm: LLMClient = GeminiClient()
@@ -82,6 +84,64 @@ def _build_and_save_task(activity: str, goal: dict) -> None:
     task_memory.save(goal_str, [resume_cmd])
     print(f"[TaskMem] 記錄任務: {goal_str}")
 
+async def _on_player_died(state: dict, _llm: LLMClient):
+    cause = state.get('cause', 'other')
+    start_pos = state.get('startPos')
+    last_activity = state.get('lastActivity')
+    last_goal = state.get('lastGoal')
+
+    if executor.is_running():
+        executor.abort()
+
+    task = task_memory.load()
+    if task and task.get('status') == 'running':
+        task_memory.interrupt('death')
+
+    death_info = {
+        'cause': cause,
+        'startPos': start_pos,
+        'lastActivity': last_activity,
+        'lastGoal': last_goal,
+    }
+    DEATH_FILE.write_text(json.dumps(death_info), encoding='utf-8')
+    print(f'[Death] 死亡記錄：{death_info}')
+
+    return [{'command': 'chat', 'text': f'我死了（{cause}），重生後會繼續任務。'}]
+
+
+async def _on_player_respawned(state: dict, _llm: LLMClient):
+    if not DEATH_FILE.exists():
+        return None
+
+    death_info = json.loads(DEATH_FILE.read_text(encoding='utf-8'))
+    DEATH_FILE.unlink(missing_ok=True)
+
+    cause = death_info.get('cause', 'other')
+    start_pos = death_info.get('startPos')
+
+    task = task_memory.load()
+    if not task or task.get('status') != 'interrupted':
+        return None
+
+    steps = task.get('steps', [])
+    remaining = [s['cmd'] for s in steps if s['status'] not in ('done',)] if steps \
+                else task['commands'][task.get('currentStep', 0):]
+
+    if not remaining:
+        return None
+
+    commands = []
+    if cause in ('lava', 'drowning') or start_pos is None:
+        print(f'[Death] {cause} 死亡，捨棄原始位置，直接重新開始任務')
+    else:
+        x, y, z = start_pos.get('x', 0), start_pos.get('y', 64), start_pos.get('z', 0)
+        commands.append(f"tp {x:.0f} {y:.0f} {z:.0f}")
+        print(f'[Death] 正常死亡，傳送回 ({x:.0f}, {y:.0f}, {z:.0f}) 後繼續任務')
+
+    commands.extend(remaining)
+    return {'action': 'plan', 'commands': commands, 'goal': task.get('goal', '恢復任務')}
+
+
 # ── 各事件對應的 skill handler ────────────────────────────
 HANDLERS = {
     "inventory_full": inventory_skill.handle,
@@ -93,6 +153,8 @@ HANDLERS = {
     "activity_done":  _on_done,
     "task_started":   _on_task_started,
     "task_stopped":   _on_task_stopped,
+    "player_died":    _on_player_died,
+    "player_respawned": _on_player_respawned,
     "chat":           planner_skill.handle,
 }
 
