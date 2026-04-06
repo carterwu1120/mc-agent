@@ -215,3 +215,17 @@ def summarize_state(state: dict, mode: str = "companion_survival") -> dict:
 
 def summary_json(state: dict, mode: str = "companion_survival") -> str:
     return json.dumps(summarize_state(state, mode=mode), ensure_ascii=False, indent=2)
+
+
+def equipment_summary(state: dict) -> str:
+    """Format current equipment as a human-readable string for LLM prompts."""
+    equipment = state.get('equipment') or {}
+    armor = equipment.get('armor') or {}
+    lines = [
+        f"主手：{equipment.get('main_hand') or '空'}",
+        f"頭盔：{armor.get('head') or '無'}",
+        f"胸甲：{armor.get('torso') or '無'}",
+        f"護腿：{armor.get('legs') or '無'}",
+        f"靴子：{armor.get('feet') or '無'}",
+    ]
+    return "\n".join(lines)
