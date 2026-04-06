@@ -2,6 +2,7 @@ import json
 import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
+from agent.skills.commands_ref import command_list
 
 ALLOWED_COMMANDS = {
     "chop", "mine", "chat", "idle", "home", "back", "surface", "explore", "withdraw", "fishing_decision"
@@ -176,14 +177,17 @@ def _is_valid_decision(decision: dict) -> bool:
     return True
 
 SYSTEM_PROMPTS = {
-    "mining": """你是 Minecraft 機器人的挖礦卡住處理助手。
+    "mining": f"""你是 Minecraft 機器人的挖礦卡住處理助手。
 機器人在挖礦時遇到障礙而中斷，請根據當前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{"command": "chop", "text": "...理由..."}
-{"command": "mine", "args": ["iron"], "text": "...理由..."}
-{"command": "chat", "text": "...需要玩家幫助的說明..."}
-{"command": "idle", "text": "...理由..."}
+{{"command": "chop", "text": "...理由..."}}
+{{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}}
+{{"command": "chat", "text": "...需要玩家幫助的說明..."}}
+{{"command": "idle", "text": "...理由..."}}
+
+【可用指令】
+{command_list(["chop", "mine", "chat", "idle"])}
 
 決策原則：
 - 若原因為「無稿子且無法合成」→ 背包缺木材就先去砍樹（chop），有木材但缺鐵就先挖鐵礦（mine iron）
@@ -191,18 +195,21 @@ SYSTEM_PROMPTS = {
 - 其他情況 → idle
 """,
 
-    "smelting": """你是 Minecraft 機器人的燒製卡住處理助手。
+    "smelting": f"""你是 Minecraft 機器人的燒製卡住處理助手。
 機器人在燒製過程中遇到依賴不足或材料問題而中斷，請根據當前資源決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}
-{"command": "mine", "args": ["diamond", "5"], "text": "...理由..."}
-{"command": "mine", "args": ["stone", "8"], "text": "...理由..."}
-{"command": "chop", "goal": {"logs": 4}, "text": "...理由..."}
-{"command": "home", "text": "...理由..."}
-{"command": "withdraw", "args": ["oak_log", "16", "1"], "text": "...理由..."}
-{"command": "chat", "text": "...提醒內容..."}
-{"command": "idle", "text": "...理由..."}
+{{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}}
+{{"command": "mine", "args": ["diamond", "5"], "text": "...理由..."}}
+{{"command": "mine", "args": ["stone", "8"], "text": "...理由..."}}
+{{"command": "chop", "goal": {{"logs": 4}}, "text": "...理由..."}}
+{{"command": "home", "text": "...理由..."}}
+{{"command": "withdraw", "args": ["oak_log", "16", "1"], "text": "...理由..."}}
+{{"command": "chat", "text": "...提醒內容..."}}
+{{"command": "idle", "text": "...理由..."}}
+
+【可用指令】
+{command_list(["mine", "chop", "home", "withdraw", "chat", "idle"])}
 
 決策原則：
 - 若 reason 是 missing_dependency，優先根據 missing / needed_for / suggested_actions 決定下一步
@@ -219,16 +226,19 @@ SYSTEM_PROMPTS = {
 - 禁止回覆 fish、smelt
 """,
 
-    "chopping": """你是 Minecraft 機器人的砍樹卡住處理助手。
+    "chopping": f"""你是 Minecraft 機器人的砍樹卡住處理助手。
 機器人在砍樹時附近找不到可砍的樹，請根據目前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{"command": "back", "text": "...理由..."}
-{"command": "surface", "text": "...理由..."}
-{"command": "explore", "args": ["trees"], "text": "...理由..."}
-{"command": "home", "text": "...理由..."}
-{"command": "chat", "text": "...提醒內容..."}
-{"command": "idle", "text": "...理由..."}
+{{"command": "back", "text": "...理由..."}}
+{{"command": "surface", "text": "...理由..."}}
+{{"command": "explore", "args": ["trees"], "text": "...理由..."}}
+{{"command": "home", "text": "...理由..."}}
+{{"command": "chat", "text": "...提醒內容..."}}
+{{"command": "idle", "text": "...理由..."}}
+
+【可用指令】
+{command_list(["back", "surface", "explore", "home", "chat", "idle"])}
 
 決策原則：
 - 若目前明顯在地底或附近沒有樹，但這次任務仍是砍樹，優先用 surface；若不確定 surface 是否可行，再用 back 回到先前位置
@@ -240,14 +250,17 @@ SYSTEM_PROMPTS = {
 - 只有在 prompt 中有明確危險證據（例如 danger_score 很高、附近 hostile、血量/飢餓危險）時，才可以把安全性當成主要理由
 """,
 
-    "surface": """你是 Minecraft 機器人的回到地表卡住處理助手。
+    "surface": f"""你是 Minecraft 機器人的回到地表卡住處理助手。
 機器人在前往地表時因路徑或地形問題中斷，請根據目前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{"command": "back", "text": "...理由..."}
-{"command": "home", "text": "...理由..."}
-{"command": "chat", "text": "...提醒內容..."}
-{"command": "idle", "text": "...理由..."}
+{{"command": "back", "text": "...理由..."}}
+{{"command": "home", "text": "...理由..."}}
+{{"command": "chat", "text": "...提醒內容..."}}
+{{"command": "idle", "text": "...理由..."}}
+
+【可用指令】
+{command_list(["back", "home", "chat", "idle"])}
 
 決策原則：
 - 若目前有可用的上一個位置，優先用 back

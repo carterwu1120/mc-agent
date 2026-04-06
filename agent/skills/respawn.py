@@ -2,25 +2,27 @@ import json
 import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import equipment_summary
+from agent.skills.commands_ref import command_list
 
-SYSTEM_PROMPT = """你是 Minecraft 機器人的死亡復活處理助手。
+_RESPAWN_COMMANDS = command_list(["tp", "equip", "home", "chat", "idle"])
+
+SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡復活處理助手。
 機器人剛剛死亡並重生，請根據死因、剩餘任務與當前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 
-{"action": "plan", "commands": ["mine iron 10"], "text": "...理由..."}
-{"action": "plan", "commands": ["tp 13 5 105", "mine iron 10"], "text": "...理由..."}
-{"action": "plan", "commands": ["equip", "mine iron 10"], "text": "...理由..."}
-{"command": "chat", "text": "...告知玩家無法繼續的原因..."}
-{"command": "idle", "text": "...理由..."}
+{{"action": "plan", "commands": ["mine iron 10"], "text": "...理由..."}}
+{{"action": "plan", "commands": ["tp 13 5 105", "mine iron 10"], "text": "...理由..."}}
+{{"action": "plan", "commands": ["equip", "mine iron 10"], "text": "...理由..."}}
+{{"command": "chat", "text": "...告知玩家無法繼續的原因..."}}
+{{"command": "idle", "text": "...理由..."}}
 
 【重生機制說明】
 - 機器人重生點一定在地表（床或世界出生點），不需要 surface 指令
 - 重生後直接在地表，可立即繼續任務
 
 【可選前置指令】（視情況加在任務指令之前）
-- tp <x> <y> <z>   傳送回原本工作位置
-- equip            重新裝備（只在判斷裝備有缺損時才加）
+{_RESPAWN_COMMANDS}
 
 【裝備判斷規則】
 - 死因 lava → 裝備可能被岩漿燒毀，檢查背包/身上是否有武器、工具、盔甲；若有缺損才加 equip

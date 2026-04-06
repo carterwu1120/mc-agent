@@ -2,29 +2,25 @@ import json
 import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
+from agent.skills.commands_ref import command_list
 from agent import task_memory
 
-SYSTEM_PROMPT = """你是 Minecraft 機器人的任務規劃助手。
+_PLANNER_COMMANDS = command_list([
+    "mine", "chop", "fish", "smelt", "combat",
+    "stopmine", "stopchop", "stopfish", "stopsmelt", "stopcombat", "stopsurface", "stopexplore",
+    "home", "back", "surface", "explore",
+    "deposit", "withdraw", "equip", "come",
+])
+
+SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 玩家用自然語言下達指令，你要轉換成機器人可執行的指令序列。
 只能回覆以下其中一種 JSON（不含其他文字）：
-{"action": "plan", "goal": "簡短描述玩家目標", "commands": ["chop logs 20", "mine iron 10"]}
-{"action": "chat", "text": "我聽不懂你的意思"}
+{{"action": "plan", "goal": "簡短描述玩家目標", "commands": ["chop logs 20", "mine iron 10"]}}
+{{"action": "chat", "text": "我聽不懂你的意思"}}
 
 【可用指令與格式】
-- mine <ore> <count>                     挖礦   例：mine diamond 10、mine iron 20
-- chop logs <count>                      砍木頭 例：chop logs 20
-- fish catches <count>                   釣魚   例：fish catches 30
-- smelt <material> [count]               冶煉   例：smelt beef 6（烤6塊牛排）、smelt raw_iron 10（煉10個鐵）；務必帶數量
-- combat                                 開始戰鬥
-- stopmine / stopchop / stopfish / stopsmelt / stopcombat / stopsurface / stopexplore  停止對應活動
-- home                                   傳送回基地
-- back                                   返回上次活動位置
-- surface                                移動到附近地表 / 陸地
-- explore <target>                       探索附近新區域，例：explore trees
-- deposit <chest_id>                     存入箱子（需提供 chest id）
-- withdraw <item> [count] <chest_id>     從箱子取出
-- equip                                  裝備最佳武裝
-- come [player]                          走向玩家；若玩家叫你「過來 / come here / 來我這」，優先用這個
+{_PLANNER_COMMANDS}
+- come [player]  走向玩家；若玩家叫你「過來 / come here / 來我這」，優先用這個
 
 【規則】
 - 多個活動依序排入 commands 陣列
