@@ -16,6 +16,7 @@ from agent.skills import food as food_skill
 from agent.skills import planner as planner_skill
 from agent.skills import self_task as self_task_skill
 from agent.skills import task_arbitration as task_arbitration_skill
+from agent.skills import respawn as respawn_skill
 from agent.executor import PlanExecutor
 from agent import task_memory
 
@@ -109,7 +110,7 @@ async def _on_player_died(state: dict, _llm: LLMClient):
     return [{'command': 'chat', 'text': f'我死了（{cause}），重生後會繼續任務。'}]
 
 
-async def _on_player_respawned(state: dict, _llm: LLMClient):
+async def _on_player_respawned(state: dict, llm: LLMClient):
     if not DEATH_FILE.exists():
         return None
 
@@ -127,19 +128,20 @@ async def _on_player_respawned(state: dict, _llm: LLMClient):
     remaining = [s['cmd'] for s in steps if s['status'] not in ('done',)] if steps \
                 else task['commands'][task.get('currentStep', 0):]
 
+    # Strip leftover tp commands from previous death recoveries
+    remaining = [c for c in remaining if not c.startswith('tp ')]
+
     if not remaining:
         return None
 
-    commands = []
-    if cause in ('lava', 'drowning') or start_pos is None:
-        print(f'[Death] {cause} 死亡，捨棄原始位置，直接重新開始任務')
-    else:
-        x, y, z = start_pos.get('x', 0), start_pos.get('y', 64), start_pos.get('z', 0)
-        commands.append(f"tp {x:.0f} {y:.0f} {z:.0f}")
-        print(f'[Death] 正常死亡，傳送回 ({x:.0f}, {y:.0f}, {z:.0f}) 後繼續任務')
-
-    commands.extend(remaining)
-    return {'action': 'plan', 'commands': commands, 'goal': task.get('goal', '恢復任務')}
+    respawn_state = dict(state)
+    respawn_state.update({
+        'cause': cause,
+        'startPos': start_pos,
+        'remaining': remaining,
+        'goal': task.get('goal', ''),
+    })
+    return await respawn_skill.handle(respawn_state, llm)
 
 
 # ── 各事件對應的 skill handler ────────────────────────────
