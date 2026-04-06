@@ -152,6 +152,8 @@ activityStack.resumeCurrent(bot)
 | `craft_decision` | Needs crafting decision | Yes |
 | `food_low` | Food < 10 & idle & no food in inventory | Yes — deterministic, no LLM |
 | `chat` | Player sent a message | Yes — planner skill (natural language → commands) |
+| `player_died` | Bot health → 0 (detected via `bot.on('health')`) | Yes — aborts executor, saves death info to `agent/data/death.json` |
+| `player_respawned` | Bot respawned (registered inside `bot.once('spawn')`) | Yes — LLM respawn skill decides recovery plan |
 
 **Key rule:** `activity_done` is NOT routed to LLM — it signals `PlanExecutor` and marks task done. Only `activity_stuck` triggers LLM intervention.
 
@@ -205,14 +207,18 @@ All commands from Python arrive in `handle(bot, msg)` via WebSocket. Add new act
 
 ```python
 HANDLERS = {
-    "inventory_full": inventory_skill.handle,
-    "craft_decision": craft_decision_skill.handle,
-    "activity_stuck": activity_stuck_skill.handle,
-    "food_low":       food_skill.handle,
-    "tick":           self_task_skill.handle,
-    "action_done":    _on_done,    # signals PlanExecutor
-    "activity_done":  _on_done,   # signals PlanExecutor
-    "chat":           planner_skill.handle,
+    "inventory_full":   inventory_skill.handle,
+    "craft_decision":   craft_decision_skill.handle,
+    "activity_stuck":   activity_stuck_skill.handle,
+    "food_low":         food_skill.handle,
+    "tick":             self_task_skill.handle,
+    "action_done":      _on_done,          # signals PlanExecutor
+    "activity_done":    _on_done,          # signals PlanExecutor
+    "task_started":     _on_task_started,
+    "task_stopped":     _on_task_stopped,
+    "player_died":      _on_player_died,   # aborts executor, writes death.json
+    "player_respawned": _on_player_respawned,  # LLM respawn skill
+    "chat":             planner_skill.handle,
 }
 ```
 
@@ -271,7 +277,9 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 
 ### Available LLM Commands
 
-`fish`, `chop`, `mine` (args: ore type count), `smelt` (args: material), `combat`, `hunt`, `getfood`, `surface`, `explore`, `equip`, `come`, `home`, `back`, `setmode` (args: mode), `labelchest` (args: id label), `readchest` (args: [id]), `deposit` (args: chest_id), `withdraw` (args: item [count] chest_id), `makechest`, `chat`, `idle`
+Canonical definitions live in `agent/skills/commands_ref.py`. Use `command_list(keys)` to generate formatted prompt sections — do not duplicate command descriptions inline in skill files.
+
+`fish`, `chop`, `mine` (args: ore type count), `smelt` (args: material count), `combat`, `hunt`, `getfood`, `surface`, `explore` (args: target), `equip`, `come` (args: [player]), `home`, `back`, `tp` (args: x y z), `setmode` (args: mode), `deposit` (args: chest_id), `withdraw` (args: item [count] chest_id), `chat`, `idle`
 
 ### Existing Skills
 
@@ -279,12 +287,19 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 |------|-------------|---------|
 | `inventory.py` | `inventory_full` | Drop/plan — LLM decides drop, deposit+resume plan, or continue |
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
-| `activity_stuck.py` | `activity_stuck` | Activity-specific recovery (mining/smelting/fishing/chopping/surface) |
+| `activity_stuck.py` | `activity_stuck` | 單步恢復；executor 執行中時附帶 plan_context，LLM 可回傳 `{"action":"replan","commands":[...]}` 替換剩餘步驟 |
 | `food.py` | `food_low` | 補充食物（確定性邏輯，不呼叫 LLM） |
 | `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復（跳過已 done 步驟） |
+| `respawn.py` | `player_respawned` | LLM 決定重生後恢復計畫（tp 回原位 / 直接繼續 / equip / idle） |
 | `self_task.py` | `tick` (idle, 60s) | 自主任務規劃；companion mode 不執行；workflow mode 自動恢復中斷任務 |
 | `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
-| `activity_stuck.py` | `activity_stuck` | 單步恢復；executor 執行中時附帶 plan_context，LLM 可回傳 `{"action":"replan","commands":[...]}` 替換剩餘步驟 |
+
+### Shared Skill Utilities (`agent/skills/`)
+
+| File | Purpose |
+|------|---------|
+| `commands_ref.py` | Canonical command registry — `COMMANDS` dict + `command_list(keys)` helper. Single source of truth for all LLM-issuable commands. Import and call `command_list(["mine","chop",...])` to generate prompt sections. |
+| `state_summary.py` | `summary_json(state)` — full state summary for LLM context. `equipment_summary(state)` — formatted equipment string (main hand + armor slots). |
 
 ### Operating Modes (`agent/data/mode.json`)
 
@@ -313,3 +328,5 @@ llm: LLMClient = GeminiClient()
 3. **stuck → LLM** — only when stuck mid-activity does the LLM intervene to decide recovery.
 4. **LIFO stack** — activities form a stack. Pushing auto-pauses the current top; popping auto-resumes the previous. No manual save/restore variables needed.
 5. **Prompts live in skills** — system prompts belong in `agent/skills/`, not in JS. JS only sends state, Python decides meaning.
+6. **Command descriptions live in `commands_ref.py`** — never duplicate command usage/examples inline in skill prompts. Import `command_list(keys)` instead.
+7. **Death → LLM** — on `player_died`, executor is aborted and task interrupted. On `player_respawned`, `respawn.py` skill decides the recovery plan (tp back, equip, continue, or idle).
