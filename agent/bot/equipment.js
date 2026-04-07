@@ -22,9 +22,15 @@ const SLOT_ALIASES = {
     boots: 'feet',
 }
 
+function _isUsable(item) {
+    if (!item) return false
+    if (!item.maxDurability) return true  // no durability (e.g. netherite has it, but non-tool items don't)
+    return item.durabilityUsed < item.maxDurability
+}
+
 function _findBestItem(bot, names) {
     return names
-        .map(name => bot.inventory.items().find(i => i.name === name))
+        .map(name => bot.inventory.items().find(i => i.name === name && _isUsable(i)))
         .find(Boolean) ?? null
 }
 
