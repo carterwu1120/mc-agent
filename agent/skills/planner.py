@@ -9,7 +9,7 @@ _PLANNER_COMMANDS = command_list([
     "mine", "chop", "fish", "smelt", "combat",
     "stopmine", "stopchop", "stopfish", "stopsmelt", "stopcombat", "stopsurface", "stopexplore",
     "home", "back", "surface", "explore",
-    "deposit", "withdraw", "equip", "come",
+    "deposit", "withdraw", "makechest", "labelchest", "equip", "come",
 ])
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
@@ -32,6 +32,13 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - smelt 指令必須帶數量，不可省略，否則會把所有原料全部放入熔爐
 - 玩家問問題、打招呼、或說的不是任務指令時，回傳 chat
 - 只輸出 JSON，不要加任何解釋或其他文字
+
+【箱子相關流程】
+- 若已有對應類別的箱子（chests 資訊中有 label 且 freeSlots > 0）→ 直接 deposit <id>
+- 若沒有對應箱子，但需要整理物品 → makechest 後接 labelchest + deposit：
+  ["makechest", "labelchest {{new_chest_id}} <label>", "deposit {{new_chest_id}}"]
+  {{new_chest_id}} 是佔位符，makechest 完成後自動填入，不要替換成數字
+  label 根據要存入的物品類型：wood / ore / stone / misc / food
 """
 
 RESUME_PATTERNS = [

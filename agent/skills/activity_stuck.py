@@ -289,6 +289,25 @@ SYSTEM_PROMPTS = {
 """,
 }
 
+SYSTEM_PROMPTS["makechest"] = f"""你是 Minecraft 機器人的箱子製作問題處理助手。
+機器人嘗試製作並放置箱子但失敗了，請根據當前狀態決定下一步。
+每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
+只能回覆以下其中一種 JSON（不要加任何其他文字）：
+{{"action": "replan", "commands": ["chop logs 16", "makechest", "labelchest {{{{new_chest_id}}}} ore", "deposit {{{{new_chest_id}}}}"], "text": "...理由..."}}
+{{"command": "chat", "text": "...需要玩家幫助的說明..."}}
+{{"command": "idle", "text": "...理由..."}}
+
+【可用指令】
+{command_list(["chop", "makechest", "labelchest", "deposit", "chat", "idle"])}
+
+決策原則：
+- 失敗原因 failed 通常是背包滿或材料不足
+- 若有足夠木材（logs 或 planks ≥ 16）→ replan 直接重試 makechest（背包現在應有空間）
+- 若缺木材 → replan 先去砍樹再 makechest
+- 若背包完全沒有垃圾可丟且空間為 0 → chat 告知玩家
+- labelchest 和 deposit 裡用 {{new_chest_id}} 當佔位符（不要替換成數字）
+"""
+
 SYSTEM_PROMPT_FALLBACK = """你是 Minecraft 機器人的問題處理助手。
 機器人在執行任務時遇到問題而中斷，請根據當前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。

@@ -19,6 +19,7 @@ class PlanExecutor:
         self._step_results: list[dict] = []
         self._last_heartbeat: float = 0.0
         self._run_id: int = 0
+        self._context: dict = {}  # runtime values substituted into later commands
 
     def heartbeat(self) -> None:
         """Called on every tick event to confirm JS is still alive."""
@@ -31,6 +32,7 @@ class PlanExecutor:
         self._ws = ws
         self._replan_commands = None
         self._step_results = []
+        self._context = {}
 
         if goal:
             task_memory.save(goal, commands)
@@ -44,7 +46,7 @@ class PlanExecutor:
                 task_memory.mark_step_failed(i, "aborted")
                 break
 
-            cmd_str = commands[i]
+            cmd_str = _substitute(commands[i], self._context)
             task_memory.update_step(i)
             task_memory.mark_step_running(i)
             self._current_step_index = i
@@ -139,6 +141,11 @@ class PlanExecutor:
         if not self._current_command:
             self._done.set()
             return
+
+        # Capture runtime values from action_done state for later substitution
+        if state:
+            if 'new_chest_id' in state:
+                self._context['new_chest_id'] = str(state['new_chest_id'])
 
         event_type = (state or {}).get('type')
         command = self._current_command.get('command')
@@ -261,6 +268,13 @@ class PlanExecutor:
                 pass
             print(f'[Executor] 摘要: {text}')
 
+
+
+def _substitute(cmd_str: str, context: dict) -> str:
+    """Replace {key} placeholders in a command string with runtime context values."""
+    for key, value in context.items():
+        cmd_str = cmd_str.replace(f'{{{key}}}', value)
+    return cmd_str
 
 
 def _parse(cmd_str: str) -> dict:

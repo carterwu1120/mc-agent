@@ -94,6 +94,7 @@ function sendState(bot, type, extra = {}) {
             if (i.maxDurability) entry.durability_pct = _durabilityPct(i)
             return entry
         }),
+        inventory_slots: { used: bot.inventory.items().length, total: 36, free: 36 - bot.inventory.items().length },
         chests: getChests(),
         entities: Object.values(bot.entities)
             .filter(e => e.id !== bot.entity.id)

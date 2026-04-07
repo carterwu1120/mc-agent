@@ -34,6 +34,8 @@ COMMANDS: dict[str, dict] = {
     "equip":       {"desc": "裝備最佳武裝", "usage": "equip"},
     "deposit":     {"desc": "存入箱子",     "usage": "deposit <chest_id>",                 "example": "deposit 1"},
     "withdraw":    {"desc": "從箱子取出",   "usage": "withdraw <item> [count] <chest_id>", "example": "withdraw oak_log 16 1"},
+    "makechest":   {"desc": "合成並放置大箱子（自動登記，完成後 chest_id 存入 {new_chest_id}）", "usage": "makechest"},
+    "labelchest":  {"desc": "設定箱子類別", "usage": "labelchest <chest_id> <label>",      "example": "labelchest {new_chest_id} wood  （label: food/wood/stone/ore/misc）"},
     # ── Meta ──────────────────────────────────────────────────
     "chat":        {"desc": "傳送訊息給玩家", "usage": "chat"},
     "idle":        {"desc": "什麼都不做",     "usage": "idle"},

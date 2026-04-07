@@ -4,14 +4,24 @@ from agent.brain import LLMClient
 from agent.skills.state_summary import equipment_summary
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
-背包已滿，請決定最佳處理方式。
+背包格數已達警戒線（34/36 格），需要提前整理以保留合成空間。
+策略：提前在背包快滿時就處理，而不是等到完全滿再亂丟，目的是確保合成物品時背包有足夠空間。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 {"action": "drop", "items": ["diorite", "tuff"]}
 {"action": "plan", "commands": ["stop指令", "home", "deposit 1", "back", "resume指令"]}
 {"action": "continue"}
 
-選 plan 的時機：有已分類的箱子且還有空間（freeSlots > 0），且背包沒有明顯可以丟棄的垃圾時。
-commands 裡的 chest id（如 deposit 1）從下方提供的箱子資訊取得。
+選 plan 的時機與格式：
+
+① 有已分類箱子且有空間（freeSlots > 0）：
+{"action": "plan", "commands": ["stop指令", "home", "deposit <id>", "back", "resume指令"]}
+commands 裡的 chest id 從下方提供的箱子資訊取得。
+
+② 沒有已分類箱子，但背包有足夠木材可做箱子（wood_as_planks ≥ 16，logs 或 planks 皆可）：
+{"action": "plan", "commands": ["stop指令", "home", "makechest", "labelchest {new_chest_id} <label>", "deposit {new_chest_id}", "back", "resume指令"]}
+{new_chest_id} 是佔位符，makechest 完成後會自動填入實際 id，不要替換成數字。
+label 根據背包最多的材料類型選擇：wood / ore / stone / misc。
+
 resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
 
 【各活動對應的 stop / resume 指令格式】
@@ -84,10 +94,18 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         return base
     inv_summary = "\n".join(_fmt_inv_item(i) for i in inventory)
 
+    labeled_chests = [c for c in chests if c.get('label')]
     chests_summary = "\n".join(
         f"- id={c['id']} label={c.get('label','未分類')} freeSlots={c.get('freeSlots','?')}"
-        for c in chests if c.get('label')
+        for c in labeled_chests
     ) or "（無已分類箱子）"
+    logs_count = sum(i['count'] for i in inventory if i['name'].endswith('_log'))
+    planks_count = sum(i['count'] for i in inventory if i['name'].endswith('_planks'))
+    # 1 chest = 8 planks, need 2 chests = 16 planks; logs convert 1:4 to planks
+    wood_as_planks = planks_count + logs_count * 4
+    can_make_chest = wood_as_planks >= 16
+    if not labeled_chests:
+        chests_summary += f"\n（背包中有木材：{logs_count} logs + {planks_count} planks = {wood_as_planks} planks 等效，{'足夠' if can_make_chest else '不足'}製作箱子（需要 16 planks））"
 
     # Current goal/progress from stack for mine remaining calculation
     top = stack[-1] if stack else {}
@@ -96,9 +114,12 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     goal_str = f"目標：{goal}，進度：{progress}" if goal else "（無目標）"
 
     equip_summary = equipment_summary(state)
+    slots = state.get("inventory_slots") or {}
+    slots_used = slots.get("used", len(inventory))
+    slots_free = slots.get("free", 36 - len(inventory))
 
     prompt = (
-        f"背包已滿，機器人目前的活動：{activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20。\n"
+        f"背包狀態：{slots_used}/36 格已用，剩餘 {slots_free} 格。機器人目前的活動：{activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}\n\n"
         f"目前裝備欄（耐久度）：\n{equip_summary}\n\n"
         f"背包內容：\n{inv_summary}\n\n"

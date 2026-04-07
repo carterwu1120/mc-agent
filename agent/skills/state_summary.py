@@ -249,6 +249,7 @@ def summarize_state(state: dict, mode: str = "companion_survival") -> dict:
         "resources": resources,
         "capabilities": _capabilities(resources, equipment),
         "environment": _environment(state),
+        "inventory_slots": state.get("inventory_slots") or {"used": len(state.get("inventory") or []), "total": 36, "free": 36 - len(state.get("inventory") or [])},
         "tasks": {
             "player_task": state.get("player_task"),
             "queued_tasks": state.get("queued_tasks", []),

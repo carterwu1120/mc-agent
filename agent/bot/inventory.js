@@ -5,7 +5,7 @@ const { compactCompressibleItems } = require('./crafting')
 const { markBuried } = require('./buried')
 const activityStack = require('./activity')
 
-const INVENTORY_FULL = 36
+const INVENTORY_FULL = 34  // trigger 2 slots early so there's room to craft/place
 
 let _decision = null
 let _checking = false

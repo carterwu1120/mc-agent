@@ -198,7 +198,6 @@ function _findLargeChestSpot(bot) {
 }
 
 async function _placeChest(bot) {
-    const chestBlockId = bot.registry.blocksByName['chest']?.id
     const spot = _findLargeChestSpot(bot)
     if (!spot) { bot.chat('找不到放置大箱子的位置（需要兩格相鄰空地）'); return false }
 
@@ -232,7 +231,7 @@ async function _placeChest(bot) {
     _save(chests)
     console.log(`[Chest] 放置大箱子 id=${id} @ (${p.x}, ${p.y}, ${p.z})`)
     bot.chat(`大箱子已放置並登記 id=${id}，等待分類`)
-    return true
+    return id
 }
 
 // craftAndPlaceChest — 合成 2 個箱子（若不夠）並放置大箱子，自動登記
@@ -251,7 +250,7 @@ async function craftAndPlaceChest(bot) {
 
         const chestItemReg = bot.registry.itemsByName['chest']
         const recipe = chestItemReg ? bot.recipesFor(chestItemReg.id, null, 1, table)[0] : null
-        if (!recipe) { bot.chat('找不到箱子配方'); return false }
+        if (!recipe) { bot.chat(`找不到箱子配方（chestItemReg=${!!chestItemReg}，table=${!!table}）`); return false }
 
         try {
             await bot.craft(recipe, need, table)

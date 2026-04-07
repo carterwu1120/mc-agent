@@ -190,8 +190,13 @@ function handle(bot, msg) {
 
         case 'makechest':
             ;(async () => {
-                await craftAndPlaceChest(bot)
-                bridge.sendState(bot, 'action_done')
+                const chestId = await craftAndPlaceChest(bot)
+                if (chestId) {
+                    bridge.sendState(bot, 'action_done', { new_chest_id: chestId })
+                } else {
+                    bot.chat('無法製作箱子，材料不足或空間不夠')
+                    bridge.sendState(bot, 'activity_stuck', { activity: 'makechest', reason: 'failed' })
+                }
             })()
             break
 
@@ -279,10 +284,14 @@ function handle(bot, msg) {
 
         case 'inv': {
             const items = bot.inventory.items()
+            const used = items.length
+            const total = 36
+            const free = total - used
             if (items.length === 0) {
-                console.log('[Inv] 背包是空的')
+                console.log(`[Inv] 背包是空的 (0/${total}，剩 ${free} 格)`)
             } else {
                 items.forEach(i => console.log(`[Inv] ${i.name} x${i.count}`))
+                console.log(`[Inv] 共 ${used}/${total} 格，剩餘 ${free} 格`)
             }
             break
         }
