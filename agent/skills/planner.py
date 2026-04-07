@@ -170,6 +170,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     health = state.get("health", "?")
     food = state.get("food", "?")
     stack = state.get("stack", [])
+    chests = state.get("chests", [])
 
     top = stack[-1] if stack else {}
     goal = top.get("goal", {})
@@ -183,12 +184,18 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         else ""
     )
 
+    chests_summary = "\n".join(
+        f"- id={c['id']} label={c.get('label','未分類')} freeSlots={c.get('freeSlots','?')} contents={[i['name'] for i in c.get('contents', [])]}"
+        for c in chests
+    ) or "（無已登記箱子）"
+
     prompt = (
         f"玩家說：「{message}」\n\n"
         f"機器人目前狀態：活動={activity}，模式={mode}，"
         f"位置=({pos.get('x',0):.0f}, {pos.get('y',0):.0f}, {pos.get('z',0):.0f})，"
         f"血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}{task_ctx}\n\n"
+        f"已登記箱子：\n{chests_summary}\n\n"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請根據玩家的話決定要做什麼。"
     )
