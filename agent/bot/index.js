@@ -137,6 +137,8 @@ bot.on('chat', (username, message) => {
         return
     }
 
+    if (message.startsWith('/')) return  // Minecraft client command — ignore
+
     bridge.sendState(bot, 'chat', { from: username, message })
 })
 

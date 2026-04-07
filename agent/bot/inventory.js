@@ -188,19 +188,26 @@ function _waitForDecision(timeoutMs) {
     })
 }
 
+function checkFull(bot) {
+    const slots = bot.inventory.items().length
+    if (slots >= INVENTORY_FULL) {
+        _handleFull(bot)
+        return true
+    }
+    return false
+}
+
 function startMonitor(bot) {
     bot.on('playerCollect', (collector) => {
         if (collector.username !== bot.username) return
-        const slots = bot.inventory.items().length
-        if (slots >= INVENTORY_FULL) {
-            _handleFull(bot)
-        }
+        checkFull(bot)
     })
     console.log('[Inv] 背包監控已啟動')
 }
 
 module.exports = {
     startMonitor,
+    checkFull,
     applyInventoryDecision,
     buryItems: _buryItems,
     tidyInventory: _tidyInventory,

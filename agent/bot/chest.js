@@ -16,7 +16,7 @@ const LABEL_PATTERNS = {
 }
 
 // ore items that must be exact name matches (avoid matching tool/armor names)
-const ORE_EXACT = new Set(['diamond', 'emerald', 'coal', 'netherite_scrap', 'netherite_ingot', 'ancient_debris', 'amethyst_shard'])
+const ORE_EXACT = new Set(['diamond', 'emerald', 'coal', 'netherite_scrap', 'netherite_ingot', 'ancient_debris', 'amethyst_shard', 'diamond_block', 'emerald_block', 'gold_block', 'iron_block', 'coal_block', 'copper_block', 'lapis_block', 'redstone_block', 'netherite_block'])
 
 // never deposit these regardless of label
 const EQUIPMENT_SUFFIXES = ['_pickaxe', '_axe', '_sword', '_shovel', '_hoe', '_helmet', '_chestplate', '_leggings', '_boots', '_bow', 'crossbow', 'shield', 'elytra', 'trident']
