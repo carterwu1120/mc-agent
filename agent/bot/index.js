@@ -92,16 +92,27 @@ bot.once('spawn', () => {
 
     setInterval(() => bridge.sendState(bot, 'tick'), 2000)
 
-    let _lastDurabilityWarn = 0
+    let _lastDurabilityWarnAt = 0
     setInterval(() => {
-        const item = bot.heldItem
-        if (!item || !item.maxDurability) return
-        const pct = Math.round(((item.maxDurability - item.durabilityUsed) / item.maxDurability) * 100)
-        if (pct <= 10 && Date.now() - _lastDurabilityWarn > 60000) {
-            _lastDurabilityWarn = Date.now()
-            console.log(`[Durability] ${item.name} 耐久度剩餘 ${pct}%，通知 agent`)
-            bridge.sendState(bot, 'tool_low_durability', { item: item.name, durability_pct: pct })
+        const now = Date.now()
+        if (now - _lastDurabilityWarnAt < 60000) return
+        const slots = [
+            bot.heldItem,
+            bot.inventory.slots[5],  // helmet
+            bot.inventory.slots[6],  // chestplate
+            bot.inventory.slots[7],  // leggings
+            bot.inventory.slots[8],  // boots
+        ]
+        const lowItems = []
+        for (const item of slots) {
+            if (!item || !item.maxDurability) continue
+            const pct = Math.max(0, Math.round(((item.maxDurability - item.durabilityUsed) / item.maxDurability) * 100))
+            if (pct <= 10) lowItems.push({ item: item.name, durability_pct: pct })
         }
+        if (lowItems.length === 0) return
+        _lastDurabilityWarnAt = now
+        console.log(`[Durability] 耐久度警告：${lowItems.map(i => `${i.item} ${i.durability_pct}%`).join(', ')}`)
+        bridge.sendState(bot, 'tool_low_durability', { items: lowItems })
     }, 5000)
 
     // Register respawn listener only after first join, so it won't fire on initial spawn

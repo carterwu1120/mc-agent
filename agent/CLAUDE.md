@@ -280,7 +280,15 @@ The `text` field (if present) is sent as a chat message. `idle` means do nothing
 
 Canonical definitions live in `agent/skills/commands_ref.py`. Use `command_list(keys)` to generate formatted prompt sections — do not duplicate command descriptions inline in skill files.
 
-`fish`, `chop`, `mine` (args: ore type count), `smelt` (args: material count), `combat`, `hunt`, `getfood`, `surface`, `explore` (args: target), `equip`, `come` (args: [player]), `home`, `back`, `tp` (args: x y z), `setmode` (args: mode), `deposit` (args: chest_id), `withdraw` (args: item [count] chest_id), `chat`, `idle`
+**Activities:** `fish`, `chop`, `mine <ore> <count>`, `smelt <material> <count>`, `combat`, `hunt`, `getfood`, `surface`, `explore <target>`
+
+**Stop activities:** `stopfish`, `stopchop`, `stopmine`, `stopsmelt`, `stopcombat`, `stophunt`, `stopgetfood`, `stopsurface`, `stopexplore`
+
+**Navigation:** `home`, `back`, `come [player]`, `tp <x> <y> <z>`
+
+**Equipment & inventory:** `equip`, `deposit <chest_id>`, `withdraw <item> [count] <chest_id>`
+
+**Meta:** `chat`, `idle`, `setmode <mode>`
 
 ### Existing Skills
 

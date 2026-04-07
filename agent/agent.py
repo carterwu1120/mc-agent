@@ -325,6 +325,15 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
         for a in actions:
+            if isinstance(a, dict) and a.get("action") == "plan":
+                commands = a.get("commands", [])
+                goal = a.get("goal", "")
+                if commands:
+                    if executor.is_running():
+                        print('[Agent] 計畫執行中，中止舊計畫')
+                        executor.abort()
+                    asyncio.create_task(executor.execute(commands, ws, goal=goal))
+                continue
             if isinstance(a, dict) and a.get("action") == "replan":
                 if executor.is_running():
                     print(f"[Agent] activity_stuck replan: {a.get('commands')}")

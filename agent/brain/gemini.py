@@ -20,6 +20,7 @@ class GeminiClient(LLMClient):
 
         config = types.GenerateContentConfig(
             system_instruction=system,
+            response_mime_type="application/json",
         )
         response = await self._client.aio.models.generate_content(
             model=self._model_name,
