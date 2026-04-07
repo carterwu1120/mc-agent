@@ -36,7 +36,8 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 - 只能使用白名單指令：getfood, chop, mine, smelt, equip, tidy, idle
 - 若 resources.food.cooked_total 很低，優先 getfood
 - 若有大量 raw food 且 capabilities.can_smelt_food 為 true，可優先 smelt
-- 若沒有好武器或好護甲，可優先 equip
+- 若 capabilities.has_good_weapon 為 false 或 capabilities.has_good_armor 為 false，可優先 equip
+- 若 capabilities.low_durability_equipment 不為空（裝備快壞了），優先 equip 換上備用
 - 若背包已有足夠食物、工具、裝備，優先 idle
 - 若缺少熔爐所需材料，可用 mine stone <count>
 - 若缺少木材，可用 chop

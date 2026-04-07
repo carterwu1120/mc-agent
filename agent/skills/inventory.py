@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.state_summary import equipment_summary
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
 背包已滿，請決定最佳處理方式。
@@ -20,6 +21,11 @@ resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
 - smelting → stop: stopsmelt / resume: smelt <material>       例：smelt iron
 - idle     → 不需要 stop，resume 留空（只執行 home deposit back）
 
+【裝備欄狀態說明】
+- 裝備欄（主手、頭盔、胸甲、護腿、靴子）不佔背包格，無法用 drop 丟棄
+- 若裝備耐久 0%（已損壞），代表該裝備實際上已無法使用，背包若有備用則可考慮用 equip 換上
+- 裝備欄資訊僅供判斷，不能列入 drop 的 items 清單
+
 【絕對不能丟的物品】
 - 食物（cooked_beef、bread、fish 等）
 - 鐵質以上工具與武器（iron_pickaxe、iron_axe、sword 等）
@@ -33,6 +39,8 @@ resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
 - stone_pickaxe、stone_axe、stone_shovel 等石製工具
 - 多餘的 crafting_table（留 1 個即可）
 - bone、rotten_flesh、spider_eye 等無用戰利品
+- 背包裡耐久度 ≤ 10% 的工具或裝備（幾乎已損壞，可以丟棄換空間）
+  - 例外：若背包沒有同類型備用，且裝備欄對應槽位也是損壞的，則保留
 
 【封口材料規則（重要）】
 - cobblestone、cobbled_deepslate 是用來封埋垃圾的洞口材料
@@ -68,7 +76,13 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     y = round(pos.get("y", 0))
     chests = state.get("chests", [])
 
-    inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory)
+    def _fmt_inv_item(i):
+        base = f"- {i['name']} x{i['count']}"
+        pct = i.get('durability_pct')
+        if pct is not None:
+            base += f" (耐久 {pct}%)"
+        return base
+    inv_summary = "\n".join(_fmt_inv_item(i) for i in inventory)
 
     chests_summary = "\n".join(
         f"- id={c['id']} label={c.get('label','未分類')} freeSlots={c.get('freeSlots','?')}"
@@ -81,9 +95,12 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     progress = top.get("progress", {})
     goal_str = f"目標：{goal}，進度：{progress}" if goal else "（無目標）"
 
+    equip_summary = equipment_summary(state)
+
     prompt = (
         f"背包已滿，機器人目前的活動：{activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}\n\n"
+        f"目前裝備欄（耐久度）：\n{equip_summary}\n\n"
         f"背包內容：\n{inv_summary}\n\n"
         f"已登記箱子：\n{chests_summary}\n\n"
         f"請根據活動規則決定處理方式。"

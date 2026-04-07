@@ -96,11 +96,25 @@ def _item_name(item) -> str | None:
     return item
 
 
+def _item_durability_pct(item) -> int | None:
+    """Return durability_pct if available, else None (meaning unknown/full)."""
+    if isinstance(item, dict):
+        return item.get("durability_pct")
+    return None
+
+
+def _is_broken(item) -> bool:
+    pct = _item_durability_pct(item)
+    return pct is not None and pct <= 0
+
+
 def _has_good_weapon(counter: Counter, equipment: dict) -> bool:
+    main_hand_item = (equipment or {}).get("main_hand")
     names = set(counter.keys())
-    main_hand = _item_name((equipment or {}).get("main_hand"))
-    if main_hand:
-        names.add(main_hand)
+    if not _is_broken(main_hand_item):
+        name = _item_name(main_hand_item)
+        if name:
+            names.add(name)
     return any(name.endswith(("_sword", "_axe")) and name.startswith(GOOD_WEAPON_PREFIXES) for name in names)
 
 
@@ -108,14 +122,32 @@ def _has_good_armor(counter: Counter, equipment: dict) -> bool:
     pieces = set()
     armor = ((equipment or {}).get("armor") or {})
     for piece in armor.values():
-        name = _item_name(piece)
-        if name:
-            pieces.add(name)
+        if not _is_broken(piece):
+            name = _item_name(piece)
+            if name:
+                pieces.add(name)
     for name in counter:
         if any(name.endswith(suffix) for suffix in ("_helmet", "_chestplate", "_leggings", "_boots")):
             pieces.add(name)
     good_count = sum(1 for name in pieces if name.startswith(GOOD_ARMOR_PREFIXES))
     return good_count >= 2
+
+
+def _low_durability_equipment(equipment: dict) -> list[str]:
+    """Return list of equipped item names with durability <= 10%."""
+    low = []
+    main_hand = equipment.get("main_hand")
+    pct = _item_durability_pct(main_hand)
+    if pct is not None and pct <= 10:
+        low.append(_item_name(main_hand))
+    armor = (equipment.get("armor") or {})
+    for piece in armor.values():
+        pct = _item_durability_pct(piece)
+        if pct is not None and pct <= 10:
+            name = _item_name(piece)
+            if name:
+                low.append(name)
+    return low
 
 
 def _capabilities(resources: dict, equipment: dict) -> dict:
@@ -140,6 +172,7 @@ def _capabilities(resources: dict, equipment: dict) -> dict:
             **{name: 1 for name in resources["tools"]["axe"]},
         }), equipment),
         "has_good_armor": _has_good_armor(Counter(), equipment),
+        "low_durability_equipment": _low_durability_equipment(equipment),
     }
 
 

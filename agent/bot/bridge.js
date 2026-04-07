@@ -89,7 +89,11 @@ function sendState(bot, type, extra = {}) {
             trees: _hasNearbyBlock(bot, TREE_BLOCK_NAMES, 10),
             stone: _hasNearbyBlock(bot, ['stone', 'cobblestone'], 8),
         },
-        inventory: bot.inventory.items().map(i => ({ name: i.name, count: i.count })),
+        inventory: bot.inventory.items().map(i => {
+            const entry = { name: i.name, count: i.count }
+            if (i.maxDurability) entry.durability_pct = _durabilityPct(i)
+            return entry
+        }),
         chests: getChests(),
         entities: Object.values(bot.entities)
             .filter(e => e.id !== bot.entity.id)

@@ -28,10 +28,23 @@ function _isUsable(item) {
     return item.durabilityUsed < item.maxDurability
 }
 
+function _durabilityPct(item) {
+    if (!item || !item.maxDurability) return 100
+    return Math.max(0, Math.round(((item.maxDurability - item.durabilityUsed) / item.maxDurability) * 100))
+}
+
 function _findBestItem(bot, names) {
-    return names
+    // Collect all usable candidates (in priority order = material tier)
+    const candidates = names
         .map(name => bot.inventory.items().find(i => i.name === name && _isUsable(i)))
-        .find(Boolean) ?? null
+        .filter(Boolean)
+    if (candidates.length === 0) return null
+
+    // If the best-tier item has > 10% durability, prefer it (material wins)
+    // Otherwise, pick the candidate with the highest durability pct (durability wins)
+    const best = candidates[0]
+    if (_durabilityPct(best) > 10) return best
+    return candidates.reduce((a, b) => _durabilityPct(a) >= _durabilityPct(b) ? a : b)
 }
 
 function _normalizeSlot(target) {
