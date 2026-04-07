@@ -6,7 +6,6 @@ const bridge = require('./bridge')
 const { isBuried } = require('./buried')
 const eating = require('./eating')
 const water = require('./water')
-const { checkFull } = require('./inventory')
 
 let isMining = false
 let _isPaused = false
@@ -155,7 +154,6 @@ async function startMining(bot, goal = {}) {
         return
         }
     }
-    if (checkFull(bot)) { console.log('[Mine] 背包已滿，拒絕開始挖礦'); return }
     if (goal.count !== undefined && !Number.isFinite(goal.count)) delete goal.count
     _currentGoal = goal
     _targetCount = 0

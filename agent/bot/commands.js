@@ -1,7 +1,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const bridge = require('./bridge')
 const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
-const { applyInventoryDecision } = require('./inventory')
+const { applyInventoryDecision, checkFull } = require('./inventory')
 const { startChopping, stopChopping } = require('./woodcutting')
 const { startMining, stopMining } = require('./mining')
 const { startSmelting, stopSmelting } = require('./smelting')
@@ -18,8 +18,14 @@ const { startExploring, stopExploring } = require('./explore')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
 const { setMode } = require('./mode')
 
+const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'smelt', 'combat', 'hunt', 'getfood', 'surface', 'explore'])
+
 function handle(bot, msg) {
     console.log('[Action]', JSON.stringify(msg))
+    if (ACTIVITY_COMMANDS.has(msg.command) && checkFull(bot)) {
+        console.log(`[Action] 背包已滿，拒絕執行 ${msg.command}`)
+        return
+    }
     switch (msg.command) {
         case 'chat':
             if (msg.text) bot.chat(msg.text)
