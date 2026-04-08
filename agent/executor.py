@@ -1,6 +1,7 @@
 import asyncio
 import json
 from agent import task_memory
+from agent.plan_utils import normalize_commands
 
 
 HEARTBEAT_TIMEOUT = 30.0   # seconds without a tick before declaring JS unresponsive
@@ -11,6 +12,7 @@ class PlanExecutor:
         self._running = False
         self._done = asyncio.Event()
         self._stuck_event = asyncio.Event()
+        self._skip_event = asyncio.Event()
         self._replan_commands: list | None = None
         self._in_stuck_recovery = False
         self._current_command = None
@@ -58,6 +60,7 @@ class PlanExecutor:
 
             self._done.clear()
             self._stuck_event.clear()
+            self._skip_event.clear()
 
             timed_out = False
             try:
@@ -97,9 +100,18 @@ class PlanExecutor:
                     return
 
                 if self._stuck_event.is_set() and not self._done.is_set():
-                    # Paused for stuck handling — wait for resume or replan
+                    # Paused for stuck handling — wait for resume, replan, or skip
                     print(f'[Executor] 步驟 {i} 因 activity_stuck 暫停，等待 LLM 決策...')
                     await self._done.wait()
+
+                    if self._skip_event.is_set():
+                        # LLM decided this step is unrecoverable — skip it
+                        print(f'[Executor] 步驟 {i} 被跳過: {cmd_str}')
+                        task_memory.mark_step_failed(i, "skipped")
+                        self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "skipped"})
+                        i += 1
+                        self._current_command = None
+                        continue
 
                     if self._replan_commands is not None:
                         new_cmds = self._replan_commands
@@ -221,8 +233,23 @@ class PlanExecutor:
     def replan(self, new_commands: list) -> None:
         """Accept new plan from LLM. Unblocks the paused executor."""
         self._in_stuck_recovery = False
-        self._replan_commands = new_commands
+        previous_command = None
+        task = task_memory.load()
+        if task:
+            current_index = self._current_step_index
+            if current_index > 0:
+                steps = task.get("steps", [])
+                if current_index - 1 < len(steps):
+                    previous_command = steps[current_index - 1].get("cmd")
+        self._replan_commands = normalize_commands(new_commands, previous_command=previous_command)
         self._done.set()
+
+    def skip_step(self) -> None:
+        """Skip the current stuck step and move to the next one."""
+        if self._running and self._in_stuck_recovery:
+            self._in_stuck_recovery = False
+            self._skip_event.set()
+            self._done.set()
 
     def resume_after_stuck(self) -> None:
         """Called after single-step stuck recovery finishes. Resumes the plan."""
@@ -242,6 +269,7 @@ class PlanExecutor:
         self._in_stuck_recovery = False
         self._done.set()
         self._stuck_event.set()
+        self._skip_event.set()
 
     def is_running(self) -> bool:
         return self._running

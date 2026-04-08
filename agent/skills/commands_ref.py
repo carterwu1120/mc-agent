@@ -11,8 +11,8 @@ COMMANDS: dict[str, dict] = {
     "fish":        {"desc": "釣魚",           "usage": "fish catches <count>",             "example": "fish catches 30"},
     "smelt":       {"desc": "冶煉/烹飪",      "usage": "smelt <material> <count>",         "example": "smelt beef 6、smelt raw_iron 10（必須帶數量）"},
     "combat":      {"desc": "開始戰鬥",       "usage": "combat"},
-    "hunt":        {"desc": "狩獵動物",       "usage": "hunt"},
-    "getfood":     {"desc": "尋找食物",       "usage": "getfood"},
+    "hunt":        {"desc": "狩獵動物",       "usage": "hunt [count <n>]",             "example": "hunt count 5"},
+    "getfood":     {"desc": "冶煉背包生食成熟食", "usage": "getfood [count <n>]",       "example": "getfood count 5"},
     "explore":     {"desc": "探索新區域",     "usage": "explore <target>",                 "example": "explore trees"},
     "surface":     {"desc": "移動到附近地表", "usage": "surface"},
     # ── Stop activities ───────────────────────────────────────

@@ -2,16 +2,18 @@ import json
 import os
 import uuid
 from datetime import datetime
+from agent.plan_utils import build_step_records, normalize_commands
 
 FILE = os.path.join(os.path.dirname(__file__), 'data', 'task.json')
 
 
 def save(goal: str, commands: list) -> dict:
+    commands = normalize_commands(commands)
     task = {
         "id": uuid.uuid4().hex[:8],
         "goal": goal,
         "commands": commands,
-        "steps": [{"cmd": cmd, "status": "pending", "error": None} for cmd in commands],
+        "steps": build_step_records(commands),
         "currentStep": 0,
         "status": "running",
         "interruptedBy": None,
@@ -52,7 +54,9 @@ def replace_remaining_steps(from_step: int, new_commands: list) -> None:
     if t is None:
         return
     kept = t.get("steps", [])[:from_step]
-    new_steps = [{"cmd": cmd, "status": "pending", "error": None} for cmd in new_commands]
+    previous_command = kept[-1]["cmd"] if kept else None
+    new_commands = normalize_commands(new_commands, previous_command=previous_command)
+    new_steps = build_step_records(new_commands)
     t["steps"] = kept + new_steps
     t["commands"] = [s["cmd"] for s in t["steps"]]
     _write(t)

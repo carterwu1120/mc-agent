@@ -1,6 +1,8 @@
 const { goals } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
+const { findSurfaceSpot } = require('./surface')
+const { noteTeleportLikeAction } = require('./crafting')
 
 const FOOD_ANIMALS = new Set(['cow', 'pig', 'chicken', 'sheep', 'rabbit'])
 const SEARCH_RADIUS = 48
@@ -9,10 +11,12 @@ const SWORD_PRIORITY = [
     'netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword',
     'golden_sword', 'wooden_sword',
 ]
+const UNDERGROUND_Y = 60
 
 let isHunting = false
 let _isPaused = false
 let _killCount = 0
+let _loopGen = 0
 
 activityStack.register('hunting', _pause)
 
@@ -20,6 +24,25 @@ function _pause(_bot) {
     isHunting = false
     _isPaused = true
     console.log('[Hunt] 暫停狩獵')
+}
+
+function _shouldAbort(expectedGen = null) {
+    return !isHunting || (expectedGen !== null && _loopGen !== expectedGen)
+}
+
+async function _safeEquip(bot, item, slot = 'hand', label = '裝備武器') {
+    if (!item) return false
+    try {
+        if (bot.currentWindow) {
+            bot.closeWindow(bot.currentWindow)
+            await _sleep(100)
+        }
+        await bot.equip(item, slot)
+        return true
+    } catch (e) {
+        console.log(`[Hunt] ${label}失敗: ${e.message}`)
+        return false
+    }
 }
 
 async function startHunting(bot, goal = {}) {
@@ -43,9 +66,11 @@ function stopHunting(_bot) {
     if (!isHunting) return
     isHunting = false
     _isPaused = false
+    _loopGen++
 }
 
 async function _loop(bot, goal) {
+    const _myGen = ++_loopGen
     _isPaused = false
     const maxCount = goal.count ?? 3
     let noAnimalTicks = 0
@@ -55,6 +80,12 @@ async function _loop(bot, goal) {
     } catch (_) {}
 
     while (isHunting) {
+        if (_shouldAbort(_myGen)) return
+
+        const surfaced = await _ensureSurfaceIfNeeded(bot, _myGen)
+        if (_shouldAbort(_myGen)) return
+        if (surfaced === false) break
+
         if (_killCount >= maxCount) {
             console.log(`[Hunt] 已獵殺 ${_killCount} 隻，完成`)
             isHunting = false
@@ -72,6 +103,7 @@ async function _loop(bot, goal) {
                 break
             }
             await _sleep(2000)
+            if (_shouldAbort(_myGen)) return
             continue
         }
         noAnimalTicks = 0
@@ -90,26 +122,28 @@ async function _loop(bot, goal) {
             } catch (_) {}
         }
 
-        if (!isHunting) break
+        if (_shouldAbort(_myGen)) return
 
         // 攻擊直到死亡
-        const killed = await _killAnimal(bot, animal)
+        const killed = await _killAnimal(bot, animal, _myGen)
         if (killed) {
             _killCount++
             activityStack.updateProgress({ count: _killCount })
             console.log(`[Hunt] 獵殺成功，總計 ${_killCount}/${maxCount}`)
             await _sleep(DROPS_WAIT)  // 等掉落物出現
-            await _collectNearbyDrops(bot, animal.position, 6)
+            if (_shouldAbort(_myGen)) return
+            await _collectNearbyDrops(bot, animal.position, 6, _myGen)
         }
     }
 
-    if (!_isPaused) activityStack.pop(bot)
+    if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
 
-async function _killAnimal(bot, animal) {
+async function _killAnimal(bot, animal, expectedGen = null) {
     const maxAttempts = 40
     for (let i = 0; i < maxAttempts && isHunting; i++) {
+        if (_shouldAbort(expectedGen)) return false
         if (!animal.isValid) return true  // 已死亡
 
         const handItem = bot.heldItem
@@ -130,6 +164,8 @@ async function _killAnimal(bot, animal) {
             if (!animal.isValid) return true
         }
 
+        if (_shouldAbort(expectedGen)) return false
+
         try {
             await bot.lookAt(animal.position.offset(0, (animal.height ?? 1.6) / 2, 0))
             bot.attack(animal)
@@ -144,7 +180,8 @@ async function _equipSword(bot) {
         const sword = bot.inventory.items().find(i => i.name === name)
         if (!sword) continue
         try {
-            await bot.equip(sword, 'hand')
+            const ok = await _safeEquip(bot, sword, 'hand', '裝備劍')
+            if (!ok) continue
             console.log(`[Hunt] 裝備 ${sword.name}`)
             return true
         } catch (_) {}
@@ -157,7 +194,8 @@ async function _equipSword(bot) {
             const sword = bot.inventory.items().find(i => i.name === name)
             if (!sword) continue
             try {
-                await bot.equip(sword, 'hand')
+                const ok = await _safeEquip(bot, sword, 'hand', '裝備劍')
+                if (!ok) continue
                 console.log(`[Hunt] 裝備 ${sword.name}`)
                 return true
             } catch (_) {}
@@ -180,7 +218,7 @@ function _findAnimal(bot) {
         .sort((a, b) => a.position.distanceTo(self) - b.position.distanceTo(self))[0] || null
 }
 
-async function _collectNearbyDrops(bot, nearPos, maxDistance) {
+async function _collectNearbyDrops(bot, nearPos, maxDistance, expectedGen = null) {
     const drops = Object.values(bot.entities)
         .filter(e =>
             e.name === 'item' &&
@@ -190,7 +228,7 @@ async function _collectNearbyDrops(bot, nearPos, maxDistance) {
         .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
 
     for (const drop of drops) {
-        if (!isHunting) return
+        if (_shouldAbort(expectedGen)) return
         try {
             await bot.pathfinder.goto(
                 new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 1)
@@ -198,6 +236,46 @@ async function _collectNearbyDrops(bot, nearPos, maxDistance) {
             await _sleep(250)
         } catch (_) {}
     }
+}
+
+function _isLikelyUnderground(bot) {
+    const pos = bot.entity.position.floored()
+    if (pos.y >= UNDERGROUND_Y) return false
+    try {
+        const light = bot.world?.getSkyLight?.(pos) ?? 0
+        return light < 14
+    } catch (_) {
+        return true
+    }
+}
+
+async function _ensureSurfaceIfNeeded(bot, expectedGen = null) {
+    if (!_isLikelyUnderground(bot)) return true
+
+    console.log(`[Hunt] 目前位於地底 Y=${Math.floor(bot.entity.position.y)}，先回地表再繼續狩獵`)
+    const spot = findSurfaceSpot(bot, 24)
+    if (spot) {
+        try {
+            noteTeleportLikeAction()
+            bot.chat(`/tp ${bot.username} ${spot.x} ${spot.y} ${spot.z}`)
+            await _sleep(500)
+            if (_shouldAbort(expectedGen)) return false
+            if (!_isLikelyUnderground(bot)) {
+                console.log('[Hunt] 已返回地表，繼續狩獵')
+                return true
+            }
+        } catch (_) {}
+    }
+
+    console.log('[Hunt] 無法自行回到地表，送出 activity_stuck')
+    activityStack.pause(bot)
+    bridge.sendState(bot, 'activity_stuck', {
+        activity_name: 'hunting',
+        reason: 'underground',
+        suggested_actions: ['surface', 'back', 'home', 'idle'],
+        detail: '目前在地底，不適合繼續狩獵，應先回到地表再找動物',
+    })
+    return false
 }
 
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)) }

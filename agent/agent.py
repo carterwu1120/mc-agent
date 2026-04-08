@@ -305,7 +305,9 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 print(f"[Agent] 注入 plan_context: 第 {idx+1}/{len(steps)} 步")
             executor.notify_stuck()
 
-        print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
+        _NO_LLM_HANDLERS = {"action_done", "activity_done", "task_started", "task_stopped"}
+        if event_type not in _NO_LLM_HANDLERS:
+            print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         result = await handler(state, llm)
         if not result:
             return
@@ -335,11 +337,20 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     asyncio.create_task(executor.execute(commands, ws, goal=goal))
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
+                cmds = a.get("commands", [])
                 if executor.is_running():
-                    print(f"[Agent] activity_stuck replan: {a.get('commands')}")
-                    executor.replan(a.get("commands", []))
+                    print(f"[Agent] activity_stuck replan: {cmds}")
+                    executor.replan(cmds)
+                elif cmds:
+                    print(f"[Agent] replan 但 executor 未執行，改為新計畫: {cmds}")
+                    asyncio.create_task(executor.execute(cmds, ws))
+                continue
+            if isinstance(a, dict) and a.get("action") == "skip":
+                if executor.is_running():
+                    print(f"[Agent] activity_stuck skip 當前步驟")
+                    executor.skip_step()
                 else:
-                    print("[Agent] 收到 replan 但 executor 未執行，忽略")
+                    print("[Agent] 收到 skip 但 executor 未執行，忽略")
                 continue
             print(f"[Agent] 送出決策: {a}")
             await ws.send(json.dumps(a))

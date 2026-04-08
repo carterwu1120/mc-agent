@@ -80,6 +80,12 @@ function _diamondReserve(bot) {
 }
 
 async function craftMissingArmor(bot) {
+    const currentActivity = activityStack.getActivity()
+    if (currentActivity !== 'idle' && currentActivity !== 'combat') {
+        console.log(`[Combat] 目前活動為 ${currentActivity}，暫不插入補盔甲決策`)
+        return
+    }
+
     // 任何欄位低於鐵裝或快壞就觸發
     const needsUpgrade = ARMOR_SLOTS.some(({ slot }) => {
         const cur = bot.inventory.slots[slot]

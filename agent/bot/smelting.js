@@ -8,6 +8,7 @@ let _isPaused = false
 let _smeltedCount = 0
 let _inputPending = false
 let _placedFurnacePos = null
+let _loopGen = 0
 
 const SMELTABLE = {
     raw_iron: 'iron_ingot',         iron_ore: 'iron_ingot',         deepslate_iron_ore: 'iron_ingot',
@@ -43,6 +44,14 @@ function _pause(_bot) {
     isSmelting = false
     _isPaused = true
     console.log('[Smelt] 暫停燒製')
+}
+
+function _shouldAbort(expectedGen = null) {
+    return !isSmelting || (expectedGen !== null && _loopGen !== expectedGen)
+}
+
+function _shouldAbortFinalize(expectedGen = null) {
+    return _isPaused || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
 async function startSmelting(bot, goal = {}) {
@@ -86,6 +95,7 @@ function stopSmelting(_bot) {
     if (!isSmelting) return
     isSmelting = false
     _isPaused = false
+    _loopGen++
     activityStack.markStopped('smelting', 'stop')
     console.log('[Smelt] 停止燒製')
 }
@@ -95,6 +105,7 @@ function isActive() {
 }
 
 async function _loop(bot, goal = {}) {
+    const _myGen = ++_loopGen
     _isPaused = false
     const startTime = Date.now()
 
@@ -127,9 +138,11 @@ async function _loop(bot, goal = {}) {
             const p = furnaceBlock.position
             activityStack.touch('smelting', 'goto_furnace')
             await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 2))
+            if (_shouldAbort(_myGen)) return
         } catch (e) {
             console.log('[Smelt] 無法走到熔爐:', e.message)
             await _sleep(2000)
+            if (_shouldAbort(_myGen)) return
             continue
         }
 
@@ -140,9 +153,14 @@ async function _loop(bot, goal = {}) {
         try {
             furnace = await bot.openFurnace(furnaceBlock)
             await _sleep(200)  // 等 window sync
+            if (_shouldAbort(_myGen)) {
+                try { furnace.close() } catch (_) {}
+                return
+            }
         } catch (e) {
             console.log('[Smelt] 開啟熔爐失敗:', e.message)
             await _sleep(2000)
+            if (_shouldAbort(_myGen)) return
             continue
         }
 
@@ -152,6 +170,10 @@ async function _loop(bot, goal = {}) {
             if (prevOut) {
                 try {
                     await furnace.takeOutput()
+                    if (_shouldAbort(_myGen)) {
+                        try { furnace.close() } catch (_) {}
+                        return
+                    }
                     _smeltedCount += prevOut.count
                     activityStack.touch('smelting', 'take_output')
                     _inputPending = !!furnace.slots[0]
@@ -197,6 +219,10 @@ async function _loop(bot, goal = {}) {
                     const fuelCount = Math.min(fuelItem.count, 64)
                     try {
                         await furnace.putFuel(fuelItem.type, null, fuelCount)
+                        if (_shouldAbort(_myGen)) {
+                            try { furnace.close() } catch (_) {}
+                            return
+                        }
                         activityStack.touch('smelting', 'put_fuel')
                         console.log(`[Smelt] 放入燃料 ${fuelItem.name} x${fuelCount}`)
                     } catch (e) {
@@ -204,7 +230,11 @@ async function _loop(bot, goal = {}) {
                         console.log('[Smelt] fuel slot 已有燃料，跳過')
                     }
                 } else {
-                    console.log('[Smelt] 沒有燃料，等待中...')
+                    console.log('[Smelt] 背包沒有燃料，通知 Python 決策')
+                    isSmelting = false
+                    try { furnace.close() } catch (_) {}
+                    bridge.sendState(bot, 'activity_stuck', { activity: 'smelting', reason: 'no_fuel' })
+                    break
                 }
             }
 
@@ -220,6 +250,10 @@ async function _loop(bot, goal = {}) {
                 if (count > 0) {
                     try {
                         await furnace.putInput(inputItem.type, null, count)
+                        if (_shouldAbort(_myGen)) {
+                            try { furnace.close() } catch (_) {}
+                            return
+                        }
                         _inputPending = true
                         activityStack.touch('smelting', 'put_input')
                         console.log(`[Smelt] 放入 ${inputItem.name} x${count}（背包共 ${totalAvail}${goal.count ? `，目標剩 ${goal.count - _smeltedCount}` : ''}）`)
@@ -236,9 +270,11 @@ async function _loop(bot, goal = {}) {
             // 每 10 秒重開熔爐，輪詢 slots[2] 有無產物，直到爐膛清空或達到目標
             // timeout 以「距上次取出產物的時間」計算，避免大批材料被誤判為超時
             let lastProgressAt = Date.now()
+            let pollTries = 0
             while (_inputPending && isSmelting) {
                 for (let i = 0; i < 10 && isSmelting; i++) await _sleep(1000)
                 if (!isSmelting) break
+                if (_shouldAbort(_myGen)) return
                 if (Date.now() - lastProgressAt > 60000) {
                     console.log('[Smelt] 60s 無進度，放棄本批')
                     _inputPending = false
@@ -248,6 +284,10 @@ async function _loop(bot, goal = {}) {
                 try {
                     furnace = await bot.openFurnace(furnaceBlock)
                     await _sleep(300)
+                    if (_shouldAbort(_myGen)) {
+                        try { furnace.close() } catch (_) {}
+                        return
+                    }
                 } catch (e) {
                     console.log('[Smelt] 重開熔爐失敗:', e.message)
                     break
@@ -257,6 +297,10 @@ async function _loop(bot, goal = {}) {
                 if (outputItem) {
                     try {
                         await furnace.takeOutput()
+                        if (_shouldAbort(_myGen)) {
+                            try { furnace.close() } catch (_) {}
+                            return
+                        }
                         _smeltedCount += outputItem.count
                         _inputPending = !!furnace.slots[0]
                         lastProgressAt = Date.now()
@@ -276,7 +320,15 @@ async function _loop(bot, goal = {}) {
                         console.log(`[Smelt] takeOutput 失敗（${invSlots}/36）: ${e.message}`)
                     }
                 } else {
+                    pollTries++
                     console.log(`[Smelt] 燒製中... (${pollTries * 10}s)`)
+                    // 若爐子既沒有輸入槽材料也沒有燃料，代表已燒完或燃料耗盡
+                    if (!furnace.slots[0] && !furnace.slots[1]) {
+                        console.log('[Smelt] 爐膛已空（無輸入、無燃料），結束本批')
+                        _inputPending = false
+                        furnace.close()
+                        break
+                    }
                 }
 
                 if (goal.target && goal.count && _smeltedCount >= goal.count) {
@@ -292,8 +344,16 @@ async function _loop(bot, goal = {}) {
                 try {
                     furnace = await bot.openFurnace(furnaceBlock)
                     await _sleep(300)
+                    if (_shouldAbort(_myGen)) {
+                        try { furnace.close() } catch (_) {}
+                        return
+                    }
                     if (furnace.slots[1]) {
                         await furnace.takeFuel()
+                        if (_shouldAbort(_myGen)) {
+                            try { furnace.close() } catch (_) {}
+                            return
+                        }
                         console.log('[Smelt] 回收燃料')
                     }
                     furnace.close()
@@ -315,18 +375,21 @@ async function _loop(bot, goal = {}) {
                     return
                 }
                 await _sleep(500)
+                if (_shouldAbort(_myGen)) return
                 continue
             }
         }
     }
 
-    if (!_isPaused) {
+    if (!_isPaused && _loopGen === _myGen) {
         const hadPlaced = !!_placedFurnacePos
         await _reclaimFurnace(bot)
+        if (_shouldAbortFinalize(_myGen)) return
         if (hadPlaced && !bot.inventory.items().some(i => i.name === 'furnace')) {
             console.log('[Smelt] 背包未收到熔爐，嘗試補撿...')
             for (let attempt = 0; attempt < 8; attempt++) {
                 await _sleep(500)
+                if (_shouldAbortFinalize(_myGen)) return
                 if (bot.inventory.items().some(i => i.name === 'furnace')) break
                 const dropped = Object.values(bot.entities).find(
                     e => e.name === 'item' && e.position.distanceTo(bot.entity.position) < 5
@@ -336,6 +399,7 @@ async function _loop(bot, goal = {}) {
                         await bot.pathfinder.goto(new goals.GoalNear(
                             dropped.position.x, dropped.position.y, dropped.position.z, 0
                         ))
+                        if (_shouldAbortFinalize(_myGen)) return
                     } catch (_) {}
                 }
             }

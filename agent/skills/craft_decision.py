@@ -3,6 +3,22 @@ import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
 
+
+def _parse_json(text: str) -> dict:
+    """Parse JSON from LLM response, handling trailing commentary after last field."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        # LLM sometimes appends notes after the last string value before }:
+        # {"key": "value"<extra text>}  →  truncate at error pos and close
+        truncated = text[:e.pos].rstrip()
+        if truncated.endswith('"'):
+            try:
+                return json.loads(truncated + '}')
+            except json.JSONDecodeError:
+                pass
+        raise
+
 SYSTEM_PROMPT = """你是 Minecraft 機器人的合成決策助手。
 機器人需要合成某樣物品，但有多種材料選項，請根據當前資源和目標做出最適合的決策。
 只能回覆以下格式的 JSON（不要加任何其他文字）：
@@ -80,7 +96,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             )
             clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
             clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-            decision = json.loads(clean)
+            decision = _parse_json(clean)
             result = []
             text = decision.get("text", "").strip()
             if text:

@@ -1,7 +1,7 @@
 const { goals, Movements } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
-const { ensureToolFor, ensurePickaxeTier } = require('./crafting')
+const { ensureToolFor, ensurePickaxeTier, ensurePickaxe } = require('./crafting')
 const bridge = require('./bridge')
 const { isBuried } = require('./buried')
 const eating = require('./eating')
@@ -26,7 +26,7 @@ const SKIP_ORES = new Set(['redstone', 'copper'])
 
 
 const ORE_BEST_Y = {
-    coal: 96, iron: 16, copper: 48,
+    coal: 16, iron: 16, copper: 48,
     lapis: 0, gold: -16, redstone: -16,
     diamond: -58, emerald: 232,
 }
@@ -117,6 +117,10 @@ function _setEscapeMovements(bot) {
 
 function _shouldAbort(expectedGen = null) {
     return !isMining || (expectedGen !== null && _loopGen !== expectedGen)
+}
+
+function _hasPickaxe(bot) {
+    return bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))
 }
 
 function _resetStaleMining(bot, reason = 'stale') {
@@ -213,6 +217,14 @@ async function _loop(bot, goal = {}) {
     let tunnelFailCount = 0
     let stoneSearchFails = 0
 
+    // 每次進入 loop（包含 resume 後）先嘗試合成稿子
+    // ensurePickaxe 是純函數呼叫，不進 activity stack
+    if (!_hasPickaxe(bot)) {
+        console.log('[Mine] 進入 loop 時無稿子，嘗試合成')
+        await ensurePickaxe(bot)
+        if (_shouldAbort(_myGen)) return
+    }
+
     while (isMining) {
         activityStack.touch('mining', 'loop')
         if (eating.isEating()) {
@@ -297,6 +309,12 @@ async function _loop(bot, goal = {}) {
             }
 
             const beforeY = Math.floor(bot.entity.position.y)
+            if (!_hasPickaxe(bot)) {
+                console.log('[Mine] 需要往下找石頭，但沒有稿子，停止並請求決策')
+                isMining = false
+                bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
+                break
+            }
             console.log('[Mine] 附近沒有石頭，往下潛尋找')
             await _stepDown(bot, beforeY - 3, tunnelYaw)
             if (_shouldAbort(_myGen)) return
@@ -342,6 +360,12 @@ async function _loop(bot, goal = {}) {
         } else if (needDescend) {
             // 等待水/岩漿逃脫完成再下潛
             if (water.isEscaping()) { await _sleep(500); continue }
+            if (!_hasPickaxe(bot)) {
+                console.log('[Mine] 需要下潛，但沒有稿子，停止並請求決策')
+                isMining = false
+                bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
+                break
+            }
             // 主動作：挖階梯往下
             await _stepDown(bot, bestY, tunnelYaw)
             if (_shouldAbort(_myGen)) return
@@ -568,19 +592,21 @@ async function _loop(bot, goal = {}) {
                 }
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
                 if (!bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))) {
-                    const ok = await ensureToolFor(bot, 'stone')
-                    if (_shouldAbort(_myGen)) return
-                    if (!ok) {
-                        console.log('[Mine] 無法取得稿子，停止並請求決策')
-                        isMining = false
-                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
-                        break
-                    }
+                    console.log('[Mine] 無稿子，停止並請求決策')
+                    isMining = false
+                    bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
+                    break
                 }
                 const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal, _myGen)
                 if (_shouldAbort(_myGen)) return
                 if (tunneled) _digFailed.clear()
                 if (!tunneled) {
+                    if (!bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))) {
+                        console.log('[Mine] 隧道失敗：無稿子，停止並請求決策')
+                        isMining = false
+                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
+                        break
+                    }
                     tunnelFailCount++
                     tunnelYaw += Math.PI / 2
                     console.log(`[Mine] 隧道受阻，旋轉方向繼續 (${tunnelFailCount}/4)`)
@@ -674,7 +700,9 @@ async function _stairDown(bot, yaw, steps) {
         const feet = bot.entity.position.floored()
 
         // 先 check 三格岩漿（頭、腳、落點地板）再動手
-        await ensureToolFor(bot, 'stone')
+        const _stairPick = bot.inventory.items().find(i => i.name.endsWith('_pickaxe'))
+        if (!_stairPick) return  // 無稿子，無法下潛
+        try { await bot.equip(_stairPick, 'hand') } catch (_) {}
         let lavaDetected = false
         for (const off of [[dx, 1, dz], [dx, 0, dz], [dx, -1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
@@ -704,11 +732,12 @@ async function _stairDown(bot, yaw, steps) {
 }
 
 async function _stepDown(bot, targetY, yaw) {
-    const ok = await ensureToolFor(bot, 'stone')
-    if (!ok) {
+    const pick = bot.inventory.items().find(i => i.name.endsWith('_pickaxe'))
+    if (!pick) {
         console.log('[Mine] 沒有稿子，無法下潛')
         return
     }
+    try { await bot.equip(pick, 'hand') } catch (_) {}
     const currentY = Math.floor(bot.entity.position.y)
     const steps = Math.min(3, currentY - targetY)
     if (steps <= 0) return
@@ -755,7 +784,23 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
                 continue
             }
             try {
-                await ensureToolFor(bot, b.name)
+                // 只使用現有工具，不嵌入合成
+                const needsPickaxe = b.name.includes('stone') || b.name.endsWith('_ore') ||
+                    b.name.includes('deepslate') || b.name.includes('tuff') ||
+                    b.name.includes('cobblestone') || b.name.includes('andesite') ||
+                    b.name.includes('granite') || b.name.includes('diorite') ||
+                    b.name.includes('basalt') || b.name.includes('netherrack')
+                const pick = bot.inventory.items().find(i => i.name.endsWith('_pickaxe'))
+                if (needsPickaxe && !pick) {
+                    console.log(`[Tunnel] 無稿子無法挖 ${b.name}，中止隧道`)
+                    return false
+                }
+                if (pick) {
+                    try { await bot.equip(pick, 'hand') } catch (_) {}
+                } else {
+                    const tool = bot.pathfinder.bestHarvestTool(b)
+                    if (tool) try { await bot.equip(tool, 'hand') } catch (_) {}
+                }
                 // 工具切換期間岩漿可能流入，重新確認
                 const recheck = bot.blockAt(pos)
                 if (!recheck || _isLava(recheck)) {

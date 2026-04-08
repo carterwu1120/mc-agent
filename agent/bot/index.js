@@ -88,7 +88,7 @@ bot.once('spawn', () => {
     inventory.startMonitor(bot)
     combat.startMonitor(bot)
     water.startMonitor(bot)
-    ;(async () => { await combat.craftMissingArmor(bot); await combat.equipArmor(bot); await combat.equipWeapon(bot) })()
+    ;(async () => { await combat.equipArmor(bot); await combat.equipWeapon(bot) })()
 
     setInterval(() => bridge.sendState(bot, 'tick'), 2000)
 

@@ -311,8 +311,6 @@ function handle(bot, msg) {
                     return
                 }
 
-                const { craftMissingArmor } = require('./combat')
-                await craftMissingArmor(bot)
                 const result = await equipBestLoadout(bot)
                 console.log(`[Equip] 完成裝備：武器=${result.weapon ?? '無'}，護甲=${result.armor?.join(', ') || '無'}`)
                 bridge.sendState(bot, 'action_done')
@@ -410,9 +408,80 @@ function handle(bot, msg) {
             break
         }
 
+        case 'test': {
+            const scenario = msg.args?.[0]
+            ;(async () => {
+                await _runTestScenario(bot, scenario)
+            })()
+            break
+        }
+
         default:
             console.warn('[Action] 未知指令:', msg.command)
     }
+}
+
+// ── 測試情境 ─────────────────────────────────────────────────
+async function _giveItem(bot, itemName, count = 1) {
+    bot.chat(`/give ${bot.username} ${itemName} ${count}`)
+    await new Promise(r => setTimeout(r, 300))
+}
+
+async function _clearInventory(bot) {
+    bot.chat(`/clear ${bot.username}`)
+    await new Promise(r => setTimeout(r, 500))
+}
+
+async function _runTestScenario(bot, scenario) {
+    console.log(`[Test] 開始情境: ${scenario}`)
+    switch (scenario) {
+
+        // 情境 A：沒有鐵鎬、食物不足 → planner 應自動補前置步驟
+        // 預期 commands: ["getfood", "mine iron 16", "smelt iron 16", "equip", "mine diamond 10"]
+        case 'planner_nodiamond': {
+            await _clearInventory(bot)
+            await _giveItem(bot, 'oak_log', 16)
+            await _giveItem(bot, 'cobblestone', 32)
+            await new Promise(r => setTimeout(r, 500))
+            console.log('[Test] 情境 A：觸發 planner，請觀察 [Planner] log 裡的 commands 陣列')
+            console.log('[Test] 預期包含: getfood, mine iron, smelt iron, equip, mine diamond')
+            bridge.sendState(bot, 'chat', { from: 'TestRunner', message: '幫我準備去挖鑽石' })
+            break
+        }
+
+        // 情境 B：已有鐵鎬、食物充足 → planner 應跳過前置步驟
+        // 預期 commands: ["equip", "mine diamond 10"]
+        case 'planner_ready': {
+            await _clearInventory(bot)
+            await _giveItem(bot, 'iron_pickaxe', 1)
+            await _giveItem(bot, 'cooked_beef', 16)
+            await _giveItem(bot, 'cobblestone', 32)
+            await new Promise(r => setTimeout(r, 500))
+            console.log('[Test] 情境 B：觸發 planner，請觀察 [Planner] log 裡的 commands 陣列')
+            console.log('[Test] 預期不包含 mine iron / smelt iron，應直接 equip + mine diamond')
+            bridge.sendState(bot, 'chat', { from: 'TestRunner', message: '幫我準備去挖鑽石' })
+            break
+        }
+
+        // 情境 C：executor skip — 讓 bot 執行一個會卡住的步驟
+        // 預期：activity_stuck 觸發後 LLM 回 skip，executor 繼續下一步
+        case 'executor_skip': {
+            await _clearInventory(bot)
+            await _giveItem(bot, 'iron_pickaxe', 1)
+            await _giveItem(bot, 'cooked_beef', 8)
+            await new Promise(r => setTimeout(r, 500))
+            console.log('[Test] 情境 C：請觀察 [Executor] log')
+            console.log('[Test] 預期：ancient_debris 步驟 stuck → LLM 回 skip → 繼續 mine iron 16')
+            // 直接送 plan 給 executor，不透過 planner（避免 planner 改變指令）
+            bridge.sendState(bot, 'chat', { from: 'TestRunner', message: '先幫我挖 ancient_debris 3，再幫我挖鐵 16' })
+            break
+        }
+
+        default:
+            bot.chat(`未知情境: ${scenario}`)
+            console.log('[Test] 可用情境: planner_nodiamond, planner_ready, executor_skip')
+    }
+    console.log(`[Test] 情境 ${scenario} 已設定完成`)
 }
 
 // 從 chat args 解析 goal，e.g. ['logs', '20'] → { logs: 20 }

@@ -31,6 +31,7 @@ async function startFishing(bot, goal = {}) {
     const rod = bot.inventory.items().find(i => i.name === 'fishing_rod')
     if (!rod) {
         console.log('[Fish] 背包裡沒有釣竿')
+        bridge.sendState(bot, 'activity_stuck', { activity: 'fishing', reason: 'no_rod' })
         return
     }
 

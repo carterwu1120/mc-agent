@@ -1,6 +1,11 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.command_validation import (
+    PLAN_ALLOWED_COMMANDS,
+    build_reprompt_suffix,
+    validate_commands,
+)
 from agent.skills.state_summary import summary_json
 from agent.skills.commands_ref import command_list
 
@@ -9,10 +14,15 @@ ALLOWED_COMMANDS = {
 }
 
 PLAN_CONTEXT_SUFFIX = """
-【當前執行計畫】處於多步驟計畫執行中。除了常規決策外，也可以回傳重新規劃：
+【當前執行計畫】處於多步驟計畫執行中。除了常規決策外，也可以回傳：
+
+重新規劃（替換剩餘步驟）：
 {"action": "replan", "commands": ["new step 1", "new step 2"], "text": "...理由..."}
-commands 陣列替換目前未完成的所有步驟（包含當前失敗的步驟）。
-只有在單步恢復無法解決問題時才使用 replan。
+
+跳過當前步驟（無法恢復且繼續剩餘步驟有意義）：
+{"action": "skip", "text": "...理由..."}
+
+只有在單步恢復無法解決問題時才使用 replan 或 skip。
 """
 
 
@@ -132,6 +142,146 @@ def _normalize_decision(activity: str, reason: str, needed_for: str | None, miss
     return decision
 
 
+def _should_prefer_replan(activity: str, reason: str, plan_context: dict | None) -> bool:
+    return activity == "mining" and reason == "no_tools" and bool(plan_context)
+
+
+def _extract_count_from_command(cmd: str | None) -> int | None:
+    if not cmd:
+        return None
+    parts = cmd.split()
+    if len(parts) >= 3:
+        try:
+            return int(parts[2])
+        except Exception:
+            return None
+    return None
+
+
+def _looks_like_getfood_subflow(activity: str, reason: str, plan_context: dict | None) -> bool:
+    if activity != "smelting" or reason != "no_input" or not plan_context:
+        return False
+    current_cmd = (plan_context.get("current_cmd") or "").strip()
+    return current_cmd.startswith("getfood ")
+
+
+def _build_getfood_replan_from_smelting(state: dict, plan_context: dict) -> list[dict] | None:
+    current_cmd = (plan_context.get("current_cmd") or "").strip()
+    target_count = _extract_count_from_command(current_cmd)
+    if not target_count:
+        return None
+
+    inventory = state.get("inventory") or []
+    cooked_total = sum(
+        int(item.get("count", 0))
+        for item in inventory
+        if str(item.get("name", "")).startswith("cooked_") or item.get("name") in {"bread", "baked_potato"}
+    )
+    has_fishing_rod = any((item.get("name") == "fishing_rod") for item in inventory)
+    remaining = max(1, int(target_count) - int(cooked_total))
+    pending_steps = plan_context.get("pending_steps", [])
+
+    if has_fishing_rod:
+        commands = [f"fish catches {remaining}", f"getfood count {remaining}", *pending_steps]
+        text = f"熟食還差 {remaining} 個，先補魚貨再回來完成食物準備。"
+    else:
+        commands = [f"hunt count {remaining}", f"getfood count {remaining}", *pending_steps]
+        text = f"熟食還差 {remaining} 個，先補生食再繼續後面的挖礦計畫。"
+
+    return [
+        {"command": "chat", "text": text},
+        {"action": "replan", "commands": commands},
+    ]
+
+
+async def _reprompt_invalid_replan(
+    llm: LLMClient,
+    prompt: str,
+    system: str,
+    invalid_commands: list[str],
+    errors,
+) -> dict | None:
+    reprompt = prompt + build_reprompt_suffix(
+        invalid_commands=invalid_commands,
+        errors=errors,
+        allowed_command_keys=PLAN_ALLOWED_COMMANDS,
+    )
+    try:
+        print(f"[Skill/activity_stuck] 偵測到非法 replan，重問一次 LLM：{invalid_commands}")
+        response = await llm.chat(
+            [{"role": "user", "content": reprompt}],
+            system=system,
+        )
+        clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
+        decision = _parse_json_with_repair(clean)
+        if decision.get("action") != "replan":
+            return None
+        repair_errors = validate_commands(
+            decision.get("commands", []),
+            allowed_commands=PLAN_ALLOWED_COMMANDS,
+        )
+        if repair_errors:
+            print(f"[Skill/activity_stuck] 修正後 replan 仍不合法：{[e.command for e in repair_errors]}")
+            return None
+        return decision
+    except Exception as e:
+        print(f"[Skill/activity_stuck] 修正 replan 失敗: {e}")
+        return None
+
+
+async def _reprompt_for_replan_strategy(
+    llm: LLMClient,
+    prompt: str,
+    system: str,
+    decision: dict,
+    pending_steps: list[str],
+) -> dict | None:
+    reprompt = (
+        prompt
+        + "\n\n你上一個回覆用了單一步驟修復，但目前存在未完成的多步驟計畫。"
+        + " 這種情況不能只回單一指令，必須在理解目前 activity、卡住原因、剩餘步驟與狀態後，"
+        + " 回覆完整剩餘計畫的 replan，或明確回 skip。\n"
+        + f"你上一個回覆是：{json.dumps(decision, ensure_ascii=False)}\n"
+        + f"目前原計畫剩餘步驟：{pending_steps}\n"
+        + "請只回覆以下其中一種 JSON：\n"
+        + '{"action":"replan","commands":["...完整剩餘步驟..."],"text":"...理由..."}\n'
+        + '{"action":"skip","text":"...理由..."}\n'
+        + "不要回單一步驟 command。"
+    )
+    try:
+        print("[Skill/activity_stuck] 需要完整 replan，重問一次 LLM")
+        response = await llm.chat(
+            [{"role": "user", "content": reprompt}],
+            system=system,
+        )
+        clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
+        repaired = _parse_json_with_repair(clean)
+        if repaired.get("action") == "replan":
+            repair_errors = validate_commands(
+                repaired.get("commands", []),
+                allowed_commands=PLAN_ALLOWED_COMMANDS,
+            )
+            if repair_errors:
+                print(f"[Skill/activity_stuck] 完整 replan 仍不合法：{[e.command for e in repair_errors]}")
+                return None
+            return repaired
+        if repaired.get("action") == "skip":
+            return repaired
+        return None
+    except Exception as e:
+        print(f"[Skill/activity_stuck] 重問完整 replan 失敗: {e}")
+        return None
+
+
+def _replan_fallback(text: str) -> list[dict]:
+    return [
+        {"command": "chat", "text": text},
+        {"action": "skip"},
+    ]
+
+
 def _is_valid_decision(decision: dict) -> bool:
     command = decision.get("command")
     if command not in ALLOWED_COMMANDS:
@@ -178,9 +328,11 @@ def _is_valid_decision(decision: dict) -> bool:
 
 SYSTEM_PROMPTS = {
     "mining": f"""你是 Minecraft 機器人的挖礦卡住處理助手。
-機器人在挖礦時遇到障礙而中斷，請根據當前狀態決定下一步。
+機器人在挖礦時遇到障礙而中斷，請根據目前的 activity、卡住原因、是否存在未完成計畫，以及當前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
+{{"action": "replan", "commands": ["chop logs 4", "mine iron 3", "smelt raw_iron 3", "equip", "mine diamond 10"], "text": "...理由..."}}
+{{"action": "skip", "text": "...理由..."}}
 {{"command": "chop", "text": "...理由..."}}
 {{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}}
 {{"command": "chat", "text": "...需要玩家幫助的說明..."}}
@@ -190,19 +342,27 @@ SYSTEM_PROMPTS = {
 {command_list(["chop", "mine", "chat", "idle"])}
 
 決策原則：
-- 若原因為「無稿子且無法合成」→ 背包缺木材就先去砍樹（chop），有木材但缺鐵就先挖鐵礦（mine iron）
+- 若存在未完成 plan，且目前步驟是挖礦時因 no_tools 卡住，優先回覆 replan 或 skip，不要只回單一步驟 chop
+- replan 必須是「從當前步驟開始的完整剩餘步驟」，可以插入修復步驟，但必須把原本剩餘計畫接回來
+- 不要把 equip 當成萬用修復步驟；只有在前一步真的會產生新裝備（例如 smelt raw_iron 3 之後）時才加 equip
+- 不要產生 equip、equip，或 chop 之後立刻接 equip 這種沒有新裝備可切換的序列
+- 若原因為「無稿子且無法合成」：
+  - 背包缺木材 → replan 插入 chop logs <n>，之後接回「補剛好夠用的工具鏈」與原剩餘步驟
+  - 有木材但缺石稿/鐵鎬 → replan 插入補工具步驟，再接回原剩餘步驟
+  - 補工具時採缺多少補多少，不要預設固定輸出 mine iron 16 / smelt raw_iron 16
+- 只有在沒有未完成 plan、或這只是局部臨時修復時，才可以回單一步驟 chop / mine
 - 若原因為「四個方向都被基岩或不可挖方塊阻擋，機器人可能被困住」→ 用 chat 告知玩家機器人被困，請玩家用 /tp 解救
 - 其他情況 → idle
 """,
 
     "smelting": f"""你是 Minecraft 機器人的燒製卡住處理助手。
-機器人在燒製過程中遇到依賴不足或材料問題而中斷，請根據當前資源決定下一步。
+機器人在燒製過程中遇到問題而中斷，請根據當前資源與整體計畫目標決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}}
-{{"command": "mine", "args": ["diamond", "5"], "text": "...理由..."}}
-{{"command": "mine", "args": ["stone", "8"], "text": "...理由..."}}
-{{"command": "chop", "goal": {{"logs": 4}}, "text": "...理由..."}}
+{{"action": "replan", "commands": ["chop logs 8", "smelt <target> <count>"], "text": "...理由..."}}
+{{"action": "skip", "text": "...理由..."}}
+{{"command": "chop", "goal": {{"logs": 8}}, "text": "...理由..."}}
+{{"command": "mine", "args": ["<target>", "<count>"], "text": "...理由..."}}
 {{"command": "home", "text": "...理由..."}}
 {{"command": "withdraw", "args": ["oak_log", "16", "1"], "text": "...理由..."}}
 {{"command": "chat", "text": "...提醒內容..."}}
@@ -211,18 +371,27 @@ SYSTEM_PROMPTS = {
 【可用指令】
 {command_list(["mine", "chop", "home", "withdraw", "chat", "idle"])}
 
-決策原則：
-- 若 reason 是 missing_dependency，優先根據 missing / needed_for / suggested_actions 決定下一步
-- 若選擇 mine，必須同時決定要挖的 target 與 count，不能只回 mine iron 這種沒有數量的指令
-- 若 missing 包含 wood 或 crafting_material，優先 chop；若選擇 chop，必須同時決定 goal.logs 數量
-- goal.logs 應根據缺口估算：只缺做稿子的基本材料時通常 3 到 5 根即可；若還要順便補工作台或備料，可給更高數量
-- 若有 home 或 chest 資源線索，也可選 home / withdraw
-- 若 missing 是 cobblestone，優先回 mine stone N 來補足熔爐材料，不要回 mine iron
-- 當 missing_count 有提供時，mine 的 count 應至少等於 missing_count；例如缺 8 個 cobblestone，應回 mine stone 8 或更多
-- 若背包有 iron_ingot >= 3 但沒有 iron_pickaxe → 用 chat 提醒玩家可以合成鐵鎬
-- 若背包有 iron_ingot 足夠工具已齊全 → mine diamond
-- 若背包沒有礦石也沒有木材燃料 → mine iron 補充資源
-- 若沒有明確需求 → idle
+【no_fuel 決策邏輯（背包沒有任何可用燃料）】
+先看整體計畫目標（plan_context.goal）和剩餘步驟（pending_steps）：
+
+情境 A：下一步是挖礦（pending_steps 含 mine iron/diamond/coal 等）
+→ 挖礦途中幾乎必定挖到煤礦 → 直接 skip 這個冶煉步驟，挖到煤後可以繼續
+→ 使用 {{"action": "skip"}}
+
+情境 B：背包有木頭（inventory 有 oak_log / planks）但量不夠燒完全部
+→ 先用現有木頭燒一部分，剩下等挖礦拿到煤再繼續
+→ replan：["chop logs <N>", "smelt <target> <count>"] 或直接 skip 讓挖礦途中解決
+
+情境 C：計畫不含挖礦、背包也沒有木頭
+→ 去砍樹取得燃料再繼續冶煉
+→ replan：["chop logs 8", "smelt <target> <count>"]
+
+【missing_dependency / no_input 決策邏輯】
+- 若 missing 包含 wood → chop（估算 goal.logs 數量）
+- 若 missing 是 cobblestone → mine stone <missing_count>
+- 若背包有 iron_ingot >= 3 但沒有 iron_pickaxe → chat 提醒玩家合成
+- 若背包資源足夠 → mine diamond
+- 其他情況 → idle
 - 禁止回覆 fish、smelt
 """,
 
@@ -288,6 +457,32 @@ SYSTEM_PROMPTS = {
 - 不要回 fish；釣魚中已在原 activity 內，請只給 move/stop 類決策
 """,
 }
+
+SYSTEM_PROMPTS["getfood"] = f"""你是 Minecraft 機器人的食物補充卡住處理助手。
+機器人在補充食物時遇到問題（背包沒有原始食材可冶煉），請決定下一步。
+每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
+只能回覆以下其中一種 JSON（不要加任何其他文字）：
+{{"action": "replan", "commands": ["hunt count <n>", "getfood count <food_target>"], "text": "...理由..."}}
+{{"action": "replan", "commands": ["fish catches <n>", "getfood count <food_target>"], "text": "...理由..."}}
+{{"command": "chat", "text": "...提醒內容..."}}
+
+【可用指令】
+{command_list(["hunt", "fish", "getfood", "chat"])}
+
+決策原則：
+- reason 為 no_raw_food：背包沒有生食可冶煉，必須先取得生食再重啟 getfood
+- 根據計畫目標（plan_context.goal）決定 food_target：
+  - 短暫/輕鬆任務 → food_target = 8
+  - 一般挖礦/砍樹 → food_target = 16
+  - 長時間/危險任務（鑽石、深挖、combat、探索）→ food_target = 32
+- hunt count = food_target（不要假設每隻動物平均掉 2 個原料，先採 1:1 保守估計）
+- 若背包有釣竿（inventory 有 fishing_rod）→ 可改用 fish catches <food_target>，再 getfood count <food_target>
+- 永遠用 replan 格式，不要只回單一指令
+- **重要**：replan 的 commands 必須在 hunt+getfood 之後附加「原計畫剩餘步驟」，否則後續任務會被丟失
+  例如：["hunt count <remaining>", "getfood count <remaining>", "mine iron 3", "smelt raw_iron 3", "equip", "mine diamond 10"]
+  若後續只是補鐵鎬或補工具鏈，礦物與冶煉數量請依實際缺口估算，不要固定寫 16
+- getfood count 必須用「還需熟食數量」（remaining），不是原本的總目標數
+"""
 
 SYSTEM_PROMPTS["makechest"] = f"""你是 Minecraft 機器人的箱子製作問題處理助手。
 機器人嘗試製作並放置箱子但失敗了，請根據當前狀態決定下一步。
@@ -376,6 +571,30 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     missing_count = state.get("missing_count")
     plan_context = state.get("plan_context")
 
+    if _looks_like_getfood_subflow(activity, reason, plan_context):
+        shortcut = _build_getfood_replan_from_smelting(state, plan_context)
+        if shortcut:
+            print("[Skill/activity_stuck] smelting/no_input 發生在 getfood 子流程，直接改走補食物 replan")
+            return shortcut
+
+    # ── Deterministic shortcut: mining no_tools + can craft pickaxe ──────────
+    if activity == "mining" and reason == "no_tools":
+        caps = state.get("capabilities") or {}
+        if caps.get("can_make_pickaxe"):
+            pending_steps = (plan_context or {}).get("pending_steps", [])
+            # current cmd is mine X N, still needs to run after crafting
+            current_cmd = (plan_context or {}).get("current_cmd", "")
+            new_cmds = ["craft stone_pickaxe"]
+            if current_cmd:
+                new_cmds.append(current_cmd)
+            new_cmds.extend(pending_steps)
+            print(f"[Skill/activity_stuck] mining no_tools + can_make_pickaxe → replan craft then retry: {new_cmds}")
+            return [
+                {"command": "chat", "text": "我有材料可以合成石鎬，合成後繼續挖礦"},
+                {"action": "replan", "commands": new_cmds},
+            ]
+
+    remaining = state.get("remaining")  # getfood no_raw_food: 還需幾個熟食
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
     reason_desc = REASON_DESC.get(reason, reason)
     extra_lines = []
@@ -395,9 +614,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         prompt = _build_fishing_prompt(state, health, food)
     else:
         plan_section = ""
+        pending_steps = []
         if plan_context:
             done = ', '.join(plan_context.get('done_steps', [])) or '（無）'
-            pending = ', '.join(plan_context.get('pending_steps', [])) or '（無）'
+            pending_steps = plan_context.get('pending_steps', [])
+            pending = ', '.join(pending_steps) or '（無）'
             plan_section = (
                 f"\n【計畫進度】目標：{plan_context.get('goal', '?')}\n"
                 f"共 {plan_context.get('total_steps', '?')} 步，"
@@ -405,11 +626,18 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                 f"已完成：{done}\n"
                 f"待執行：{pending}\n"
             )
+        remaining_note = f"\n還需熟食數量：{remaining} 個（請用此數字作為 getfood count）\n" if remaining is not None else ""
+        pending_note = (
+            f"\n原計畫剩餘步驟（replan 時必須附加在 hunt+getfood 之後）：{pending_steps}\n"
+            if pending_steps else ""
+        )
         prompt = (
             f"機器人在執行「{activity}」時中斷（原因：{reason_desc}）\n"
             f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
             f"背包內容：\n{inv_summary}\n\n"
             f"{extra}"
+            f"{remaining_note}"
+            f"{pending_note}"
             f"{plan_section}\n"
             f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
             f"請決定機器人接下來要做什麼。"
@@ -430,12 +658,44 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         decision = _parse_json_with_repair(clean)
 
-        # Replan response — pass through directly without command validation
+        if _should_prefer_replan(activity, reason, plan_context) and decision.get("action") not in {"replan", "skip"}:
+            repaired = await _reprompt_for_replan_strategy(
+                llm,
+                prompt,
+                system,
+                decision,
+                pending_steps,
+            )
+            if not repaired:
+                return _replan_fallback("我需要先重新規劃剩餘步驟，這次先跳過目前卡住的修復。")
+            decision = repaired
+
         if decision.get("action") == "replan" and decision.get("commands"):
+            errors = validate_commands(
+                decision.get("commands", []),
+                allowed_commands=PLAN_ALLOWED_COMMANDS,
+            )
+            if errors:
+                repaired = await _reprompt_invalid_replan(
+                    llm,
+                    prompt,
+                    system,
+                    invalid_commands=[error.command for error in errors],
+                    errors=errors,
+                )
+                if not repaired:
+                    return _replan_fallback("我剛剛重新規劃失敗，先跳過這一步繼續。")
+                decision = repaired
             result = []
             if decision.get("text"):
                 result.append({"command": "chat", "text": decision["text"]})
             result.append({"action": "replan", "commands": decision["commands"]})
+            return result
+        if decision.get("action") == "skip":
+            result = []
+            if decision.get("text"):
+                result.append({"command": "chat", "text": decision["text"]})
+            result.append({"action": "skip"})
             return result
 
         decision = _normalize_decision(activity, reason, needed_for, missing, missing_count, decision)
@@ -457,4 +717,6 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         return result if result else None
     except Exception as e:
         print(f"[Skill/activity_stuck] 解析失敗: {e}\n原始回應: {response!r}")
+        if plan_context:
+            return _replan_fallback("我剛剛重新規劃失敗，先跳過這一步繼續。")
         return None

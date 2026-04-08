@@ -4,48 +4,44 @@ from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
 from agent.skills.commands_ref import command_list
 
-_SELF_TASK_COMMANDS = command_list(["getfood", "chop", "mine", "smelt", "equip", "idle"])
+_SELF_TASK_COMMANDS = command_list(["getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "idle"])
 from agent import task_memory
 
 SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手。
 機器人目前沒有玩家直接指定的新任務，請根據它自己的狀態，決定下一個最合理的生存/補給任務。
 
-你的目標：
-1. 保持有足夠食物
-2. 保持基本工具與裝備
-3. 背包不要太亂或太滿
-4. 沒有迫切需要時保持 idle
-
 只能回覆以下其中一種 JSON（不要加其他文字）：
 {{"command":"getfood","goal":{{"count":8}},"text":"..."}}
-{{"command":"chop","goal":{{"logs":8}},"text":"..."}}
-{{"command":"mine","args":["stone","8"],"text":"..."}}
-{{"command":"mine","args":["iron","8"],"text":"..."}}
-{{"command":"smelt","goal":{{"target":"beef","count":6}},"text":"..."}}
-{{"command":"equip","text":"..."}}
-{{"command":"tidy","text":"..."}}
 {{"command":"idle","text":"..."}}
 
-或短 plan（最多 3 步）：
-{{"action":"plan","commands":["mine stone 8","smelt beef 6"],"text":"..."}}
+或 plan（步驟數根據需求決定，不設上限）：
+{{"action":"plan","commands":["mine iron 16","smelt iron 16","equip"],"goal":"補充鐵製工具","text":"..."}}
 
 【可用指令】
 {_SELF_TASK_COMMANDS}
 
-規則：
-- 只能使用白名單指令：getfood, chop, mine, smelt, equip, tidy, idle
-- 若 resources.food.cooked_total 很低，優先 getfood
-- 若有大量 raw food 且 capabilities.can_smelt_food 為 true，可優先 smelt
-- 若 capabilities.has_good_weapon 為 false 或 capabilities.has_good_armor 為 false，可優先 equip
-- 若 capabilities.low_durability_equipment 不為空（裝備快壞了），優先 equip 換上備用
-- 若背包已有足夠食物、工具、裝備，優先 idle
-- 若缺少熔爐所需材料，可用 mine stone <count>
-- 若缺少木材，可用 chop
-- plan 最多 3 步，且只能用來補足明確缺口
-- 不要輸出 chat、follow、home、withdraw、deposit、combat
+【優先順序】
+1. 食物危機（cooked_total < 3）→ 立即 getfood
+2. 裝備損壞（low_durability_equipment 不為空）→ equip
+3. 工具鏈補充（有明確缺口）→ 規劃 plan 補齊
+4. 背包有已分類箱子且空間快滿 → home + deposit
+5. 無迫切需求 → idle
+
+【工具鏈推理】
+收到需求前先檢查背包，確認缺什麼才加對應步驟：
+- 缺鐵鎬（iron_pickaxe）→ mine iron 16 → smelt iron 16 → equip
+- 缺石鎬（stone_pickaxe）→ mine stone 16 → equip
+- 缺食物 → getfood 或 smelt（若有 raw food + 燃料）
+- 缺木材（logs < 16）→ chop logs 32
+- 有大量原礦未冶煉（raw_iron > 16）→ smelt iron <count>
+
+【禁止】
+- 不要輸出 chat、follow、withdraw、combat、fish
+- 不要規劃沒有明確缺口的步驟（背包夠用就 idle）
+- 不要假設缺少實際上已有的物品（先看 inventory）
 """
 
-ALLOWED_COMMANDS = {"getfood", "chop", "mine", "smelt", "equip", "tidy", "idle"}
+ALLOWED_COMMANDS = {"getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "idle"}
 
 
 def _extract_first_json_object(text: str) -> dict:
@@ -71,9 +67,6 @@ def _normalize_result(result: dict) -> dict:
         args = result.get("args") or []
         if len(args) == 1:
             result = {**result, "args": [args[0], "8"]}
-    if result.get("action") == "plan":
-        commands = result.get("commands", [])
-        result["commands"] = commands[:3]
     return result
 
 
@@ -114,7 +107,7 @@ def _is_valid_plan_result(result: dict) -> bool:
     if result.get("action") != "plan":
         return False
     commands = result.get("commands")
-    if not isinstance(commands, list) or not commands or len(commands) > 3:
+    if not isinstance(commands, list) or not commands:
         return False
     for cmd in commands:
         if not isinstance(cmd, str):
