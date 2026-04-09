@@ -76,7 +76,11 @@ async function _loop(bot, goal) {
     let noAnimalTicks = 0
 
     try {
-        await _equipSword(bot)
+        const armed = await _equipSword(bot)
+        if (!armed) {
+            await _reportNoWeaponStuck(bot, goal, _myGen)
+            return
+        }
     } catch (_) {}
 
     while (isHunting) {
@@ -156,7 +160,11 @@ async function _killAnimal(bot, animal, expectedGen = null) {
 
         const handItem = bot.heldItem
         if (!handItem || !SWORD_PRIORITY.includes(handItem.name)) {
-            await _equipSword(bot)
+            const armed = await _equipSword(bot)
+            if (!armed) {
+                await _reportNoWeaponStuck(bot, activityStack.getTopFrame()?.goal || {}, expectedGen)
+                return false
+            }
         }
 
         const dist = animal.position.distanceTo(bot.entity.position)
@@ -181,6 +189,21 @@ async function _killAnimal(bot, animal, expectedGen = null) {
         await _sleep(600)
     }
     return !animal.isValid
+}
+
+async function _reportNoWeaponStuck(bot, goal = {}, expectedGen = null) {
+    if (_shouldAbort(expectedGen)) return
+    const remaining = Math.max(1, (goal.count ?? 3) - _killCount)
+    console.log(`[Hunt] 沒有可用武器且無法合成，改由上層重新規劃（剩餘 ${remaining}）`)
+    isHunting = false
+    bridge.sendState(bot, 'activity_stuck', {
+        activity: 'hunting',
+        reason: 'no_weapon',
+        remaining,
+        progress: { count: _killCount },
+        suggested_actions: ['chop', 'fish', 'explore', 'chat', 'idle'],
+        detail: `目前沒有可用劍，且本地合成武器流程失敗，尚缺 ${remaining} 份生食`,
+    })
 }
 
 async function _equipSword(bot) {

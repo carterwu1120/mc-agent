@@ -42,6 +42,25 @@ function _shouldAbort(expectedGen = null) {
     return !isChopping || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
+function _shouldAbortAfterGoal(expectedGen = null) {
+    return expectedGen !== null && _loopGen !== expectedGen
+}
+
+function _countLogsInInventory(bot) {
+    return bot.inventory.items()
+        .filter(i => i.name && i.name.endsWith('_log'))
+        .reduce((sum, i) => sum + i.count, 0)
+}
+
+async function _waitForCollectedLogs(bot, minCount = 1, timeoutMs = 1500) {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+        if (_countLogsInInventory(bot) >= minCount) return true
+        await _sleep(150)
+    }
+    return _countLogsInInventory(bot) >= minCount
+}
+
 async function _safeEquip(bot, item, slot = 'hand', label = '裝備物品') {
     if (!item) return false
     try {
@@ -269,7 +288,6 @@ async function _loop(bot, goal = {}) {
                     console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
                     goalReached = true
                     isChopping = false
-                    bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
                     break
                 }
             } catch (e) {
@@ -287,7 +305,7 @@ async function _loop(bot, goal = {}) {
         // 整棵樹砍完後才回收疊腳方塊、安全下來
         if (Math.floor(bot.entity.position.y) > groundY) {
             await _reclaimScaffold(bot, groundY)
-            if (_shouldAbort(_myGen)) return
+            if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
         }
         if (Math.floor(bot.entity.position.y) > groundY) {
             applyMovements(bot, { canDig: false })
@@ -296,7 +314,7 @@ async function _loop(bot, goal = {}) {
                 await bot.pathfinder.goto(
                     new goals.GoalNear(Math.floor(botPos.x), groundY, Math.floor(botPos.z), 2)
                 )
-                if (_shouldAbort(_myGen)) return
+                if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
             } catch (e) {
                 console.log('[Wood] 無法安全下來，繼續')
             }
@@ -304,10 +322,19 @@ async function _loop(bot, goal = {}) {
 
         // 砍完後：撿附近掉落物、種樹苗
         await _collectNearby(bot, rootPos, 8)
-        if (_shouldAbort(_myGen)) return
+        if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
+        if (goalReached) {
+            const hasLogs = await _waitForCollectedLogs(bot, Math.min(_logsCollected, goal.logs || _logsCollected || 1))
+            if (!hasLogs) {
+                console.log('[Wood] 已達採集目標，但木頭尚未進背包，先等待並延後回報完成')
+            }
+        }
         await _plantSapling(bot, rootPos, treeLogName)
-        if (_shouldAbort(_myGen)) return
-        if (goalReached) break
+        if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
+        if (goalReached) {
+            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
+            break
+        }
     }
 
     if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
@@ -445,9 +472,10 @@ async function _collectDrop(bot, drop) {
         )
         if (!stillThere) return
 
-        if (!await _clearLeavesToward(bot, stillThere.position)) {
-            break
+        if (await _clearLeavesToward(bot, stillThere.position)) {
+            continue
         }
+        await _sleep(300)
     }
 }
 

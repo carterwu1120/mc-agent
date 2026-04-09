@@ -1,6 +1,10 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.stuck import getfood as getfood_stuck
+from agent.skills.stuck import hunting as hunting_stuck
+from agent.skills.stuck import mining as mining_stuck
+from agent.skills.stuck import smelting as smelting_stuck
 from agent.skills.command_validation import (
     PLAN_ALLOWED_COMMANDS,
     build_reprompt_suffix,
@@ -143,117 +147,35 @@ def _normalize_decision(activity: str, reason: str, needed_for: str | None, miss
 
 
 def _should_prefer_replan(activity: str, reason: str, plan_context: dict | None) -> bool:
-    return activity == "mining" and reason == "no_tools" and bool(plan_context)
-
-
-def _extract_count_from_command(cmd: str | None) -> int | None:
-    if not cmd:
-        return None
-    parts = cmd.split()
-    if len(parts) >= 3:
-        try:
-            return int(parts[2])
-        except Exception:
-            return None
-    return None
-
-
-def _looks_like_getfood_subflow(activity: str, reason: str, plan_context: dict | None) -> bool:
-    if activity != "smelting" or reason != "no_input" or not plan_context:
-        return False
-    current_cmd = (plan_context.get("current_cmd") or "").strip()
-    return current_cmd.startswith("getfood ")
-
-
-def _build_getfood_replan_from_smelting(state: dict, plan_context: dict) -> list[dict] | None:
-    current_cmd = (plan_context.get("current_cmd") or "").strip()
-    target_count = _extract_count_from_command(current_cmd)
-    if not target_count:
-        return None
-
-    inventory = state.get("inventory") or []
-    cooked_total = sum(
-        int(item.get("count", 0))
-        for item in inventory
-        if str(item.get("name", "")).startswith("cooked_") or item.get("name") in {"bread", "baked_potato"}
-    )
-    has_fishing_rod = any((item.get("name") == "fishing_rod") for item in inventory)
-    remaining = max(1, int(target_count) - int(cooked_total))
-    pending_steps = plan_context.get("pending_steps", [])
-
-    if has_fishing_rod:
-        commands = [f"fish catches {remaining}", f"getfood count {remaining}", *pending_steps]
-        text = f"熟食還差 {remaining} 個，先補魚貨再回來完成食物準備。"
-    else:
-        commands = [f"hunt count {remaining}", f"getfood count {remaining}", *pending_steps]
-        text = f"熟食還差 {remaining} 個，先補生食再繼續後面的挖礦計畫。"
-
-    return [
-        {"command": "chat", "text": text},
-        {"action": "replan", "commands": commands},
-    ]
-
-
-def _build_hunting_replan_no_animals(state: dict, plan_context: dict) -> list[dict] | None:
-    current_cmd = (plan_context.get("current_cmd") or "").strip()
-    if not current_cmd.startswith("hunt "):
-        return None
-
-    remaining = state.get("remaining")
-    if not isinstance(remaining, int) or remaining <= 0:
-        remaining = _extract_count_from_command(current_cmd) or 1
-
-    pending_steps = plan_context.get("pending_steps", [])
-    inventory = state.get("inventory") or []
-    has_fishing_rod = any((item.get("name") == "fishing_rod") for item in inventory)
-
-    if has_fishing_rod:
-        commands = [f"fish catches {remaining}", f"getfood count {remaining}", *pending_steps]
-        text = f"附近已沒有動物可獵，改用釣魚補足剩餘 {remaining} 份食物再接回原計畫。"
-    else:
-        commands = ["explore trees", f"hunt count {remaining}", *pending_steps]
-        text = f"附近已沒有動物可獵，先換到新的地表區域，再補足剩餘 {remaining} 份生食。"
-
-    return [
-        {"command": "chat", "text": text},
-        {"action": "replan", "commands": commands},
-    ]
-
-
-def _recent_hunting_no_animals(state: dict) -> bool:
-    recent = state.get("recent_stuck") or []
-    for item in reversed(recent):
-        if not isinstance(item, dict):
-            continue
-        if item.get("activity") == "hunting" and item.get("reason") == "no_animals":
-            return True
+    if activity == "mining":
+        return mining_stuck.should_prefer_replan(reason, plan_context)
     return False
 
 
+def _extract_count_from_command(cmd: str | None) -> int | None:
+    return getfood_stuck.extract_count_from_command(cmd)
+
+
+def _looks_like_getfood_subflow(activity: str, reason: str, plan_context: dict | None) -> bool:
+    if activity != "smelting":
+        return False
+    return smelting_stuck.looks_like_getfood_subflow(reason, plan_context)
+
+
+def _build_getfood_replan_from_smelting(state: dict, plan_context: dict) -> list[dict] | None:
+    return getfood_stuck.build_replan_from_smelting(state, plan_context)
+
+
+def _build_hunting_replan_no_animals(state: dict, plan_context: dict) -> list[dict] | None:
+    return hunting_stuck.build_replan_no_animals(state, plan_context)
+
+
+def _recent_hunting_no_animals(state: dict) -> bool:
+    return getfood_stuck.recent_hunting_no_animals(state)
+
+
 def _build_getfood_replan_after_failed_hunt(state: dict, plan_context: dict) -> list[dict] | None:
-    current_cmd = (plan_context.get("current_cmd") or "").strip()
-    if not current_cmd.startswith("getfood "):
-        return None
-
-    remaining = state.get("remaining")
-    if not isinstance(remaining, int) or remaining <= 0:
-        remaining = _extract_count_from_command(current_cmd) or 1
-
-    pending_steps = plan_context.get("pending_steps", [])
-    inventory = state.get("inventory") or []
-    has_fishing_rod = any((item.get("name") == "fishing_rod") for item in inventory)
-
-    if has_fishing_rod:
-        commands = [f"fish catches {remaining}", f"getfood count {remaining}", *pending_steps]
-        text = f"剛才狩獵區域已經沒有動物，改用釣魚補足剩餘 {remaining} 份食物再接回原計畫。"
-    else:
-        commands = ["explore trees", f"hunt count {remaining}", f"getfood count {remaining}", *pending_steps]
-        text = f"剛才狩獵區域已經沒有動物，先換到新的地表區域，再補足剩餘 {remaining} 份食物。"
-
-    return [
-        {"command": "chat", "text": text},
-        {"action": "replan", "commands": commands},
-    ]
+    return getfood_stuck.build_replan_after_failed_hunt(state, plan_context)
 
 
 async def _reprompt_invalid_replan(
@@ -389,84 +311,8 @@ def _is_valid_decision(decision: dict) -> bool:
     return True
 
 SYSTEM_PROMPTS = {
-    "mining": f"""你是 Minecraft 機器人的挖礦卡住處理助手。
-機器人在挖礦時遇到障礙而中斷，請根據目前的 activity、卡住原因、是否存在未完成計畫，以及當前狀態決定下一步。
-每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{{"action": "replan", "commands": ["chop logs 4", "mine iron 3", "smelt raw_iron 3", "equip", "mine diamond 10"], "text": "...理由..."}}
-{{"action": "skip", "text": "...理由..."}}
-{{"command": "chop", "text": "...理由..."}}
-{{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}}
-{{"command": "chat", "text": "...需要玩家幫助的說明..."}}
-{{"command": "idle", "text": "...理由..."}}
-
-【可用指令】
-{command_list(["chop", "mine", "chat", "idle"])}
-
-決策原則：
-- 若存在未完成 plan，且目前步驟是挖礦時因 no_tools 卡住，優先回覆 replan 或 skip，不要只回單一步驟 chop
-- replan 必須是「從當前步驟開始的完整剩餘步驟」，可以插入修復步驟，但必須把原本剩餘計畫接回來
-- 不要把 equip 當成萬用修復步驟；只有在前一步真的會產生新裝備（例如 smelt raw_iron 3 之後）時才加 equip
-- 不要產生 equip、equip，或 chop 之後立刻接 equip 這種沒有新裝備可切換的序列
-- 若原因為「無稿子且無法合成」：
-  - 背包缺木材 → replan 插入 chop logs <n>，之後接回「補剛好夠用的工具鏈」與原剩餘步驟
-  - 有木材但缺石稿/鐵鎬 → replan 插入補工具步驟，再接回原剩餘步驟
-  - 補工具時採缺多少補多少，不要預設固定輸出 mine iron 16 / smelt raw_iron 16
-- 只有在沒有未完成 plan、或這只是局部臨時修復時，才可以回單一步驟 chop / mine
-- 若原因為「四個方向都被基岩或不可挖方塊阻擋，機器人可能被困住」→ 用 chat 告知玩家機器人被困，請玩家用 /tp 解救
-- 其他情況 → idle
-""",
-
-    "smelting": f"""你是 Minecraft 機器人的燒製卡住處理助手。
-機器人在燒製過程中遇到問題而中斷，請根據當前資源與整體計畫目標決定下一步。
-每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{{"action": "replan", "commands": ["chop logs 8", "smelt <target> <count>"], "text": "...理由..."}}
-{{"action": "skip", "text": "...理由..."}}
-{{"command": "chop", "goal": {{"logs": 8}}, "text": "...理由..."}}
-{{"command": "mine", "args": ["<target>", "<count>"], "text": "...理由..."}}
-{{"command": "home", "text": "...理由..."}}
-{{"command": "withdraw", "args": ["oak_log", "16", "1"], "text": "...理由..."}}
-{{"command": "chat", "text": "...提醒內容..."}}
-{{"command": "idle", "text": "...理由..."}}
-
-【可用指令】
-{command_list(["mine", "chop", "home", "withdraw", "chat", "idle"])}
-
-【no_fuel 決策邏輯（背包沒有任何可用燃料）】
-先看整體計畫目標（plan_context.goal）和剩餘步驟（pending_steps）：
-
-情境 A：下一步是挖礦（pending_steps 含 mine iron/diamond/coal 等）
-→ 挖礦途中幾乎必定挖到煤礦 → 直接 skip 這個冶煉步驟，挖到煤後可以繼續
-→ 使用 {{"action": "skip"}}
-
-情境 B：背包有木頭（inventory 有 oak_log / planks）但量不夠燒完全部
-→ 先用現有木頭燒一部分，剩下等挖礦拿到煤再繼續
-→ replan：["chop logs <N>", "smelt <target> <count>"] 或直接 skip 讓挖礦途中解決
-
-情境 C：計畫不含挖礦、背包也沒有木頭
-→ 去砍樹取得燃料再繼續冶煉
-→ replan：["chop logs 8", "smelt <target> <count>"]
-
-【no_progress 決策邏輯（熔爐無法放置或燒製沒有任何進展）】
-先確認上層活動堆疊（prompt 中「上層活動」段落）：
-
-情境 A：上層是挖礦（mining diamond/iron 等），冶煉是可能是為了補工具（smelt iron）
-→ 這是必要的前置步驟，不能 skip，否則挖礦也無法繼續
-→ replan 重試：["smelt <target> <count>", "<parent mining cmd>", ...原計畫剩餘步驟]
-→ 例：parent goal={{"target":"diamond","count":20}} → replan: ["smelt iron 3", "mine diamond 20", "equip"]
-
-情境 B：冶煉是頂層任務（無上層活動），反覆放不了熔爐
-→ replan 重試一次或 skip
-
-【missing_dependency / no_input 決策邏輯】
-- 若 missing 包含 wood → chop（估算 goal.logs 數量）
-- 若 missing 是 cobblestone → mine stone <missing_count>
-- 若背包有 iron_ingot >= 3 但沒有 iron_pickaxe → chat 提醒玩家合成
-- 若背包資源足夠 → mine diamond
-- 其他情況 → idle
-- 禁止回覆 fish、smelt
-""",
+    "mining": mining_stuck.SYSTEM_PROMPT,
+    "smelting": smelting_stuck.SYSTEM_PROMPT,
 
     "chopping": f"""你是 Minecraft 機器人的砍樹卡住處理助手。
 機器人在砍樹時附近找不到可砍的樹，請根據目前狀態決定下一步。
@@ -531,49 +377,8 @@ SYSTEM_PROMPTS = {
 """,
 }
 
-SYSTEM_PROMPTS["getfood"] = f"""你是 Minecraft 機器人的食物補充卡住處理助手。
-機器人在補充食物時遇到問題（背包沒有原始食材可冶煉），請決定下一步。
-每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{{"action": "replan", "commands": ["hunt count <n>", "getfood count <food_target>"], "text": "...理由..."}}
-{{"action": "replan", "commands": ["fish catches <n>", "getfood count <food_target>"], "text": "...理由..."}}
-{{"command": "chat", "text": "...提醒內容..."}}
-
-【可用指令】
-{command_list(["hunt", "fish", "getfood", "chat"])}
-
-決策原則：
-- reason 為 no_raw_food：背包沒有生食可冶煉，必須先取得生食再重啟 getfood
-- 根據計畫目標（plan_context.goal）決定 food_target：
-  - 短暫/輕鬆任務 → food_target = 8
-  - 一般挖礦/砍樹 → food_target = 16
-  - 長時間/危險任務（鑽石、深挖、combat、探索）→ food_target = 32
-- hunt count = food_target（不要假設每隻動物平均掉 2 個原料，先採 1:1 保守估計）
-- 若背包有釣竿（inventory 有 fishing_rod）→ 可改用 fish catches <food_target>，再 getfood count <food_target>
-- 永遠用 replan 格式，不要只回單一指令
-- **重要**：replan 的 commands 必須在 hunt+getfood 之後附加「原計畫剩餘步驟」，否則後續任務會被丟失
-  例如：["hunt count <remaining>", "getfood count <remaining>", "mine iron 3", "smelt raw_iron 3", "equip", "mine diamond 10"]
-  若後續只是補鐵鎬或補工具鏈，礦物與冶煉數量請依實際缺口估算，不要固定寫 16
-- getfood count 必須用「還需熟食數量」（remaining），不是原本的總目標數
-"""
-
-SYSTEM_PROMPTS["hunting"] = f"""你是 Minecraft 機器人的狩獵卡住處理助手。
-機器人在狩獵食物時遇到問題，請根據當前狀態決定下一步。
-每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{{"action": "replan", "commands": ["explore trees", "hunt count <n>"], "text": "...理由..."}}
-{{"action": "replan", "commands": ["fish catches <n>", "getfood count <n>"], "text": "...理由..."}}
-{{"command": "chat", "text": "...提醒內容..."}}
-
-【可用指令】
-{command_list(["explore", "hunt", "fish", "getfood", "chat"])}
-
-決策原則：
-- reason 為 no_animals：附近已沒有可食用動物，不能把這次狩獵當成完成
-- 若有釣竿可改用 fish catches <remaining>，再接回 getfood 與原計畫
-- 若沒有釣竿，優先 explore trees 換到新的地表區域後，再 hunt count <remaining>
-- 若目前在多步驟計畫中，replan 必須保留原本剩餘步驟，不能只回單一步驟
-"""
+SYSTEM_PROMPTS["getfood"] = getfood_stuck.SYSTEM_PROMPT
+SYSTEM_PROMPTS["hunting"] = hunting_stuck.SYSTEM_PROMPT
 
 SYSTEM_PROMPTS["makechest"] = f"""你是 Minecraft 機器人的箱子製作問題處理助手。
 機器人嘗試製作並放置箱子但失敗了，請根據當前狀態決定下一步。
@@ -631,6 +436,7 @@ REASON_DESC = {
     'no_progress': '活動持續一段時間沒有任何進展，可能卡住了',
     'timeout':   '操作超時',
     'no_animals': '附近已找不到可食用動物，狩獵未達目標',
+    'no_weapon': '目前沒有可用武器，且本地合成武器流程失敗',
     'has_raw_food': '背包有生食需要冶煉，重新規劃以冶煉後繼續',
 }
 
@@ -680,9 +486,14 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     plan_context = state.get("plan_context")
 
     if _looks_like_getfood_subflow(activity, reason, plan_context):
-        shortcut = _build_getfood_replan_from_smelting(state, plan_context)
+        shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
         if shortcut:
-            print("[Skill/activity_stuck] smelting/no_input 發生在 getfood 子流程，直接改走補食物 replan")
+            return shortcut
+
+    if activity == "hunting" and reason == "no_weapon":
+        shortcut = hunting_stuck.deterministic_shortcut_no_weapon(state, plan_context)
+        if shortcut:
+            print("[Skill/activity_stuck] hunting/no_weapon 走 deterministic shortcut")
             return shortcut
 
     if activity == "hunting" and reason == "no_animals" and plan_context:
@@ -697,22 +508,17 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             print("[Skill/activity_stuck] getfood/no_raw_food 且最近剛 hunting/no_animals，直接改走換區域或改釣魚的 replan")
             return shortcut
 
+    if activity == "getfood" and reason == "no_raw_food":
+        shortcut = getfood_stuck.deterministic_shortcut_no_raw_food_satisfied(state, plan_context)
+        if shortcut:
+            print("[Skill/activity_stuck] getfood/no_raw_food 但熟食已足夠，直接跳過補食流程")
+            return shortcut
+
     # ── Deterministic shortcut: mining no_tools + can craft pickaxe ──────────
     if activity == "mining" and reason == "no_tools":
-        caps = state.get("capabilities") or {}
-        if caps.get("can_make_pickaxe") and not state.get("craft_issue_suspected"):
-            pending_steps = (plan_context or {}).get("pending_steps", [])
-            # current cmd is mine X N, still needs to run after crafting
-            current_cmd = (plan_context or {}).get("current_cmd", "")
-            new_cmds = ["craft stone_pickaxe"]
-            if current_cmd:
-                new_cmds.append(current_cmd)
-            new_cmds.extend(pending_steps)
-            print(f"[Skill/activity_stuck] mining no_tools + can_make_pickaxe → replan craft then retry: {new_cmds}")
-            return [
-                {"command": "chat", "text": "我有材料可以合成石鎬，合成後繼續挖礦"},
-                {"action": "replan", "commands": new_cmds},
-            ]
+        shortcut = mining_stuck.deterministic_shortcut(state, plan_context)
+        if shortcut:
+            return shortcut
 
     # ── Deterministic shortcut: makechest failed but existing chest has free slots ──
     if activity == "makechest":
@@ -761,6 +567,21 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         extra_lines.append("注意：目前看起來不是單純缺資源，而是 craft 流程可能異常失敗")
     if detail:
         extra_lines.append(f"補充說明：{detail}")
+    if activity == "hunting" and reason == "no_weapon":
+        route_info = hunting_stuck.describe_no_weapon_options(state, plan_context)
+        extra_lines.append(f"武器缺口診斷：{', '.join(route_info['weapon_blockers']) or '（無明確材料缺口）'}")
+        hints = route_info["environment_hints"]
+        extra_lines.append(
+            "環境提示："
+            f" near_trees={hints['near_trees']},"
+            f" near_stone={hints['near_stone']},"
+            f" near_water={hints['near_water']}"
+        )
+        extra_lines.append(f"候選路線：{', '.join(route_info['candidate_routes'])}")
+        extra_lines.append(
+            "請只在候選路線中挑選最合理的一條；若熟食已足夠，優先跳過 hunt/getfood，"
+            "不要再回 explore trees。"
+        )
     extra = "\n".join(extra_lines)
 
     if activity == "fishing":
