@@ -10,7 +10,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡復活處理助手。
 機器人剛剛死亡並重生，請根據死因、剩餘任務與當前狀態決定「恢復原任務前」需要做的前置動作。
 主任務會在這些前置動作完成後自動從中斷步驟繼續，不需要你重寫剩餘任務。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
+只有在 deterministic 規則無法決定時，才回覆以下其中一種 JSON（不要加任何其他文字）：
 
 {{"action": "plan", "commands": [], "text": "...理由..."}}
 {{"action": "plan", "commands": ["tp 13 5 105"], "text": "...理由..."}}
@@ -65,6 +65,69 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
     if not remaining:
         return None
+
+    def _fmt_pos(pos: dict | None) -> str:
+        if not pos:
+            return "（無）"
+        return f"({pos['x']:.0f}, {pos['y']:.0f}, {pos['z']:.0f})"
+
+    def _tp_cmd(pos: dict | None) -> str | None:
+        if not pos:
+            return None
+        return f"tp {round(pos['x'])} {round(pos['y'])} {round(pos['z'])}"
+
+    # Deterministic recovery priority:
+    # other -> currentPos > workPos > startPos
+    # dangerous deaths -> workPos > startPos (avoid returning to likely hazard point)
+    dangerous_causes = {"lava", "drowning"}
+    recovery_target = None
+    recovery_label = ""
+    if cause == "other":
+        if task_current_pos:
+            recovery_target = task_current_pos
+            recovery_label = "中斷步驟當前位置"
+        elif task_work_pos:
+            recovery_target = task_work_pos
+            recovery_label = "中斷步驟工作位置"
+        elif start_pos:
+            recovery_target = start_pos
+            recovery_label = "舊 activity startPos"
+    elif cause in dangerous_causes:
+        if task_work_pos:
+            recovery_target = task_work_pos
+            recovery_label = "中斷步驟工作位置"
+        elif start_pos:
+            recovery_target = start_pos
+            recovery_label = "舊 activity startPos"
+    else:
+        if task_work_pos:
+            recovery_target = task_work_pos
+            recovery_label = "中斷步驟工作位置"
+        elif task_current_pos:
+            recovery_target = task_current_pos
+            recovery_label = "中斷步驟當前位置"
+        elif start_pos:
+            recovery_target = start_pos
+            recovery_label = "舊 activity startPos"
+
+    deterministic_commands = []
+    tp_command = _tp_cmd(recovery_target)
+    if tp_command:
+        deterministic_commands.append(tp_command)
+    if cause == "other":
+        deterministic_commands.append("equip")
+
+    if deterministic_commands:
+        text = (
+            f"死亡原因為 {cause}，先回到{recovery_label}{_fmt_pos(recovery_target)}"
+            f"{'並重新裝備' if cause == 'other' else ''}，再接回原本任務。"
+        )
+        deterministic_commands.append("resumetask")
+        print(f"[Respawn] deterministic recovery: {deterministic_commands}")
+        return [
+            {"command": "chat", "text": text},
+            {"action": "plan", "commands": deterministic_commands, "goal": "", "preserve_task": True},
+        ]
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
     start_pos_str = f"({start_pos['x']:.0f}, {start_pos['y']:.0f}, {start_pos['z']:.0f})" if start_pos else "（無）"
