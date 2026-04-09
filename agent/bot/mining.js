@@ -143,6 +143,18 @@ function _countBySuffix(bot, suffix) {
         .reduce((sum, i) => sum + i.count, 0)
 }
 
+async function _equipToolForDig(bot, block) {
+    if (!block) return
+    try {
+        await ensureToolFor(bot, block.name)
+        return
+    } catch (_) {}
+    try {
+        const tool = bot.pathfinder.bestHarvestTool(block)
+        if (tool) await bot.equip(tool, 'hand')
+    } catch (_) {}
+}
+
 function _buildNoToolsState(bot) {
     const logs = _countBySuffix(bot, '_log')
     const planks = _countBySuffix(bot, '_planks')
@@ -222,6 +234,7 @@ async function _clearClimbablesAround(bot, positions) {
         const block = bot.blockAt(pos)
         if (!block || !CLEARABLE_CLIMBABLES.has(block.name)) continue
         try {
+            await _equipToolForDig(bot, block)
             await bot.dig(block)
             console.log(`[Mine] 清除 ${block.name} at (${pos.x}, ${pos.y}, ${pos.z})`)
             await _sleep(100)
@@ -894,7 +907,7 @@ async function _stairDown(bot, yaw, steps) {
         for (const off of [[dx, 1, dz], [dx, 0, dz], [dx, -1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
             if (!b || b.boundingBox !== 'block') continue
-            try { await bot.dig(b) } catch (_) {}
+            try { await _equipToolForDig(bot, b); await bot.dig(b) } catch (_) {}
         }
 
         // 走到前方低一格的位置（pathfinder 會自然掉落）

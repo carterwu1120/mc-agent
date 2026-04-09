@@ -317,6 +317,8 @@ async function _clearCobwebs(bot) {
         const b = bot.blockAt(feet.offset(0, dy, 0))
         if (b && b.name === 'cobweb') {
             try {
+                const tool = bot.pathfinder.bestHarvestTool(b)
+                if (tool) await bot.equip(tool, 'hand')
                 await bot.dig(b)
                 console.log('[Combat] 清除蜘蛛網')
             } catch (_) {}

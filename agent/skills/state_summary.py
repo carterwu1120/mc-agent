@@ -304,7 +304,7 @@ def summarize_state(state: dict, mode: str = "companion_survival") -> dict:
             "dimension": state.get("dimension"),
             "time_of_day": state.get("timeOfDay"),
             "current_activity": state.get("activity"),
-            "activity_stack": [entry.get("name") for entry in (state.get("stack") or [])],
+            "activity_stack": [entry.get("activity") for entry in (state.get("stack") or [])],
             "busy": state.get("activity") not in (None, "idle"),
             "equipment": equipment,
         },

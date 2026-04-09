@@ -408,6 +408,8 @@ async function _tryEscapeSuffocation(bot) {
         if (block.name === 'bedrock') continue
         try {
             console.log(`[Hazard] 挖掉 ${block.name} at (${target.x}, ${target.y}, ${target.z})`)
+            const tool = bot.pathfinder.bestHarvestTool(block)
+            if (tool) await bot.equip(tool, 'hand')
             await bot.dig(block, true)
             await _sleep(100)
         } catch (e) {

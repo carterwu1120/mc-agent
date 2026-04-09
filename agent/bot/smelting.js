@@ -10,6 +10,7 @@ let _inputPending = false
 let _placedFurnacePos = null
 let _loopGen = 0
 let _lastOutcome = null
+let _gotoFurnaceFailures = 0
 
 const SMELTABLE = {
     raw_iron: 'iron_ingot',         iron_ore: 'iron_ingot',         deepslate_iron_ore: 'iron_ingot',
@@ -56,6 +57,11 @@ const FUEL_UNITS = {
     acacia_planks: 1.5,
     dark_oak_planks: 1.5,
 }
+
+const REPLACEABLE_BLOCKS = new Set([
+    'air', 'cave_air', 'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
+    'dead_bush', 'snow', 'vine', 'torch', 'wall_torch',
+])
 
 activityStack.register('smelting', _pause)
 
@@ -127,6 +133,7 @@ async function startSmelting(bot, goal = {}) {
     _smeltedCount = 0
     _inputPending = false
     _lastOutcome = null
+    _gotoFurnaceFailures = 0
     activityStack.push(bot, 'smelting', goal, (b) => _resumeSmelting(b, goal))
     activityStack.markStarted('smelting', 'start')
     console.log(`[Smelt] 開始燒製 goal=${JSON.stringify(goal)}`)
@@ -197,9 +204,22 @@ async function _loop(bot, goal = {}) {
             const p = furnaceBlock.position
             activityStack.touch('smelting', 'goto_furnace')
             await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 2))
+            _gotoFurnaceFailures = 0
             if (_shouldAbort(_myGen)) return
         } catch (e) {
             console.log('[Smelt] 無法走到熔爐:', e.message)
+            _gotoFurnaceFailures += 1
+            if (_gotoFurnaceFailures >= 3) {
+                try {
+                    const { ensurePickaxe } = require('./crafting')
+                    await ensurePickaxe(bot)
+                } catch (_) {}
+                const nearPlaced = await _placeFurnace(bot, bot.registry.blocksByName['furnace']?.id, { preferNearby: true })
+                if (nearPlaced) {
+                    console.log('[Smelt] 連續無法走到既有熔爐，改為就地放置新熔爐')
+                    _gotoFurnaceFailures = 0
+                }
+            }
             await _sleep(2000)
             if (_shouldAbort(_myGen)) return
             continue
@@ -554,20 +574,14 @@ async function _placeFurnace(bot, furnaceId) {
     const pos = bot.entity.position.floored()
     const dirs = [[1,0],[0,1],[-1,0],[0,-1]]
 
+    // Place 2 blocks ahead in each cardinal direction (same logic as crafting table)
     const candidates = []
     for (const [dx, dz] of dirs) {
-        let ground = null
-        for (let dy = -1; dy >= -3; dy--) {
-            const b = bot.blockAt(pos.offset(dx, dy, dz))
-            if (b && b.boundingBox === 'block') { ground = b; break }
-        }
-        if (!ground) continue
-
-        const spacePos = ground.position.offset(0, 1, 0)
-        if (spacePos.distanceTo(bot.entity.position) > 4) continue
-
+        const spacePos = pos.offset(dx * 2, 0, dz * 2)
+        const ground = bot.blockAt(spacePos.offset(0, -1, 0))
+        if (!ground || ground.boundingBox !== 'block') continue
         const space = bot.blockAt(spacePos)
-        const isOpen = space && (space.name === 'air' || space.name === 'cave_air')
+        const isOpen = space && REPLACEABLE_BLOCKS.has(space.name)
         candidates.push({ ground, spacePos, needDig: !isOpen, space })
     }
 
@@ -576,15 +590,23 @@ async function _placeFurnace(bot, furnaceId) {
     for (const { ground, spacePos, needDig, space } of candidates) {
         if (needDig) {
             if (!space || space.boundingBox !== 'block') continue
+            try {
+                const { ensureToolFor } = require('./crafting')
+                await ensureToolFor(bot, space.name)
+            } catch (_) {}
             try { await bot.dig(space) } catch (_) { continue }
             const fresh = bot.blockAt(spacePos)
-            if (!fresh || (fresh.name !== 'air' && fresh.name !== 'cave_air')) continue
+            if (!fresh || !REPLACEABLE_BLOCKS.has(fresh.name)) continue
         }
 
         try {
             await bot.equip(item, 'hand')
             await bot.lookAt(ground.position.offset(0.5, 1, 0.5))
-            await bot.placeBlock(ground, new Vec3(0, 1, 0))
+            try {
+                await bot.placeBlock(ground, new Vec3(0, 1, 0))
+            } catch (_) {
+                // blockUpdate 事件超時 — 仍需確認方塊是否實際放置成功
+            }
             await _sleep(400)
             const placed = bot.findBlock({ matching: furnaceId, maxDistance: 4 })
             if (placed) {
@@ -592,6 +614,7 @@ async function _placeFurnace(bot, furnaceId) {
                 _placedFurnacePos = placed.position.clone()
                 return placed
             }
+            console.log('[Smelt] 放置熔爐失敗:', spacePos)
         } catch (e) {
             console.log('[Smelt] 放置熔爐失敗:', e.message)
         }

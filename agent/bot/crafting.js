@@ -340,39 +340,17 @@ async function _placeCraftingTable(bot, tableBlockId) {
     const pos = bot.entity.position.floored()
     const dirs = [[1,0],[0,1],[-1,0],[0,-1]]
 
-    // 先找不需要挖的位置，再找需要挖的
+    // 目標：正前方兩格，被擋住就挖掉；空位優先，需挖的排後
     const candidates = []
-
-    // 優先：bot 腳下那格是 ground，dy=0 的鄰格（隧道裡的空氣）直接可用
-    const floorBlock = bot.blockAt(pos.offset(0, -1, 0))
-    if (floorBlock && floorBlock.boundingBox === 'block') {
-        for (const [dx, dz] of dirs) {
-            const spacePos = pos.offset(dx, 0, dz)
-            if (_isOccupiedByEntity(bot, spacePos)) continue
-            const space = bot.blockAt(spacePos)
-            const isOpen = space && REPLACEABLE_BLOCKS.has(space.name)
-            candidates.push({ ground: floorBlock, spacePos, needDig: !isOpen, space })
-        }
-    }
-
     for (const [dx, dz] of dirs) {
-        let ground = null
-        for (let dy = -1; dy >= -3; dy--) {
-            const b = bot.blockAt(pos.offset(dx, dy, dz))
-            if (b && b.boundingBox === 'block') { ground = b; break }
-        }
-        if (!ground) continue
-
-        const spacePos = ground.position.offset(0, 1, 0)
-        if (spacePos.distanceTo(bot.entity.position) > 4) continue
+        const spacePos = pos.offset(dx * 2, 0, dz * 2)
+        const ground = bot.blockAt(spacePos.offset(0, -1, 0))
+        if (!ground || ground.boundingBox !== 'block') continue
         if (_isOccupiedByEntity(bot, spacePos)) continue
-
         const space = bot.blockAt(spacePos)
         const isOpen = space && REPLACEABLE_BLOCKS.has(space.name)
         candidates.push({ ground, spacePos, needDig: !isOpen, space })
     }
-
-    // 已是空氣的優先，其次才是需要挖的
     candidates.sort((a, b) => a.needDig - b.needDig)
 
     for (const { ground, spacePos, needDig, space } of candidates) {
@@ -380,7 +358,7 @@ async function _placeCraftingTable(bot, tableBlockId) {
             if (!space || space.boundingBox !== 'block') continue
             try {
                 const tool = bot.pathfinder.bestHarvestTool(space)
-                if (tool && !await _safeEquipHand(bot, tool.name, tool)) continue
+                if (tool) await _safeEquipHand(bot, tool.name, tool)
             } catch (_) {}
             try { await bot.dig(space) } catch (_) { continue }
             const fresh = bot.blockAt(spacePos)

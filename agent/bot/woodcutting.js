@@ -57,6 +57,18 @@ async function _safeEquip(bot, item, slot = 'hand', label = '裝備物品') {
     }
 }
 
+async function _equipToolForDig(bot, block) {
+    if (!block) return
+    try {
+        await ensureToolFor(bot, block.name)
+        return
+    } catch (_) {}
+    try {
+        const tool = bot.pathfinder.bestHarvestTool(block)
+        if (tool) await bot.equip(tool, 'hand')
+    } catch (_) {}
+}
+
 async function startChopping(bot, goal = {}) {
     if (isChopping) {
         if (activityStack.isStale('chopping', 15000)) {
@@ -346,7 +358,7 @@ async function _pillarUp(bot, targetY, targetPos) {
         const placeTarget = bot.blockAt(below.position.offset(0, 1, 0))
         if (placeTarget && placeTarget.name !== 'air') {
             if (placeTarget.name.includes('leaves')) {
-                try { await bot.dig(placeTarget) } catch (_) {}  // 樹葉先挖掉
+                try { await _equipToolForDig(bot, placeTarget); await bot.dig(placeTarget) } catch (_) {}  // 樹葉先挖掉
             } else {
                 break  // 木頭或其他實心方塊，已夠近，停止疊腳
             }
@@ -356,7 +368,7 @@ async function _pillarUp(bot, targetY, targetPos) {
         const headBlock = bot.blockAt(bot.entity.position.floored().offset(0, 2, 0))
         if (headBlock && headBlock.name !== 'air') {
             if (headBlock.name.includes('leaves')) {
-                try { await bot.dig(headBlock) } catch (_) {}
+                try { await _equipToolForDig(bot, headBlock); await bot.dig(headBlock) } catch (_) {}
             } else {
                 break  // 頭上有實心方塊，跳不起來
             }
@@ -459,6 +471,7 @@ async function _clearLeavesToward(bot, targetPos) {
 
     for (const { block } of candidates.slice(0, 2)) {
         try {
+            await _equipToolForDig(bot, block)
             await bot.dig(block)
             console.log(`[Wood] 挖開 ${block.name} 以撿取掉落物`)
             await _sleep(200)

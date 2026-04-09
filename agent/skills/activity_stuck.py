@@ -448,6 +448,17 @@ SYSTEM_PROMPTS = {
 → 去砍樹取得燃料再繼續冶煉
 → replan：["chop logs 8", "smelt <target> <count>"]
 
+【no_progress 決策邏輯（熔爐無法放置或燒製沒有任何進展）】
+先確認上層活動堆疊（prompt 中「上層活動」段落）：
+
+情境 A：上層是挖礦（mining diamond/iron 等），冶煉是可能是為了補工具（smelt iron）
+→ 這是必要的前置步驟，不能 skip，否則挖礦也無法繼續
+→ replan 重試：["smelt <target> <count>", "<parent mining cmd>", ...原計畫剩餘步驟]
+→ 例：parent goal={{"target":"diamond","count":20}} → replan: ["smelt iron 3", "mine diamond 20", "equip"]
+
+情境 B：冶煉是頂層任務（無上層活動），反覆放不了熔爐
+→ replan 重試一次或 skip
+
 【missing_dependency / no_input 決策邏輯】
 - 若 missing 包含 wood → chop（估算 goal.logs 數量）
 - 若 missing 是 cobblestone → mine stone <missing_count>
@@ -785,11 +796,25 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             else:
                 chests_section = "\n已登記箱子：（無）\n"
 
+        # Build parent activity stack context (frames below the current top)
+        stack_frames = state.get("stack") or []
+        parent_frames = stack_frames[:-1] if len(stack_frames) > 1 else []
+        parent_section = ""
+        if parent_frames:
+            parts = []
+            for f in parent_frames:
+                name = f.get("activity", "?")
+                goal = f.get("goal") or {}
+                goal_str = json.dumps(goal, ensure_ascii=False) if goal else "無"
+                parts.append(f"{name}（goal={goal_str}）")
+            parent_section = f"\n【上層活動（觸發當前 {activity} 的背景任務）】\n" + " → ".join(parts) + "\n"
+
         prompt = (
             f"機器人在執行「{activity}」時中斷（原因：{reason_desc}）\n"
             f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
             f"背包內容：\n{inv_summary}\n\n"
             f"{extra}"
+            f"{parent_section}"
             f"{chests_section}"
             f"{remaining_note}"
             f"{pending_note}"
