@@ -1,5 +1,7 @@
-const { goals, Movements } = require('mineflayer-pathfinder')
+const { goals } = require('mineflayer-pathfinder')
 const { getActivity } = require('./activity')
+const hazards = require('./hazards')
+const { applyMovements } = require('./movement_prefs')
 
 let _escaping = false
 let _escapingLava = false
@@ -7,8 +9,11 @@ let _escapingSuffocation = false
 let _lastCheck = 0
 let _escapeCooldownUntil = 0
 let _inWaterSince = 0   // timestamp when bot first entered water this stretch
+let _lastWaterLoop = null
 const CHECK_INTERVAL = 500
 const WATER_DEBOUNCE = 1500  // ms in water before triggering escape
+const WATER_LOOP_WINDOW = 30000
+const WATER_LOOP_RADIUS = 8
 
 function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
@@ -25,11 +30,56 @@ function _isOnDryGround(bot) {
     return below.boundingBox === 'block' && !_isLiquid(below.name)
 }
 
+function _rememberNearbyWater(bot) {
+    const pos = bot.entity.position.floored()
+    for (let dx = -2; dx <= 2; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dz = -2; dz <= 2; dz++) {
+                const block = bot.blockAt(pos.offset(dx, dy, dz))
+                if (_isLiquid(block?.name) && (block.name === 'water' || block.name === 'flowing_water')) {
+                    hazards.remember('water', block.position, 180000, 10)
+                }
+            }
+        }
+    }
+    hazards.remember('water', bot.entity.position, 180000, 10)
+}
+
+function _distSq(a, b) {
+    if (!a || !b) return Infinity
+    const dx = a.x - b.x
+    const dy = a.y - b.y
+    const dz = a.z - b.z
+    return dx * dx + dy * dy + dz * dz
+}
+
+function _registerWaterEscape(bot) {
+    const pos = bot.entity.position.floored()
+    const now = Date.now()
+    if (
+        _lastWaterLoop &&
+        (now - _lastWaterLoop.lastAt) <= WATER_LOOP_WINDOW &&
+        _distSq(_lastWaterLoop.pos, pos) <= WATER_LOOP_RADIUS * WATER_LOOP_RADIUS
+    ) {
+        _lastWaterLoop = {
+            pos,
+            lastAt: now,
+            count: _lastWaterLoop.count + 1,
+        }
+    } else {
+        _lastWaterLoop = { pos, lastAt: now, count: 1 }
+    }
+    return _lastWaterLoop.count
+}
+
 // 掃描周圍找最近的安全站立位置（腳 + 頭都是空氣，地板是實心且非岩漿）
-function _findDryBlock(bot, radius = 8) {
+function _findDryBlock(bot, radius = 8, options = {}) {
     const pos = bot.entity.position
     let best = null
-    let bestDist = Infinity
+    let bestScore = Infinity
+    const preferFarFrom = options.preferFarFrom ?? null
+    const minFromCenter = options.minFromCenter ?? 0
+    const avoidWaterRadius = options.avoidWaterRadius ?? 0
 
     for (let dy = -2; dy <= radius; dy++) {
         for (let dx = -radius; dx <= radius; dx++) {
@@ -43,13 +93,57 @@ function _findDryBlock(bot, radius = 8) {
                 if (!isAir(feetB.name) || !isAir(headB.name)) continue
                 if (floorB.boundingBox !== 'block') continue  // 要有地板
                 if (_isLiquid(floorB.name)) continue          // 地板不能是岩漿/水
+                if (avoidWaterRadius > 0 && hazards.isNear(feet, 'water', avoidWaterRadius)) continue
 
                 const dist = Math.abs(dx) + Math.abs(dy) * 0.5 + Math.abs(dz)
-                if (dist < bestDist) { bestDist = dist; best = feet }
+                if (preferFarFrom) {
+                    const fromCenter = Math.sqrt(_distSq(feet, preferFarFrom))
+                    if (fromCenter < minFromCenter) continue
+                    const score = dist - fromCenter * 2
+                    if (score < bestScore) { bestScore = score; best = feet }
+                } else if (dist < bestScore) {
+                    bestScore = dist
+                    best = feet
+                }
             }
         }
     }
     return best
+}
+
+async function _retreatFromWater(bot) {
+    const origin = bot.entity.position.floored()
+    const retreat =
+        _findDryBlock(bot, 18, {
+            preferFarFrom: origin,
+            minFromCenter: 6,
+            avoidWaterRadius: 8,
+        }) ||
+        _findDryBlock(bot, 18, {
+            preferFarFrom: origin,
+            minFromCenter: 4,
+            avoidWaterRadius: 5,
+        })
+
+    if (!retreat) {
+        console.log('[Water] 找不到足夠遠的乾燥落腳點，維持原地')
+        return false
+    }
+
+    console.log(`[Water] 連續遇水，後撤到較乾燥位置 (${retreat.x}, ${retreat.y}, ${retreat.z})`)
+    try {
+        applyMovements(bot, { canDig: false })
+        await Promise.race([
+            bot.pathfinder.goto(new goals.GoalNear(retreat.x, retreat.y, retreat.z, 1)),
+            _sleep(10000).then(() => bot.pathfinder.setGoal(null)),
+        ])
+    } catch (_) {
+    } finally {
+        applyMovements(bot)
+    }
+
+    const movedFarEnough = _distSq(origin, bot.entity.position.floored()) >= 16
+    return !bot.entity.isInWater && movedFarEnough
 }
 
 // 掃描周圍找可以站立的岸邊，距離近的優先，走過去並跳上
@@ -83,16 +177,14 @@ async function _tryClimbShore(bot) {
     console.log(`[Water] 找到岸邊 (${target.x}, ${target.y}, ${target.z})，嘗試爬上去`)
 
     // 先 pathfind 走近，再手動跳
-    const movements = new Movements(bot)
-    movements.canDig = false
-    bot.pathfinder.setMovements(movements)
+    applyMovements(bot, { canDig: false, allowWater: true })
     try {
         await Promise.race([
             bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, 1)),
             _sleep(5000).then(() => bot.pathfinder.setGoal(null)),
         ])
     } catch (_) {}
-    bot.pathfinder.setMovements(new Movements(bot))
+    applyMovements(bot)
 
     if (!bot.entity.isInWater) return true
 
@@ -118,6 +210,12 @@ async function _tryEscape(bot) {
     console.log('[Water] 掃描附近岸邊...')
     if (await _tryClimbShore(bot)) {
         console.log('[Water] 跳上岸成功')
+        _rememberNearbyWater(bot)
+        const loopCount = _registerWaterEscape(bot)
+        if (loopCount >= 2) {
+            console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
+            await _retreatFromWater(bot)
+        }
         _escapeCooldownUntil = Date.now() + 3000
         _escaping = false
         return
@@ -136,6 +234,12 @@ async function _tryEscape(bot) {
         await _sleep(800)
         if (_isOnDryGround(bot)) {
             console.log('[Water] 游上來成功')
+            _rememberNearbyWater(bot)
+            const loopCount = _registerWaterEscape(bot)
+            if (loopCount >= 2) {
+                console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
+                await _retreatFromWater(bot)
+            }
             _escapeCooldownUntil = Date.now() + 3000
             _escaping = false
             return
@@ -148,9 +252,7 @@ async function _tryEscape(bot) {
     const dry = _findDryBlock(bot, 16)
     if (dry) {
         console.log(`[Water] 找到出口 ${dry}，嘗試導航`)
-        const movements = new Movements(bot)
-        movements.canDig = false
-        bot.pathfinder.setMovements(movements)
+        applyMovements(bot, { canDig: false, allowWater: true })
         try {
             await Promise.race([
                 bot.pathfinder.goto(new goals.GoalNear(dry.x, dry.y, dry.z, 1)),
@@ -158,11 +260,17 @@ async function _tryEscape(bot) {
             ])
         } catch (_) {}
         // 重設 movements
-        bot.pathfinder.setMovements(new Movements(bot))
+        applyMovements(bot)
     }
 
     if (!bot.entity.isInWater && _isOnDryGround(bot)) {
         console.log('[Water] 導航出水成功')
+        _rememberNearbyWater(bot)
+        const loopCount = _registerWaterEscape(bot)
+        if (loopCount >= 2) {
+            console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
+            await _retreatFromWater(bot)
+        }
         _escapeCooldownUntil = Date.now() + 3000
         _escaping = false
         return
@@ -186,6 +294,12 @@ async function _tryEscape(bot) {
         bot.chat('我被困在水裡了，請救我！')
     } else {
         console.log('[Water] 水平移動逃脫成功')
+        _rememberNearbyWater(bot)
+        const loopCount = _registerWaterEscape(bot)
+        if (loopCount >= 2) {
+            console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
+            await _retreatFromWater(bot)
+        }
     }
 
     _escaping = false
@@ -216,16 +330,14 @@ async function _tryEscapeLava(bot) {
     console.log('[Hazard] 尋找安全出口...')
     const safe = _findDryBlock(bot, 8)
     if (safe) {
-        const movements = new Movements(bot)
-        movements.canDig = false
-        bot.pathfinder.setMovements(movements)
+        applyMovements(bot, { canDig: false, allowWater: true })
         try {
             await Promise.race([
                 bot.pathfinder.goto(new goals.GoalNear(safe.x, safe.y, safe.z, 1)),
                 _sleep(6000).then(() => { bot.pathfinder.setGoal(null) }),
             ])
         } catch (_) {}
-        bot.pathfinder.setMovements(new Movements(bot))
+        applyMovements(bot)
     }
 
     if (!bot.entity.isInLava) {

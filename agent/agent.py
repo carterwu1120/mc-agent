@@ -126,11 +126,15 @@ async def _on_player_respawned(state: dict, llm: LLMClient):
         return None
 
     steps = task.get('steps', [])
-    remaining = [s['cmd'] for s in steps if s['status'] not in ('done',)] if steps \
-                else task['commands'][task.get('currentStep', 0):]
-
-    # Strip leftover tp commands from previous death recoveries
-    remaining = [c for c in remaining if not c.startswith('tp ')]
+    current_step = task.get('currentStep', 0)
+    if steps:
+        remaining = [
+            s['cmd']
+            for s in steps[current_step:]
+            if s.get('status') != 'done'
+        ]
+    else:
+        remaining = task['commands'][current_step:]
 
     if not remaining:
         return None
@@ -167,7 +171,20 @@ _last_self_task_at = 0.0
 SELF_TASK_COOLDOWN = 60.0
 _idle_started_at: float | None = None
 _queued_player_tasks: deque[str] = deque()
+_recent_stuck_events: deque[dict] = deque(maxlen=8)
 _latest_state: dict = {}
+
+_EXPECTED_ACTIVITY = {
+    "mine": "mining",
+    "chop": "chopping",
+    "fish": "fishing",
+    "smelt": "smelting",
+    "combat": "combat",
+    "hunt": "hunting",
+    "getfood": "getfood",
+    "surface": "surface",
+    "explore": "explore",
+}
 
 
 def _save_current_task_to_memory(state: dict) -> None:
@@ -210,6 +227,71 @@ def _augment_state(state: dict, player_task: str | None = None) -> dict:
     copied["queued_tasks"] = list(_queued_player_tasks)
     copied["player_task"] = player_task
     return copied
+
+
+def _command_name(cmd: str | None) -> str:
+    parts = (cmd or "").split()
+    return parts[0] if parts else ""
+
+
+def _clean_pos(pos: dict | None) -> dict | None:
+    if not pos:
+        return None
+    try:
+        return {
+            "x": round(float(pos.get("x", 0.0)), 2),
+            "y": round(float(pos.get("y", 0.0)), 2),
+            "z": round(float(pos.get("z", 0.0)), 2),
+        }
+    except Exception:
+        return None
+
+
+def _matching_work_frame(state: dict, expected_activity: str | None) -> dict | None:
+    stack = state.get("stack") or []
+    if not expected_activity:
+        return stack[-1] if stack else None
+    for frame in reversed(stack):
+        if frame.get("activity") == expected_activity:
+            return frame
+    return stack[-1] if stack else None
+
+
+def _sync_task_context(state: dict) -> None:
+    task = task_memory.load()
+    if not task or task.get("status") not in ("running", "interrupted"):
+        return
+
+    steps = task.get("steps") or []
+    idx = task.get("currentStep", 0)
+    if idx >= len(steps):
+        return
+
+    current_cmd = steps[idx].get("cmd", "")
+    expected_activity = _EXPECTED_ACTIVITY.get(_command_name(current_cmd))
+    frame = _matching_work_frame(state, expected_activity)
+    if not frame:
+        return
+
+    work_pos = _clean_pos(frame.get("startPos")) or _clean_pos(state.get("pos"))
+    current_pos = _clean_pos(state.get("pos"))
+    patch = {
+        "currentStepCmd": current_cmd,
+        "expectedActivity": expected_activity,
+        "stackActivity": frame.get("activity"),
+        "workPos": work_pos,
+        "currentPos": current_pos,
+        "goal": frame.get("goal") or {},
+        "progress": frame.get("progress") or {},
+    }
+    task_memory.update_context({
+        "currentStep": idx,
+        "currentStepCmd": current_cmd,
+        "expectedActivity": expected_activity,
+        "workPos": work_pos,
+        "currentPos": current_pos,
+    })
+    task_memory.update_step_context(idx, patch)
 
 
 
@@ -303,6 +385,15 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     "pending_steps": [s["cmd"] for s in steps if s["status"] == "pending"],
                 }
                 print(f"[Agent] 注入 plan_context: 第 {idx+1}/{len(steps)} 步")
+            else:
+                state = dict(state)
+            _recent_stuck_events.append({
+                "activity": state.get("activity_name", state.get("activity")),
+                "reason": state.get("reason"),
+                "detail": state.get("detail"),
+                "remaining": state.get("remaining"),
+            })
+            state["recent_stuck"] = list(_recent_stuck_events)
             executor.notify_stuck()
 
         _NO_LLM_HANDLERS = {"action_done", "activity_done", "task_started", "task_stopped"}
@@ -318,11 +409,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         if isinstance(result, dict) and result.get('action') == 'plan':
             commands = result.get('commands', [])
             goal = result.get('goal', '')
+            resume_task = bool(result.get('resume_task'))
+            preserve_task = bool(result.get('preserve_task'))
             if commands:
                 if executor.is_running():
                     print('[Agent] 計畫執行中，中止舊計畫')
                     executor.abort()
-                asyncio.create_task(executor.execute(commands, ws, goal=goal))
+                asyncio.create_task(executor.execute(commands, ws, goal=goal, resume_task=resume_task, preserve_task=preserve_task))
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
@@ -330,11 +423,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if isinstance(a, dict) and a.get("action") == "plan":
                 commands = a.get("commands", [])
                 goal = a.get("goal", "")
+                resume_task = bool(a.get("resume_task"))
+                preserve_task = bool(a.get("preserve_task"))
                 if commands:
                     if executor.is_running():
                         print('[Agent] 計畫執行中，中止舊計畫')
                         executor.abort()
-                    asyncio.create_task(executor.execute(commands, ws, goal=goal))
+                    asyncio.create_task(executor.execute(commands, ws, goal=goal, resume_task=resume_task, preserve_task=preserve_task))
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
                 cmds = a.get("commands", [])
@@ -408,6 +503,13 @@ async def _handle_player_chat(state: dict, ws) -> None:
 
 
 async def run():
+    # 啟動時把任何殘留的 running 任務標記為 interrupted
+    # （表示上次 agent 異常終止，下次說「繼續」可以接回）
+    _startup_task = task_memory._load_raw()
+    if _startup_task and _startup_task.get("status") == "running":
+        task_memory.interrupt("agent_restart")
+        print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
+
     while True:
         try:
             print(f"[Agent] 連線到 {WS_URL} ...")
@@ -417,6 +519,7 @@ async def run():
                     state = json.loads(raw)
                     _latest_state.clear()
                     _latest_state.update(state)
+                    _sync_task_context(state)
                     event_type = state.get("type")
                     if event_type == "tick":
                         executor.heartbeat()

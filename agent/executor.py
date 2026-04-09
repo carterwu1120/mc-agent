@@ -27,7 +27,7 @@ class PlanExecutor:
         """Called on every tick event to confirm JS is still alive."""
         self._last_heartbeat = asyncio.get_event_loop().time()
 
-    async def execute(self, commands: list, ws, goal: str = "") -> None:
+    async def execute(self, commands: list, ws, goal: str = "", resume_task: bool = False, preserve_task: bool = False) -> None:
         self._run_id += 1
         my_run_id = self._run_id
         self._running = True
@@ -36,7 +36,9 @@ class PlanExecutor:
         self._step_results = []
         self._context = {}
 
-        if goal:
+        if resume_task:
+            task_memory.resume_interrupted(commands if commands else None, goal=goal or None)
+        elif goal and not preserve_task:
             task_memory.save(goal, commands)
 
         print(f'[Executor] 開始執行計畫：{commands}')
@@ -45,12 +47,28 @@ class PlanExecutor:
         while i < len(commands):
             if not self._running:
                 print('[Executor] 計畫已中止')
-                task_memory.mark_step_failed(i, "aborted")
+                if not preserve_task:
+                    task_memory.mark_step_failed(i, "aborted")
+                    task_memory.interrupt("aborted")
                 break
 
             cmd_str = _substitute(commands[i], self._context)
-            task_memory.update_step(i)
-            task_memory.mark_step_running(i)
+
+            if preserve_task and cmd_str.strip() == 'resumetask':
+                interrupted = task_memory.load()
+                if not interrupted or interrupted.get('status') != 'interrupted':
+                    print('[Executor] resumetask 失敗：找不到中斷中的任務')
+                    break
+                commands = interrupted.get('commands', [])
+                i = interrupted.get('currentStep', 0)
+                preserve_task = False
+                task_memory.resume_interrupted()
+                print(f'[Executor] 接回中斷任務，從步驟 {i} 繼續')
+                continue
+
+            if not preserve_task:
+                task_memory.update_step(i)
+                task_memory.mark_step_running(i)
             self._current_step_index = i
 
             msg = _parse(cmd_str)
@@ -83,7 +101,8 @@ class PlanExecutor:
                         print(f'[Executor] JS 無回應超過 {HEARTBEAT_TIMEOUT}s，中止計畫')
                         done_task.cancel()
                         stuck_task.cancel()
-                        task_memory.mark_step_failed(i, "timeout")
+                        if not preserve_task:
+                            task_memory.mark_step_failed(i, "timeout")
                         self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "timeout"})
                         timed_out = True
                         break
@@ -107,7 +126,8 @@ class PlanExecutor:
                     if self._skip_event.is_set():
                         # LLM decided this step is unrecoverable — skip it
                         print(f'[Executor] 步驟 {i} 被跳過: {cmd_str}')
-                        task_memory.mark_step_failed(i, "skipped")
+                        if not preserve_task:
+                            task_memory.mark_step_failed(i, "skipped")
                         self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "skipped"})
                         i += 1
                         self._current_command = None
@@ -117,23 +137,29 @@ class PlanExecutor:
                         new_cmds = self._replan_commands
                         self._replan_commands = None
                         print(f'[Executor] 接受重新規劃：{new_cmds}')
-                        task_memory.mark_step_failed(i, "replanned")
+                        if not preserve_task:
+                            task_memory.mark_step_failed(i, "replanned")
                         self._step_results.append({"cmd": cmd_str, "status": "replanned", "error": "replanned"})
-                        task_memory.replace_remaining_steps(i, new_cmds)
+                        if not preserve_task:
+                            task_memory.replace_remaining_steps(i, new_cmds)
                         commands = commands[:i] + new_cmds
                         self._current_command = None
                         continue  # don't increment i — commands[i] is now the first new step
 
                     # Single-step recovery completed — continue plan
-                    task_memory.mark_step_done(i)
+                    if not preserve_task:
+                        task_memory.mark_step_done(i)
                     self._step_results.append({"cmd": cmd_str, "status": "done"})
                 else:
                     # Normal completion
-                    task_memory.mark_step_done(i)
+                    if not preserve_task:
+                        task_memory.mark_step_done(i)
                     self._step_results.append({"cmd": cmd_str, "status": "done"})
 
             except asyncio.CancelledError:
-                task_memory.mark_step_failed(i, "cancelled")
+                if not preserve_task:
+                    task_memory.mark_step_failed(i, "cancelled")
+                    task_memory.interrupt("cancelled")
                 self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "cancelled"})
                 break
             finally:
@@ -141,7 +167,7 @@ class PlanExecutor:
 
             i += 1
 
-        if self._running:
+        if self._running and not preserve_task:
             task = task_memory.load()
             if task and task.get('status') == 'running':
                 task_memory.done()
@@ -165,7 +191,7 @@ class PlanExecutor:
         immediate_commands = {
             'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore',
             'home', 'back', 'sethome', 'equip', 'unequip', 'deposit', 'withdraw', 'readchest', 'setchest', 'labelchest',
-            'makechest', 'chat', 'setmode', 'resumetask',
+            'makechest', 'chat', 'setmode', 'resumetask', 'tp',
         }
         if event_type == 'action_done':
             if command in immediate_commands:

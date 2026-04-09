@@ -151,6 +151,7 @@ def _low_durability_equipment(equipment: dict) -> list[str]:
 
 
 def _capabilities(resources: dict, equipment: dict) -> dict:
+    logs = resources["wood"]["logs"]
     planks = resources["wood"]["planks"]
     sticks = resources["wood"]["sticks"]
     cobblestone = resources["materials"]["cobblestone"]
@@ -161,10 +162,22 @@ def _capabilities(resources: dict, equipment: dict) -> dict:
     raw_food = resources["food"]["raw_total"]
     coal = resources["materials"]["coal"]
 
+    effective_planks = planks + (logs * 4)
+    can_make_sticks = sticks >= 2 or effective_planks >= 2
+    can_make_wood_pickaxe = effective_planks >= 5
+    can_make_stone_pickaxe = cobblestone >= 3 and can_make_sticks
+    can_make_iron_pickaxe = iron_ingot >= 3 and can_make_sticks
+    can_make_diamond_pickaxe = diamond >= 3 and can_make_sticks
+
     return {
         "can_make_crafting_table": crafting_table > 0 or planks >= 4,
         "can_make_furnace": furnace > 0 or cobblestone >= 8,
-        "can_make_pickaxe": sticks >= 2 and (planks >= 3 or cobblestone >= 3 or iron_ingot >= 3 or diamond >= 3),
+        "can_make_pickaxe": any([
+            can_make_wood_pickaxe,
+            can_make_stone_pickaxe,
+            can_make_iron_pickaxe,
+            can_make_diamond_pickaxe,
+        ]),
         "can_make_sword": sticks >= 1 and (planks >= 2 or cobblestone >= 2 or iron_ingot >= 2 or diamond >= 2),
         "can_smelt_food": raw_food > 0 and coal > 0 and (furnace > 0 or cobblestone >= 8),
         "has_good_weapon": _has_good_weapon(Counter({

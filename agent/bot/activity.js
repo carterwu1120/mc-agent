@@ -1,5 +1,5 @@
 const _stack = []             // stack frames, last element = top (current activity)
-const _registry = new Map()  // name → pauseFn(bot)
+const _registry = new Map()  // name → { pauseFn(bot), options }
 const _runtime = new Map()   // name → runtime metadata
 
 function _stackLabel() {
@@ -96,8 +96,12 @@ function forget(name) {
 
 // ── Registration ─────────────────────────────────────────────────────────────
 
-function register(name, pauseFn) {
-    _registry.set(name, pauseFn)
+function register(name, pauseFn, options = {}) {
+    _registry.set(name, { pauseFn, options: { ...options } })
+}
+
+function getActivityOptions(name) {
+    return { ...(_registry.get(name)?.options || {}) }
 }
 
 // ── Stack operations ──────────────────────────────────────────────────────────
@@ -135,8 +139,8 @@ function pause(bot) {
     if (!top) return
     markPaused(top.activity, 'pause')
     console.log(`[Activity] pause ${top.activity}`)
-    const pauseFn = _registry.get(top.activity)
-    if (pauseFn) pauseFn(bot)
+    const entry = _registry.get(top.activity)
+    if (entry?.pauseFn) entry.pauseFn(bot)
 }
 
 // Resume the current top frame's activity without popping.
@@ -153,13 +157,33 @@ function resumeCurrent(bot) {
 
 function updateProgress(data) {
     const top = _stack[_stack.length - 1]
-    if (top) Object.assign(top.progress, data)
+    if (top) {
+        Object.assign(top.progress, data)
+        touch(top.activity, 'update_progress')
+    }
 }
 
 // Update the top frame's goal and reset its progress (used by _resumeX internals).
 function updateTopGoal(goal) {
     const top = _stack[_stack.length - 1]
-    if (top) { top.goal = { ...goal }; top.progress = {} }
+    if (top) {
+        top.goal = { ...goal }
+        top.progress = {}
+        touch(top.activity, 'update_goal')
+    }
+}
+
+function updateTopFrame(patch) {
+    const top = _stack[_stack.length - 1]
+    if (!top || !patch || typeof patch !== 'object') return
+    Object.assign(top, patch)
+}
+
+function getTopFrame() {
+    const top = _stack[_stack.length - 1]
+    if (!top) return null
+    const { resumeFn, ...rest } = top
+    return { ...rest }
 }
 
 // ── Accessors ─────────────────────────────────────────────────────────────────
@@ -175,8 +199,8 @@ function getStack() {
 
 module.exports = {
     register, push, pop, pause, resumeCurrent,
-    updateProgress, updateTopGoal,
+    updateProgress, updateTopGoal, updateTopFrame, getTopFrame,
     getActivity, getStack,
     markStarted, markPaused, markStopped, touch,
-    getRuntimeState, isTopActivity, isStale, forget,
+    getRuntimeState, isTopActivity, isStale, forget, getActivityOptions,
 }

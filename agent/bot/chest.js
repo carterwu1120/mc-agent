@@ -1,8 +1,9 @@
 const fs = require('fs')
 const path = require('path')
-const { goals, Movements } = require('mineflayer-pathfinder')
+const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { convertLogsToPlanks, ensureCraftingTable, reclaimCraftingTable } = require('./crafting')
+const { applyMovements } = require('./movement_prefs')
 
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
@@ -48,13 +49,11 @@ function _isContainer(name) {
 }
 
 async function _gotoChest(bot, pos) {
-    const movements = new Movements(bot)
-    movements.canDig = false
-    bot.pathfinder.setMovements(movements)
+    applyMovements(bot, { canDig: false })
     try {
         await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2))
     } catch (_) {}
-    bot.pathfinder.setMovements(new Movements(bot))
+    applyMovements(bot)
 }
 
 // !setchest — register nearest chest/barrel block

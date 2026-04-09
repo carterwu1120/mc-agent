@@ -1,7 +1,7 @@
-const { Movements } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
 const { noteTeleportLikeAction } = require('./crafting')
+const { applyMovements } = require('./movement_prefs')
 
 const NON_SOLID = new Set([
     'air', 'cave_air', 'void_air', 'water', 'lava',
@@ -47,13 +47,10 @@ function _candidateScore(bot, pos) {
 }
 
 function _setEscapeMovements(bot) {
-    const movements = new Movements(bot)
-    movements.canDig = true
-    const scaffoldNames = ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'gravel', 'sand']
-    movements.scafoldingBlocks = scaffoldNames
-        .map(n => bot.registry.blocksByName[n]?.id)
-        .filter(id => id !== undefined)
-    bot.pathfinder.setMovements(movements)
+    applyMovements(bot, {
+        canDig: true,
+        scaffoldBlockNames: ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'gravel', 'sand'],
+    })
 }
 
 function _isSurfaceLike(bot) {

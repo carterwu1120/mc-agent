@@ -1,9 +1,10 @@
-const { goals, Movements } = require('mineflayer-pathfinder')
+const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
 const { ensureAxe, ensureToolFor } = require('./crafting')
 const bridge = require('./bridge')
 const { findSurfaceSpot } = require('./surface')
+const { applyMovements, createMovements } = require('./movement_prefs')
 
 let isChopping = false
 let _isPaused = false
@@ -107,7 +108,6 @@ async function _loop(bot, goal = {}) {
     let goalReached = false
 
     while (isChopping) {
-        activityStack.touch('chopping', 'loop')
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Wood] 達到時間目標 ${goal.duration}s，停止`)
             isChopping = false
@@ -211,8 +211,7 @@ async function _loop(bot, goal = {}) {
             if (!block || !block.name.endsWith('_log')) continue
             activityStack.touch('chopping', 'tree_target')
 
-            const movements = new Movements(bot)
-            movements.canDig = true
+            const movements = createMovements(bot, { canDig: true })
             // Only allow digging leaves — not stone/ore — while navigating to tree
             movements.blocksToAvoid = new Set()
             movements.canDigBlock = (block) => {
@@ -279,9 +278,7 @@ async function _loop(bot, goal = {}) {
             if (_shouldAbort(_myGen)) return
         }
         if (Math.floor(bot.entity.position.y) > groundY) {
-            const downMovements = new Movements(bot)
-            downMovements.canDig = false
-            bot.pathfinder.setMovements(downMovements)
+            applyMovements(bot, { canDig: false })
             const botPos = bot.entity.position
             try {
                 await bot.pathfinder.goto(

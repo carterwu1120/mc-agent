@@ -1,7 +1,6 @@
 const activityStack = require('./activity')
 const bridge = require('./bridge')
 const { RAW_FOOD_ITEMS } = require('./eating')
-const { startSmelting, isActive: isSmeltingActive } = require('./smelting')
 
 const COOKED_FOOD_ITEMS = new Set([
     'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton',
@@ -89,9 +88,16 @@ async function _loop(bot, goal = {}) {
 
         const remaining = Math.max(1, targetCooked - cookedProduced)
         const toCook = Math.min(rawEntry.count, remaining)
-        console.log(`[Food] 冶煉 ${rawEntry.name} x${toCook}`)
-        startSmelting(bot, { target: rawEntry.name, count: toCook })
-        break  // 等 smelting 完成後 resume 再繼續 loop
+        console.log(`[Food] 有生食 ${rawEntry.name} x${toCook}，交由上層冶煉`)
+        isGettingFood = false
+        bridge.sendState(bot, 'activity_stuck', {
+            activity: 'getfood',
+            reason: 'has_raw_food',
+            raw_food: rawEntry.name,
+            raw_count: toCook,
+            remaining,
+        })
+        break
     }
 
     if (!_isPaused && !isGettingFood) activityStack.pop(bot)

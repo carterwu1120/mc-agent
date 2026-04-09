@@ -6,10 +6,11 @@ import re
 from agent.skills.commands_ref import COMMANDS, command_list
 
 
-PLAN_ALLOWED_COMMANDS = set(COMMANDS) - {"chat", "idle", "setmode", "tp"}
+PLAN_ALLOWED_COMMANDS = set(COMMANDS) - {"chat", "idle", "setmode"}
 
 _INT_RE = re.compile(r"^\d+$")
 _CHEST_ID_RE = re.compile(r"^(?:\d+|\{[^{}]+\}|\{\{[^{}]+\}\})$")
+_COORD_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
 @dataclass
@@ -20,6 +21,10 @@ class CommandValidationError:
 
 def _is_positive_int(value: str) -> bool:
     return bool(_INT_RE.fullmatch(value)) and int(value) > 0
+
+
+def _is_coord(value: str) -> bool:
+    return bool(_COORD_RE.fullmatch(value))
 
 
 def _is_chest_id_token(value: str) -> bool:
@@ -37,6 +42,11 @@ def validate_command(command: str, allowed_commands: set[str] | None = None) -> 
 
     if name not in allowed:
         return f"不支援的指令 `{name}`"
+
+    if name == "tp":
+        if len(args) == 3 and all(_is_coord(a) for a in args):
+            return None
+        return "`tp` 格式應為 `tp <x> <y> <z>`"
 
     if name in {"combat", "surface", "home", "back", "equip", "makechest"}:
         return None if not args else f"`{name}` 不應帶參數"

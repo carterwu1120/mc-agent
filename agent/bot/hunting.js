@@ -97,9 +97,17 @@ async function _loop(bot, goal) {
         if (!animal) {
             noAnimalTicks++
             if (noAnimalTicks >= 6) {
-                console.log('[Hunt] 找不到食用動物，停止')
+                const remaining = Math.max(1, maxCount - _killCount)
+                console.log(`[Hunt] 找不到食用動物，無法完成目標（目前 ${_killCount}/${maxCount}）`)
                 isHunting = false
-                bridge.sendState(bot, 'activity_done', { activity: 'hunting', goal })
+                bridge.sendState(bot, 'activity_stuck', {
+                    activity: 'hunting',
+                    reason: 'no_animals',
+                    remaining,
+                    progress: { count: _killCount },
+                    suggested_actions: ['explore', 'fish', 'chat', 'idle'],
+                    detail: `附近已找不到可食用動物，尚缺 ${remaining} 份生食`,
+                })
                 break
             }
             await _sleep(2000)

@@ -15,6 +15,7 @@ def save(goal: str, commands: list) -> dict:
         "commands": commands,
         "steps": build_step_records(commands),
         "currentStep": 0,
+        "context": {},
         "status": "running",
         "interruptedBy": None,
         "createdAt": datetime.utcnow().isoformat(),
@@ -49,6 +50,39 @@ def mark_step_failed(step: int, error: str | None = None) -> None:
         _write(t)
 
 
+def update_context(patch: dict) -> None:
+    t = _load_raw()
+    if t is None:
+        return
+    ctx = dict(t.get("context") or {})
+    changed = False
+    for key, value in (patch or {}).items():
+        if ctx.get(key) != value:
+            ctx[key] = value
+            changed = True
+    if not changed:
+        return
+    t["context"] = ctx
+    _write(t)
+
+
+def update_step_context(step: int, patch: dict) -> None:
+    t = _load_raw()
+    if t is None or "steps" not in t or step >= len(t["steps"]):
+        return
+    step_obj = t["steps"][step]
+    ctx = dict(step_obj.get("context") or {})
+    changed = False
+    for key, value in (patch or {}).items():
+        if ctx.get(key) != value:
+            ctx[key] = value
+            changed = True
+    if not changed:
+        return
+    step_obj["context"] = ctx
+    _write(t)
+
+
 def replace_remaining_steps(from_step: int, new_commands: list) -> None:
     t = _load_raw()
     if t is None:
@@ -74,12 +108,42 @@ def failed() -> None:
     _patch({"status": "failed"})
 
 
+def resume_interrupted(new_commands: list | None = None, goal: str | None = None) -> dict | None:
+    t = _load_raw()
+    if t is None:
+        return None
+    current_step = t.get("currentStep", 0)
+    if new_commands is not None:
+        t = _load_raw() or t
+        kept = t.get("steps", [])[:current_step]
+        previous_command = kept[-1]["cmd"] if kept else None
+        new_commands = normalize_commands(new_commands, previous_command=previous_command)
+        new_steps = build_step_records(new_commands)
+        t["steps"] = kept + new_steps
+        t["commands"] = [s["cmd"] for s in t["steps"]]
+    if goal is not None:
+        t["goal"] = goal
+    t["status"] = "running"
+    t["interruptedBy"] = None
+    _write(t)
+    return t
+
+
 def load() -> dict | None:
     try:
         t = _load_raw()
         if t is None:
             return None
-        return t if t.get("status") in ("running", "interrupted") else None
+        if t.get("status") in ("running", "interrupted"):
+            return t
+        # 任何狀態下，只要還有 pending 步驟就視為可恢復
+        steps = t.get("steps", [])
+        has_pending = any(s.get("status") == "pending" for s in steps)
+        if has_pending:
+            t["status"] = "interrupted"
+            _write(t)
+            return t
+        return None
     except Exception:
         return None
 

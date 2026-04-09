@@ -111,5 +111,6 @@ def build_step_records(commands: list[str]) -> list[dict]:
             "reason": infer_step_reason(cmd, next_cmd),
             "status": "pending",
             "error": None,
+            "context": {},
         })
     return records

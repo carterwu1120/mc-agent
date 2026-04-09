@@ -246,9 +246,12 @@ async function ensureCraftingTable(bot) {
     let table = bot.findBlock({ matching: tableBlockId, maxDistance: 6 })
     if (table) {
         try {
-            await bot.pathfinder.goto(
-                new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
-            )
+            await Promise.race([
+                bot.pathfinder.goto(
+                    new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
+                ),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('goto timeout')), 8000)),
+            ])
         } catch (e) {
             console.log(`[Craft] 導航到工作檯失敗: ${e.message}`)
             return null
@@ -329,13 +332,29 @@ async function _placeCraftingTable(bot, tableBlockId) {
     if (Date.now() - _lastTeleportLikeAt < 1200) {
         await _sleep(800)
     }
-    await bot.equip(item, 'hand')
+    if (!await _safeEquipHand(bot, 'crafting_table', item)) {
+        console.log('[Craft] 無法裝備工作檯')
+        return null
+    }
 
     const pos = bot.entity.position.floored()
     const dirs = [[1,0],[0,1],[-1,0],[0,-1]]
 
     // 先找不需要挖的位置，再找需要挖的
     const candidates = []
+
+    // 優先：bot 腳下那格是 ground，dy=0 的鄰格（隧道裡的空氣）直接可用
+    const floorBlock = bot.blockAt(pos.offset(0, -1, 0))
+    if (floorBlock && floorBlock.boundingBox === 'block') {
+        for (const [dx, dz] of dirs) {
+            const spacePos = pos.offset(dx, 0, dz)
+            if (_isOccupiedByEntity(bot, spacePos)) continue
+            const space = bot.blockAt(spacePos)
+            const isOpen = space && REPLACEABLE_BLOCKS.has(space.name)
+            candidates.push({ ground: floorBlock, spacePos, needDig: !isOpen, space })
+        }
+    }
+
     for (const [dx, dz] of dirs) {
         let ground = null
         for (let dy = -1; dy >= -3; dy--) {
@@ -361,7 +380,7 @@ async function _placeCraftingTable(bot, tableBlockId) {
             if (!space || space.boundingBox !== 'block') continue
             try {
                 const tool = bot.pathfinder.bestHarvestTool(space)
-                if (tool) await bot.equip(tool, 'hand')
+                if (tool && !await _safeEquipHand(bot, tool.name, tool)) continue
             } catch (_) {}
             try { await bot.dig(space) } catch (_) { continue }
             const fresh = bot.blockAt(spacePos)
@@ -371,7 +390,7 @@ async function _placeCraftingTable(bot, tableBlockId) {
         try {
             const freshItem = bot.inventory.items().find(i => i.name === 'crafting_table')
             if (!freshItem) break
-            await bot.equip(freshItem, 'hand')
+            if (!await _safeEquipHand(bot, 'crafting_table', freshItem)) continue
             await bot.lookAt(ground.position.offset(0.5, 1, 0.5))
             await bot.placeBlock(ground, new Vec3(0, 1, 0))
             await _sleep(400)
@@ -556,6 +575,24 @@ function _countPlanks(bot) {
     return bot.inventory.items()
         .filter(i => i.name.endsWith('_planks'))
         .reduce((s, i) => s + i.count, 0)
+}
+
+async function _safeEquipHand(bot, itemName, itemRef = null, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        const item = itemRef && i === 0
+            ? itemRef
+            : bot.inventory.items().find(invItem => invItem.name === itemName)
+        if (!item) return false
+        try {
+            await bot.equip(item, 'hand')
+            await _sleep(120)
+            return true
+        } catch (e) {
+            console.log(`[Craft] 裝備 ${itemName} 失敗 (${i + 1}/${retries}): ${e.message}`)
+            await _sleep(200 + i * 150)
+        }
+    }
+    return false
 }
 
 function _sleep(ms) {

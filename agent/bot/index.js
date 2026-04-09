@@ -1,6 +1,6 @@
 const mineflayer = require('mineflayer')
 const minecraftProtocolForge = require('minecraft-protocol-forge')
-const { pathfinder, Movements } = require('mineflayer-pathfinder')
+const { pathfinder } = require('mineflayer-pathfinder')
 const { initLogger } = require('./logger')
 const bridge = require('./bridge')
 const activityStack = require('./activity')
@@ -9,6 +9,8 @@ const eating = require('./eating')
 const inventory = require('./inventory')
 const combat = require('./combat')
 const water = require('./water')
+const watchdog = require('./watchdog')
+const { applyMovements } = require('./movement_prefs')
 
 initLogger('bot')
 
@@ -82,12 +84,13 @@ bot.once('spawn', () => {
     console.log(`[Bot] 進入世界！位置：${JSON.stringify(bot.entity.position)}`)
 
     _wrapPathfinderDebug(bot)
-    bot.pathfinder.setMovements(new Movements(bot))
+    applyMovements(bot)
     bridge.init(bot, (msg) => handle(bot, msg))
     eating.startMonitor(bot)
     inventory.startMonitor(bot)
     combat.startMonitor(bot)
     water.startMonitor(bot)
+    watchdog.startMonitor(bot)
     ;(async () => { await combat.equipArmor(bot); await combat.equipWeapon(bot) })()
 
     setInterval(() => bridge.sendState(bot, 'tick'), 2000)

@@ -112,3 +112,20 @@ For Python skill internals (skill pattern, LLM format, task_memory): see agent/s
 6. **Command descriptions live in `commands_ref.py`** — import `command_list(keys)`, never duplicate inline.
 7. **Death → LLM** — `player_died` aborts executor; `player_respawned` routes to `respawn.py`.
 8. **Inventory check at dispatch** — `commands.js` calls `checkFull(bot)` before any activity command. Do not add per-activity checks.
+9. **No-progress beats not-done** — long-running activities (for example `mine diamond 10`) may legitimately take minutes. Stuck detection must be based on lack of meaningful progress, not merely lack of `activity_done`.
+10. **Recovery is layered** — JS bot handles mechanical/local recovery first (movement, placement, watchdog), Python handles orchestration/plan recovery, and LLM handles ambiguous strategy decisions.
+
+---
+
+## Stuck / Recovery Model
+
+The system uses a layered stuck model:
+
+1. **Semantic progress** — activity-specific progress that directly advances the activity goal.
+2. **Physical progress fallback** — generic signals such as movement, inventory changes, held-item changes, goal/progress mutations.
+3. **No-progress watchdog** — if the current top activity remains active but stale past timeout, JS emits `activity_stuck` with `reason='no_progress'`.
+
+Important rules:
+- Do not treat "no `activity_done` for N seconds" as stuck by itself.
+- `activity_stuck(reason='no_progress')` is valid even while an activity is still running.
+- New JS activities should automatically be covered by the watchdog via global defaults; only special cases should override timeout or suggested actions.

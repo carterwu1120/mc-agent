@@ -1,8 +1,8 @@
 const fs = require('fs')
 const path = require('path')
-const { Movements } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const { noteTeleportLikeAction } = require('./crafting')
+const { applyMovements } = require('./movement_prefs')
 
 const DATA_FILE = path.join(__dirname, '..', 'data', 'home.json')
 
@@ -34,7 +34,7 @@ function _resetPathfinder(bot) {
         bot.pathfinder?.setGoal(null)
     } catch (_) {}
     try {
-        bot.pathfinder?.setMovements(new Movements(bot))
+        applyMovements(bot)
     } catch (_) {}
     try {
         bot.clearControlStates?.()

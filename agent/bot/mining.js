@@ -1,4 +1,4 @@
-const { goals, Movements } = require('mineflayer-pathfinder')
+const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
 const { ensureToolFor, ensurePickaxeTier, ensurePickaxe } = require('./crafting')
@@ -6,6 +6,8 @@ const bridge = require('./bridge')
 const { isBuried } = require('./buried')
 const eating = require('./eating')
 const water = require('./water')
+const hazards = require('./hazards')
+const { applyMovements } = require('./movement_prefs')
 
 let isMining = false
 let _isPaused = false
@@ -21,6 +23,8 @@ const ORE_PRIORITY = [
     'gold', 'iron', 'lapis', 'coal',
 ]
 
+const CLEARABLE_CLIMBABLES = new Set(['vine', 'weeping_vines', 'twisting_vines'])
+
 // 不主動導航前往挖的礦石（在隧道路徑上遇到還是會挖）
 const SKIP_ORES = new Set(['redstone', 'copper'])
 
@@ -29,6 +33,13 @@ const ORE_BEST_Y = {
     coal: 16, iron: 16, copper: 48,
     lapis: 0, gold: -16, redstone: -16,
     diamond: -58, emerald: 232,
+    // raw_ / _ore / _ingot aliases
+    raw_iron: 16, iron_ore: 16, deepslate_iron_ore: 16,
+    raw_gold: -16, gold_ore: -16, deepslate_gold_ore: -16,
+    raw_copper: 48, copper_ore: 48, deepslate_copper_ore: 48,
+    coal_ore: 16, deepslate_coal_ore: 16,
+    diamond_ore: -58, deepslate_diamond_ore: -58,
+    lapis_ore: 0, deepslate_lapis_ore: 0,
 }
 
 // 挖各礦石所需最低稿子等級
@@ -38,6 +49,15 @@ const ORE_MIN_PICKAXE = {
     ancient_debris: 'diamond_pickaxe',
     gold:           'iron_pickaxe',
     iron:           'stone_pickaxe',
+    // raw_ / _ore aliases
+    raw_iron:             'stone_pickaxe',
+    iron_ore:             'stone_pickaxe',
+    deepslate_iron_ore:   'stone_pickaxe',
+    raw_gold:             'iron_pickaxe',
+    gold_ore:             'iron_pickaxe',
+    deepslate_gold_ore:   'iron_pickaxe',
+    diamond_ore:          'iron_pickaxe',
+    deepslate_diamond_ore:'iron_pickaxe',
     // coal, copper, lapis, redstone, stone → 木稿即可，不需特別限制
 }
 
@@ -45,10 +65,19 @@ function _isLava(block) {
     return block && (block.name === 'lava' || block.name === 'flowing_lava')
 }
 
+function _isWaterBlock(block) {
+    return block && (block.name === 'water' || block.name === 'flowing_water')
+}
+
 // 挖開 pos 後岩漿是否會流進來（檢查 pos 的 6 個鄰居）
 function _hasAdjacentLava(bot, pos) {
     const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
     return offsets.some(([dx, dy, dz]) => _isLava(bot.blockAt(pos.offset(dx, dy, dz))))
+}
+
+function _hasAdjacentWater(bot, pos) {
+    const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
+    return offsets.some(([dx, dy, dz]) => _isWaterBlock(bot.blockAt(pos.offset(dx, dy, dz))))
 }
 
 // 嘗試用背包裡的方塊封堵岩漿（最佳努力，不保證成功）
@@ -98,21 +127,120 @@ function _priority(name) {
     return idx === -1 ? 100 : idx
 }
 
+function _isNearWaterHazard(pos) {
+    return hazards.isNear(pos, 'water', 6)
+}
+
+function _countItem(bot, name) {
+    return bot.inventory.items()
+        .filter(i => i.name === name)
+        .reduce((sum, i) => sum + i.count, 0)
+}
+
+function _countBySuffix(bot, suffix) {
+    return bot.inventory.items()
+        .filter(i => i.name.endsWith(suffix))
+        .reduce((sum, i) => sum + i.count, 0)
+}
+
+function _buildNoToolsState(bot) {
+    const logs = _countBySuffix(bot, '_log')
+    const planks = _countBySuffix(bot, '_planks')
+    const sticks = _countItem(bot, 'stick')
+    const cobblestone = _countItem(bot, 'cobblestone')
+    const ironIngot = _countItem(bot, 'iron_ingot')
+    const diamond = _countItem(bot, 'diamond')
+    const coal = _countItem(bot, 'coal') + _countItem(bot, 'charcoal')
+    const effectivePlanks = planks + (logs * 4)
+    const canMakeSticks = sticks >= 2 || effectivePlanks >= 2
+    const canMakeStonePickaxe = cobblestone >= 3 && canMakeSticks
+    const canMakeWoodPickaxe = effectivePlanks >= 5
+    const canMakeIronPickaxe = ironIngot >= 3 && canMakeSticks
+    const canMakeDiamondPickaxe = diamond >= 3 && canMakeSticks
+    const canMakeAnyPickaxe = canMakeStonePickaxe || canMakeWoodPickaxe || canMakeIronPickaxe || canMakeDiamondPickaxe
+
+    let detail = '沒有可用稿子，且工具準備失敗'
+    let craftIssueSuspected = false
+
+    if (canMakeAnyPickaxe) {
+        detail = '背包中理論上有足夠材料可製作稿子，但 craft 流程仍失敗，疑似工具合成流程異常'
+        craftIssueSuspected = true
+    } else if (!canMakeSticks) {
+        detail = '沒有可用稿子，且缺少足夠木材/木板來製作 sticks'
+    } else if (cobblestone < 3 && ironIngot < 3 && diamond < 3 && effectivePlanks < 5) {
+        detail = '沒有可用稿子，且缺少可做稿頭的材料（木板/圓石/鐵錠/鑽石）'
+    } else if (coal <= 0 && ironIngot < 3 && diamond < 3 && cobblestone < 3 && effectivePlanks < 5) {
+        detail = '沒有可用稿子，且缺少燃料與可直接合成稿子的材料'
+    }
+
+    return {
+        detail,
+        craft_issue_suspected: craftIssueSuspected,
+        tool_state: {
+            logs,
+            planks,
+            sticks,
+            cobblestone,
+            coal,
+            iron_ingot: ironIngot,
+            diamond,
+            can_make_pickaxe_now: canMakeAnyPickaxe,
+        },
+    }
+}
+
+function _sendNoToolsStuck(bot) {
+    bridge.sendState(bot, 'activity_stuck', {
+        activity: 'mining',
+        reason: 'no_tools',
+        ..._buildNoToolsState(bot),
+    })
+}
+
+// 嘗試合成稿子，若失敗才送 stuck。
+// 回傳 true = 有稿子可繼續；false = 已送 stuck，呼叫方應 break。
+async function _ensurePickaxeOrStuck(bot) {
+    if (_hasPickaxe(bot)) return true
+    console.log('[Mine] 無稿子，嘗試合成')
+    await ensurePickaxe(bot)
+    if (_hasPickaxe(bot)) {
+        console.log('[Mine] 合成稿子成功，繼續')
+        return true
+    }
+    console.log('[Mine] 合成稿子失敗，停止並請求決策')
+    isMining = false
+    _sendNoToolsStuck(bot)
+    return false
+}
+
+async function _clearClimbablesAround(bot, positions) {
+    const seen = new Set()
+    for (const pos of positions) {
+        const key = `${pos.x},${pos.y},${pos.z}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const block = bot.blockAt(pos)
+        if (!block || !CLEARABLE_CLIMBABLES.has(block.name)) continue
+        try {
+            await bot.dig(block)
+            console.log(`[Mine] 清除 ${block.name} at (${pos.x}, ${pos.y}, ${pos.z})`)
+            await _sleep(100)
+        } catch (e) {
+            console.log(`[Mine] 清除 ${block.name} 失敗: ${e.message}`)
+        }
+    }
+}
+
 function _setMovements(bot) {
-    const movements = new Movements(bot)
-    movements.canDig = true
+    const movements = applyMovements(bot, { canDig: true })
     movements.maxDropDown = 8
-    bot.pathfinder.setMovements(movements)
 }
 
 function _setEscapeMovements(bot) {
-    const movements = new Movements(bot)
-    movements.canDig = true
-    const scaffoldNames = ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'gravel', 'sand']
-    movements.scafoldingBlocks = scaffoldNames
-        .map(n => bot.registry.blocksByName[n]?.id)
-        .filter(id => id !== undefined)
-    bot.pathfinder.setMovements(movements)
+    applyMovements(bot, {
+        canDig: true,
+        scaffoldBlockNames: ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'gravel', 'sand'],
+    })
 }
 
 function _shouldAbort(expectedGen = null) {
@@ -144,6 +272,15 @@ function _resetStaleMining(bot, reason = 'stale') {
 activityStack.register('mining', _pause)
 
 function _pause(_bot) {
+    if (_bot?.entity?.position) {
+        activityStack.updateTopFrame({
+            resumePos: {
+                x: _bot.entity.position.x,
+                y: _bot.entity.position.y,
+                z: _bot.entity.position.z,
+            },
+        })
+    }
     isMining = false
     _isPaused = true
     console.log('[Mine] 暫停挖礦')
@@ -176,11 +313,13 @@ function _resumeMining(bot, originalGoal) {
     const remaining = originalGoal.count
         ? Math.max(1, originalGoal.count - _targetCount)
         : undefined
+    const top = activityStack.getTopFrame()
+    const resumePos = top?.activity === 'mining' ? top.resumePos : null
     isMining = true
     activityStack.markStarted('mining', 'resume')
     activityStack.updateTopGoal(remaining ? { ...originalGoal, count: remaining } : originalGoal)
     console.log('[Mine] 恢復挖礦')
-    _loop(bot, originalGoal)
+    _loop(bot, originalGoal, resumePos)
 }
 
 function stopMining(bot) {
@@ -203,7 +342,7 @@ function stopMining(bot) {
     activityStack.pop(bot)
 }
 
-async function _loop(bot, goal = {}) {
+async function _loop(bot, goal = {}, resumePos = null) {
     const _myGen = ++_loopGen
     _isPaused = false
     const startTime = Date.now()
@@ -218,15 +357,37 @@ async function _loop(bot, goal = {}) {
     let stoneSearchFails = 0
 
     // 每次進入 loop（包含 resume 後）先嘗試合成稿子
-    // ensurePickaxe 是純函數呼叫，不進 activity stack
     if (!_hasPickaxe(bot)) {
-        console.log('[Mine] 進入 loop 時無稿子，嘗試合成')
-        await ensurePickaxe(bot)
-        if (_shouldAbort(_myGen)) return
+        const ok = await _ensurePickaxeOrStuck(bot)
+        if (!ok || _shouldAbort(_myGen)) return
+    }
+
+    if (resumePos && _shouldReturnToResumePos(bot, resumePos)) {
+        console.log(`[Mine] 返回中斷前的礦點 (${Math.floor(resumePos.x)}, ${Math.floor(resumePos.y)}, ${Math.floor(resumePos.z)})`)
+        try {
+            _setMovements(bot)
+            await _goto(bot, new goals.GoalNear(
+                Math.floor(resumePos.x),
+                Math.floor(resumePos.y),
+                Math.floor(resumePos.z),
+                2,
+            ), 20000)
+            if (_shouldAbort(_myGen)) return
+            activityStack.updateTopFrame({
+                resumePos: {
+                    x: bot.entity.position.x,
+                    y: bot.entity.position.y,
+                    z: bot.entity.position.z,
+                },
+            })
+            activityStack.touch('mining', 'resume_position')
+        } catch (e) {
+            console.log(`[Mine] 無法回到中斷前礦點，改從目前位置繼續: ${e.message}`)
+        }
     }
 
     while (isMining) {
-        activityStack.touch('mining', 'loop')
+        _rememberResumePos(bot)
         if (eating.isEating()) {
             await _sleep(250)
             continue
@@ -264,7 +425,7 @@ async function _loop(bot, goal = {}) {
                 maxDistance: 6,
                 count: 20,
             })
-                .filter(p => _isExposed(bot, p) && !_digFailed.has(p.toString()))
+                .filter(p => _isExposed(bot, p) && !_digFailed.has(p.toString()) && !_isNearWaterHazard(p))
                 .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))
 
             if (nearbyStone.length > 0) {
@@ -285,7 +446,7 @@ async function _loop(bot, goal = {}) {
                     if (!ok) {
                         console.log('[Mine] 無法取得稿子，停止並請求決策')
                         isMining = false
-                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
+                        _sendNoToolsStuck(bot)
                         break
                     }
                     await bot.dig(fresh)
@@ -309,12 +470,8 @@ async function _loop(bot, goal = {}) {
             }
 
             const beforeY = Math.floor(bot.entity.position.y)
-            if (!_hasPickaxe(bot)) {
-                console.log('[Mine] 需要往下找石頭，但沒有稿子，停止並請求決策')
-                isMining = false
-                bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
-                break
-            }
+            if (!await _ensurePickaxeOrStuck(bot)) break
+            if (_shouldAbort(_myGen)) return
             console.log('[Mine] 附近沒有石頭，往下潛尋找')
             await _stepDown(bot, beforeY - 3, tunnelYaw)
             if (_shouldAbort(_myGen)) return
@@ -360,12 +517,8 @@ async function _loop(bot, goal = {}) {
         } else if (needDescend) {
             // 等待水/岩漿逃脫完成再下潛
             if (water.isEscaping()) { await _sleep(500); continue }
-            if (!_hasPickaxe(bot)) {
-                console.log('[Mine] 需要下潛，但沒有稿子，停止並請求決策')
-                isMining = false
-                bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
-                break
-            }
+            if (!await _ensurePickaxeOrStuck(bot)) break
+            if (_shouldAbort(_myGen)) return
             // 主動作：挖階梯往下
             await _stepDown(bot, bestY, tunnelYaw)
             if (_shouldAbort(_myGen)) return
@@ -457,6 +610,7 @@ async function _loop(bot, goal = {}) {
                     if (!isTargetOre && bestY !== null && Math.abs(p.y - bestY) > 5) return false
                     if (_digFailed.has(p.toString())) return false
                     if (_lavaOres.has(p.toString())) return false
+                    if (_isNearWaterHazard(p)) return false
                     if (_unavailablePickaxe.size > 0) {
                         const req = _requiredPickaxe(bot.blockAt(p)?.name)
                         if (_unavailablePickaxe.has(req)) return false
@@ -548,6 +702,7 @@ async function _loop(bot, goal = {}) {
                 // 先嘗試沿洞穴導航到更遠的礦石（不限 Y），讓 pathfinder 自然走進洞穴
                 const wideOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 32, count: 20 })
                     .filter(p => _isExposed(bot, p))
+                    .filter(p => !_isNearWaterHazard(p))
                     .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
                 if (wideOres.length > 0) {
                     const wp = wideOres[0]
@@ -591,22 +746,14 @@ async function _loop(bot, goal = {}) {
                     }
                 }
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
-                if (!bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))) {
-                    console.log('[Mine] 無稿子，停止並請求決策')
-                    isMining = false
-                    bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
-                    break
-                }
+                if (!await _ensurePickaxeOrStuck(bot)) break
+                if (_shouldAbort(_myGen)) return
                 const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal, _myGen)
                 if (_shouldAbort(_myGen)) return
                 if (tunneled) _digFailed.clear()
                 if (!tunneled) {
-                    if (!bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))) {
-                        console.log('[Mine] 隧道失敗：無稿子，停止並請求決策')
-                        isMining = false
-                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_tools' })
-                        break
-                    }
+                    if (!await _ensurePickaxeOrStuck(bot)) break
+                    if (_shouldAbort(_myGen)) return
                     tunnelFailCount++
                     tunnelYaw += Math.PI / 2
                     console.log(`[Mine] 隧道受阻，旋轉方向繼續 (${tunnelFailCount}/4)`)
@@ -683,6 +830,27 @@ async function _loop(bot, goal = {}) {
     _isPaused = false
 }
 
+function _rememberResumePos(bot) {
+    if (!bot?.entity?.position) return
+    activityStack.updateTopFrame({
+        resumePos: {
+            x: bot.entity.position.x,
+            y: bot.entity.position.y,
+            z: bot.entity.position.z,
+        },
+    })
+}
+
+function _shouldReturnToResumePos(bot, resumePos) {
+    if (!bot?.entity?.position || !resumePos) return false
+    const current = bot.entity.position
+    const dy = Math.abs(current.y - resumePos.y)
+    const dx = current.x - resumePos.x
+    const dz = current.z - resumePos.z
+    const horizontal = Math.sqrt((dx * dx) + (dz * dz))
+    return dy > 6 || horizontal > 8
+}
+
 // 往目標 Y 走一步（pathfinder 自動挖出階梯）
 // 手動挖斜梯：每次「前進1格 + 往下1格」，重複 steps 次
 async function _stairDown(bot, yaw, steps) {
@@ -714,6 +882,13 @@ async function _stairDown(bot, yaw, steps) {
             }
         }
         if (lavaDetected) return
+
+        await _clearClimbablesAround(bot, [
+            feet.offset(dx, 1, dz),
+            feet.offset(dx, 0, dz),
+            feet.offset(dx, -1, dz),
+            feet.offset(dx, 2, dz),
+        ])
 
         // 先挖三格（頭、腳、地板），再往前走自然落下
         for (const off of [[dx, 1, dz], [dx, 0, dz], [dx, -1, dz]]) {
@@ -767,10 +942,28 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
         const feetPos2 = feetPos.offset(perpX, 0, perpZ)
         const headPos2 = feetPos2.offset(0, 1, 0)
 
+        await _clearClimbablesAround(bot, [
+            feetPos,
+            headPos,
+            feetPos.offset(0, 2, 0),
+            feetPos2,
+            headPos2,
+            feetPos2.offset(0, 2, 0),
+        ])
+
         for (const pos of [feetPos, headPos, feetPos2, headPos2]) {
+            if (_isNearWaterHazard(pos)) {
+                console.log('[Tunnel] 前方靠近已知水域，放棄此方向')
+                return false
+            }
             if (isBuried(pos)) { console.log(`[Tunnel] 跳過 buried ${pos}`); continue }
             const b = bot.blockAt(pos)
             if (!b || b.name === 'air' || b.name === 'cave_air') continue
+            if (_isWaterBlock(b) || _hasAdjacentWater(bot, pos)) {
+                console.log(`[Tunnel] 偵測到水域 ${b.name} at ${pos}，標記並中止隧道`)
+                hazards.remember('water', pos, 120000, 8)
+                return false
+            }
             if (_isLava(b)) {
                 // 已經是岩漿（可見），嘗試封堵後中止
                 console.log(`[Tunnel] 偵測到可見岩漿 at ${pos}，封堵並中止`)
@@ -861,6 +1054,7 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
             if (!_isExposed(bot, p)) return false
             if (_digFailed.has(p.toString())) return false
             if (_hasAdjacentLava(bot, p)) return false
+            if (_isNearWaterHazard(p)) return false
             if (goal.target) return bot.blockAt(p)?.name.includes(goal.target)
             return true
         })

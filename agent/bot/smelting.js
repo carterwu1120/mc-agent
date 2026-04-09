@@ -9,6 +9,7 @@ let _smeltedCount = 0
 let _inputPending = false
 let _placedFurnacePos = null
 let _loopGen = 0
+let _lastOutcome = null
 
 const SMELTABLE = {
     raw_iron: 'iron_ingot',         iron_ore: 'iron_ingot',         deepslate_iron_ore: 'iron_ingot',
@@ -38,6 +39,24 @@ const FUEL_PRIORITY = [
     'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks',
 ]
 
+const FUEL_UNITS = {
+    coal: 8,
+    charcoal: 8,
+    oak_log: 1.5,
+    spruce_log: 1.5,
+    birch_log: 1.5,
+    jungle_log: 1.5,
+    acacia_log: 1.5,
+    dark_oak_log: 1.5,
+    mangrove_log: 1.5,
+    oak_planks: 1.5,
+    spruce_planks: 1.5,
+    birch_planks: 1.5,
+    jungle_planks: 1.5,
+    acacia_planks: 1.5,
+    dark_oak_planks: 1.5,
+}
+
 activityStack.register('smelting', _pause)
 
 function _pause(_bot) {
@@ -52,6 +71,42 @@ function _shouldAbort(expectedGen = null) {
 
 function _shouldAbortFinalize(expectedGen = null) {
     return _isPaused || (expectedGen !== null && _loopGen !== expectedGen)
+}
+
+function _setOutcome(status, extra = {}) {
+    _lastOutcome = { status, at: Date.now(), ...extra }
+}
+
+function _getPreferredFuelItem(bot) {
+    const inventory = bot.inventory.items()
+    for (const fuelName of FUEL_PRIORITY) {
+        const item = inventory.find(i => i.name === fuelName)
+        if (item) return item
+    }
+    return null
+}
+
+function _estimateFuelCount(goal, smeltedCount, inputPending) {
+    if (!goal?.count) return 8
+    const remaining = Math.max(1, goal.count - smeltedCount)
+    return inputPending ? Math.max(1, remaining) : remaining
+}
+
+function _getFuelInsertCount(fuelItem, goal, smeltedCount, inputPending) {
+    const perItemUnits = FUEL_UNITS[fuelItem.name] ?? 1
+    const neededUnits = _estimateFuelCount(goal, smeltedCount, inputPending)
+    return Math.max(1, Math.min(fuelItem.count, Math.ceil(neededUnits / perItemUnits), 16))
+}
+
+function consumeLastOutcome(maxAgeMs = 10000) {
+    if (!_lastOutcome) return null
+    const outcome = _lastOutcome
+    if ((Date.now() - outcome.at) > maxAgeMs) {
+        _lastOutcome = null
+        return null
+    }
+    _lastOutcome = null
+    return outcome
 }
 
 async function startSmelting(bot, goal = {}) {
@@ -71,6 +126,7 @@ async function startSmelting(bot, goal = {}) {
     isSmelting = true
     _smeltedCount = 0
     _inputPending = false
+    _lastOutcome = null
     activityStack.push(bot, 'smelting', goal, (b) => _resumeSmelting(b, goal))
     activityStack.markStarted('smelting', 'start')
     console.log(`[Smelt] 開始燒製 goal=${JSON.stringify(goal)}`)
@@ -96,6 +152,7 @@ function stopSmelting(_bot) {
     isSmelting = false
     _isPaused = false
     _loopGen++
+    _setOutcome('stopped', { reason: 'stop' })
     activityStack.markStopped('smelting', 'stop')
     console.log('[Smelt] 停止燒製')
 }
@@ -110,17 +167,18 @@ async function _loop(bot, goal = {}) {
     const startTime = Date.now()
 
     while (isSmelting) {
-        activityStack.touch('smelting', 'loop')
         // 停止條件
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Smelt] 達到時間目標 ${goal.duration}s，停止`)
             isSmelting = false
+            _setOutcome('done', { reason: 'goal_reached', goal })
             bridge.sendState(bot, 'activity_done', { activity: 'smelting', reason: 'goal_reached' })
             break
         }
         if (goal.target && goal.count && _smeltedCount >= goal.count) {
             console.log(`[Smelt] 達到目標 ${goal.target} x${goal.count}，停止`)
             isSmelting = false
+            _setOutcome('done', { reason: 'goal_reached', goal })
             bridge.sendState(bot, 'activity_done', { activity: 'smelting', reason: 'goal_reached' })
             break
         }
@@ -130,6 +188,7 @@ async function _loop(bot, goal = {}) {
         if (!furnaceBlock) {
             console.log('[Smelt] 找不到熔爐，停止')
             isSmelting = false
+            if (!_lastOutcome) _setOutcome('stuck', { reason: 'missing_dependency', goal })
             break
         }
 
@@ -208,15 +267,16 @@ async function _loop(bot, goal = {}) {
                 console.log('[Smelt] 背包沒有可燒的材料，停止')
                 furnace.close()
                 isSmelting = false
+                _setOutcome('stuck', { reason: 'no_input', goal })
                 bridge.sendState(bot, 'activity_stuck', { activity: 'smelting', reason: 'no_input' })
                 break
             }
 
             // 加燃料（fuel 是進度值 0-1；為 0 且 slots[1] 無煤才補）
             if (!furnace.fuel && !furnace.slots[1]) {
-                const fuelItem = bot.inventory.items().find(i => FUEL_PRIORITY.includes(i.name))
+                const fuelItem = _getPreferredFuelItem(bot)
                 if (fuelItem) {
-                    const fuelCount = Math.min(fuelItem.count, 64)
+                    const fuelCount = _getFuelInsertCount(fuelItem, goal, _smeltedCount, _inputPending)
                     try {
                         await furnace.putFuel(fuelItem.type, null, fuelCount)
                         if (_shouldAbort(_myGen)) {
@@ -232,6 +292,7 @@ async function _loop(bot, goal = {}) {
                 } else {
                     console.log('[Smelt] 背包沒有燃料，通知 Python 決策')
                     isSmelting = false
+                    _setOutcome('stuck', { reason: 'no_fuel', goal })
                     try { furnace.close() } catch (_) {}
                     bridge.sendState(bot, 'activity_stuck', { activity: 'smelting', reason: 'no_fuel' })
                     break
@@ -456,6 +517,7 @@ function _countItem(bot, name) {
 }
 
 function _reportStuck(bot, stuck) {
+    _setOutcome('stuck', { reason: stuck.reason, goal: activityStack.getStack().slice(-1)[0]?.goal || null, stuck })
     bridge.sendState(bot, 'activity_stuck', {
         activity: 'smelting',
         ...stuck,
@@ -571,4 +633,4 @@ function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
 }
 
-module.exports = { startSmelting, stopSmelting, isActive }
+module.exports = { startSmelting, stopSmelting, isActive, consumeLastOutcome }

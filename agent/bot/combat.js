@@ -252,6 +252,7 @@ async function _loop(bot, goal = {}) {
             await _sleep(500)
             continue
         }
+        activityStack.touch('combat', 'target_acquired')
         noTargetTicks = 0
 
         // 若腳下或身體位置有蜘蛛網，先挖掉脫身
@@ -266,6 +267,7 @@ async function _loop(bot, goal = {}) {
         const dist = target.position.distanceTo(bot.entity.position)
         if (dist > 3) {
             try {
+                activityStack.touch('combat', 'goto_target')
                 await Promise.race([
                     bot.pathfinder.goto(new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2)),
                     _sleep(5000).then(() => { bot.pathfinder.setGoal(null) }),
@@ -278,6 +280,7 @@ async function _loop(bot, goal = {}) {
         try {
             await bot.lookAt(target.position.offset(0, (target.height ?? 1.8) / 2, 0))
             bot.attack(target)
+            activityStack.touch('combat', 'attack')
         } catch (e) {
             console.log(`[Combat] 攻擊失敗: ${e.message}`)
         }

@@ -16,7 +16,11 @@ let isActive = false
 let _isPaused = false
 let _progressVar = 0  // promoted from loop-local
 
-activityStack.register('name', _pause)
+activityStack.register('name', _pause, {
+    // optional overrides; omit unless this activity truly needs them
+    timeoutMs: 25000,
+    suggestedActions: ['back', 'chat', 'idle'],
+})
 
 function _pause(_bot) { isActive = false; _isPaused = true }
 
@@ -59,12 +63,13 @@ async function _loop(bot, goal) {
 - `stopX` sets flags only — `_loop` calls `activityStack.pop(bot)` when it exits
 - `_pause` sets `_isPaused = true` so `_loop` skips the pop (stack already handled by `push`)
 - `startX` does NOT call `checkFull` — that's handled centrally in `commands.js`
+- New activities automatically participate in no-progress monitoring even if they do not provide custom options
 
 ---
 
 ## Activity Stack API (`activity.js`)
 
-- `register(name, pauseFn)` — called once at module load
+- `register(name, pauseFn, options?)` — called once at module load; `options` may include `timeoutMs` and `suggestedActions`
 - `push(bot, name, goal, resumeFn)` — auto-pauses current top, pushes new frame
 - `pop(bot)` — pops top frame, calls previous frame's `resumeFn`
 - `pause(bot)` — calls registered `pauseFn` for top (no pop; used by inventory)
@@ -73,6 +78,8 @@ async function _loop(bot, goal) {
 - `updateTopGoal(goal)` — updates top frame's goal, resets progress (used by `_resumeX`)
 - `getActivity()` — top frame name or `'idle'`
 - `getStack()` — all frames without `resumeFn` (JSON-safe, sent to Python)
+- `touch(name, reason)` — marks meaningful activity progress
+- `getActivityOptions(name)` — returns registered metadata for watchdog / recovery
 
 Each frame stores:
 ```js
@@ -85,6 +92,61 @@ Each frame stores:
     resumeFn:  Function,                        // NOT sent to Python
 }
 ```
+
+---
+
+## Progress Semantics
+
+Stuck detection is based on **progress**, not merely "still not done".
+
+Use a layered model:
+
+1. **Semantic progress**
+   - Activity-specific signals that directly advance the goal.
+   - Examples:
+   - `mining`: dug block, target ore found, count incremented
+   - `smelting`: placed furnace, inserted fuel/input, took output
+   - `hunting`: target acquired, kill count incremented, drops collected
+2. **Physical progress fallback**
+   - Applied globally by `watchdog.js` to every top activity.
+   - Signals:
+   - position changed materially
+   - inventory changed
+   - held item changed
+   - goal changed
+   - top-frame progress changed
+3. **No-progress timeout**
+   - If the top activity is still running but no meaningful progress occurs before timeout, watchdog emits `activity_stuck(reason='no_progress')`.
+
+Guidelines:
+- Prefer `activityStack.touch(name, reason)` when a step clearly advances the current activity.
+- Use `activityStack.updateProgress({...})` when the activity has a durable counter or measurable milestone.
+- Do **not** treat random state churn (minor jitter, hunger ticks, damage taken) as semantic progress.
+- New activities do not need a full custom progress implementation on day one; physical fallback covers them by default.
+- If a new activity gets false positives or false negatives, add semantic progress hooks before adding special watchdog logic.
+
+---
+
+## Watchdog
+
+`watchdog.js` monitors the current top activity only.
+
+Rules:
+- `idle` is ignored.
+- The watchdog checks `lastProgressAt`, not `activity_done`.
+- Long-running activities are valid as long as progress keeps occurring.
+- Default timeout applies to all activities automatically.
+- Only activities with special pacing should override `timeoutMs` in `register(...)`.
+
+When watchdog fires, it sends:
+- `type='activity_stuck'`
+- `reason='no_progress'`
+- `detail`
+- `goal`
+- `progress`
+- `suggested_actions`
+
+This is a JS-side mechanical signal. Python may then decide whether to retry, replan, or interrupt strategically.
 
 ---
 

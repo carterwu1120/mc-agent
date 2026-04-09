@@ -7,13 +7,15 @@ from agent.skills.commands_ref import command_list
 _RESPAWN_COMMANDS = command_list(["tp", "equip", "home", "chat", "idle"])
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡復活處理助手。
-機器人剛剛死亡並重生，請根據死因、剩餘任務與當前狀態決定下一步。
+機器人剛剛死亡並重生，請根據死因、剩餘任務與當前狀態決定「恢復原任務前」需要做的前置動作。
+主任務會在這些前置動作完成後自動從中斷步驟繼續，不需要你重寫剩餘任務。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 
-{{"action": "plan", "commands": ["mine iron 10"], "text": "...理由..."}}
-{{"action": "plan", "commands": ["tp 13 5 105", "mine iron 10"], "text": "...理由..."}}
-{{"action": "plan", "commands": ["equip", "mine iron 10"], "text": "...理由..."}}
+{{"action": "plan", "commands": [], "text": "...理由..."}}
+{{"action": "plan", "commands": ["tp 13 5 105"], "text": "...理由..."}}
+{{"action": "plan", "commands": ["tp 13 5 105", "equip"], "text": "...理由..."}}
+{{"action": "plan", "commands": ["equip"], "text": "...理由..."}}
 {{"command": "chat", "text": "...告知玩家無法繼續的原因..."}}
 {{"command": "idle", "text": "...理由..."}}
 
@@ -36,7 +38,8 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡復活處理助手。
 - 若任務明確無法繼續（例如工具全燒光且無法補充）→ chat 告知玩家
 - 優先想辦法繼續任務，只有真的無法繼續才選 idle 或 chat
 - commands 中只放實際需要的前置指令，不要多餘的步驟
-- 禁止憑空捏造不在剩餘任務中的活動指令
+- 不要把剩餘主任務指令再寫進 commands；系統會自動接回原本中斷的 task
+- 禁止憑空捏造新的主活動指令
 """
 
 
@@ -90,8 +93,9 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
             commands = decision.get("commands", [])
             if text:
                 result.append({"command": "chat", "text": text})
-            if commands:
-                result.append({"action": "plan", "commands": commands, "goal": goal})
+            recovery_commands = list(commands or [])
+            recovery_commands.append("resumetask")
+            result.append({"action": "plan", "commands": recovery_commands, "goal": "", "preserve_task": True})
             return result or None
 
         if decision.get("command") == "chat":

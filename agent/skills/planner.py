@@ -16,7 +16,7 @@ _PLANNER_ALLOWED_KEYS = [
     "mine", "chop", "fish", "smelt", "combat",
     "stopmine", "stopchop", "stopfish", "stopsmelt", "stopcombat", "stopsurface", "stopexplore",
     "home", "back", "surface", "explore",
-    "deposit", "withdraw", "makechest", "labelchest", "equip", "come",
+    "deposit", "withdraw", "makechest", "labelchest", "equip", "come", "tp",
 ]
 _PLANNER_COMMANDS = command_list(_PLANNER_ALLOWED_KEYS)
 
@@ -29,6 +29,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 【可用指令與格式】
 {_PLANNER_COMMANDS}
 - come [player]  走向玩家；若玩家叫你「過來 / come here / 來我這」，優先用這個
+- tp <x> <y> <z>  傳送到指定座標；恢復任務時，若上次工作位置距離現在很遠，可用此指令先傳送回去
 
 【規則】
 - 只能使用「可用指令」清單中的指令，嚴禁發明清單以外的指令
@@ -89,6 +90,25 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
   ["makechest", "labelchest {{new_chest_id}} <label>", "deposit {{new_chest_id}}"]
   {{new_chest_id}} 是佔位符，makechest 完成後自動填入，不要替換成數字
   label 根據要存入的物品類型：wood / ore / stone / misc / food
+
+【未完成任務處理】
+- prompt 中若有「未完成任務」區塊，表示之前的任務被中斷
+- 若玩家說的是「繼續」、「繼續任務」、「continue」或語意上表示要恢復之前的工作，
+  根據以下資訊決定最佳恢復策略：
+
+  策略一：直接繼續（距離近、不需調整）
+  → 直接回傳待執行步驟
+  {{"action": "plan", "goal": "<原目標>", "commands": [<待執行步驟>]}}
+
+  策略二：先傳送回去再繼續（上次工作位置與現在相差很遠，例如超過 100 格）
+  → 在待執行步驟前加入 tp 指令
+  {{"action": "plan", "goal": "<原目標>", "commands": ["tp <lastX> <lastY> <lastZ>", <待執行步驟>]}}
+
+  策略三：重新規劃（物品不足、情況變化太大、原步驟不再合理）
+  → 根據當前背包狀態重新規劃新的指令序列
+
+- 不要重複已完成的步驟，直接從待執行的第一步開始
+- tp 指令格式：tp <x> <y> <z>（使用整數座標，不要加小數點）
 """
 
 RESUME_PATTERNS = [
@@ -98,6 +118,10 @@ RESUME_PATTERNS = [
     r"^\s*resumetask\s*$",
     r"^\s*繼續任務\s*$",
     r"^\s*繼續上次的\s*$",
+    r"繼續.{0,6}任務",
+    r"繼續.{0,6}中斷",
+    r"接.{0,4}上次",
+    r"接.{0,4}回來",
 ]
 
 COME_PATTERNS = [
@@ -129,6 +153,9 @@ STOP_PATTERNS = [
     r"^\s*停下(來)?\s*$",
     r"^\s*先停(下來)?\s*$",
     r"^\s*不要做了\s*$",
+    r"^\s*暫停\s*$",
+    r"^\s*先暫停\s*$",
+    r"^\s*pause\s*$",
 ]
 
 _TRANSIENT_LLM_ERROR_PATTERNS = (
@@ -276,8 +303,10 @@ def _maybe_plan_stop(message: str, activity: str) -> dict | None:
     if not any(re.search(pattern, message.lower() if pattern.startswith(r"^\s*stop") else message) for pattern in STOP_PATTERNS):
         return None
     stop_cmd = _stop_command_for_activity(activity)
+    # 標記任務為中斷，讓之後說「繼續」能接回
+    task_memory.interrupt("player_stop")
     if not stop_cmd:
-        return {"command": "chat", "text": "目前沒有正在進行的活動可停止。"}
+        return {"command": "chat", "text": "已暫停。說「繼續」可接回任務。"}
     return {"action": "plan", "commands": [stop_cmd]}
 
 
@@ -298,11 +327,31 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     goal_str = f"目標：{goal}，進度：{progress}" if goal else "（無目標）"
 
     interrupted_task = task_memory.load()
-    task_ctx = (
-        f"（有未完成任務：{interrupted_task['goal']}，第 {interrupted_task['currentStep']} 步）"
-        if interrupted_task and interrupted_task.get("status") == "interrupted"
-        else ""
-    )
+    task_ctx = ""
+    remaining_cmds_for_resume = []
+    if interrupted_task:
+        steps = interrupted_task.get("steps", [])
+        done_steps = [s["cmd"] for s in steps if s["status"] == "done"]
+        remaining_cmds_for_resume = [s["cmd"] for s in steps if s["status"] not in ("done",)]
+        # Extract last known work position from task context
+        task_context = interrupted_task.get("context") or {}
+        work_pos = task_context.get("workPos") or task_context.get("currentPos")
+        # Also check per-step context for the last running/failed step
+        if not work_pos:
+            for s in reversed(steps):
+                sc = s.get("context") or {}
+                work_pos = sc.get("workPos") or sc.get("currentPos")
+                if work_pos:
+                    break
+        work_pos_str = ""
+        if work_pos:
+            work_pos_str = f"\n上次工作位置：({work_pos.get('x', 0):.0f}, {work_pos.get('y', 0):.0f}, {work_pos.get('z', 0):.0f})"
+        task_ctx = (
+            f"\n\n【未完成任務】目標：{interrupted_task['goal']}\n"
+            f"已完成：{done_steps or '（無）'}\n"
+            f"待執行：{remaining_cmds_for_resume}"
+            f"{work_pos_str}"
+        )
 
     chests_summary = "\n".join(
         f"- id={c['id']} label={c.get('label','未分類')} freeSlots={c.get('freeSlots','?')} contents={[i['name'] for i in c.get('contents', [])]}"
@@ -323,34 +372,6 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     response = None
     try:
         print(f"[Planner] 玩家: {message}")
-
-        # 繼續未完成任務
-        if any(re.search(p, message, re.IGNORECASE) for p in RESUME_PATTERNS):
-            task = task_memory.load()
-            if task and task.get('status') == 'interrupted':
-                steps = task.get("steps")
-                if steps:
-                    remaining_cmds = [s["cmd"] for s in steps if s["status"] not in ("done",)]
-                else:
-                    remaining_cmds = task['commands'][task['currentStep']:]
-                if remaining_cmds:
-                    # If the first resume command matches the current running activity,
-                    # JS already auto-resumed it — skip that step to avoid double-push
-                    first_cmd = remaining_cmds[0].split()[0]
-                    current_activity = activity  # from state
-                    activity_for_cmd = {
-                        'chop': 'chopping', 'mine': 'mining', 'fish': 'fishing',
-                        'smelt': 'smelting', 'hunt': 'hunting', 'getfood': 'getfood',
-                    }.get(first_cmd)
-                    if activity_for_cmd and current_activity == activity_for_cmd:
-                        print(f"[Planner] 恢復任務: {task['goal']} — 已在執行 {current_activity}，跳過重複指令")
-                        remaining_cmds = remaining_cmds[1:]
-                    if not remaining_cmds:
-                        return {"command": "chat", "text": "任務已在執行中。"}
-                    done_steps = [s["cmd"] for s in (steps or []) if s["status"] == "done"]
-                    print(f"[Planner] 恢復任務: {task['goal']} — 已完成: {done_steps}, 剩餘: {remaining_cmds}")
-                    return {"action": "plan", "commands": remaining_cmds, "goal": task['goal']}
-            return {"command": "chat", "text": "目前沒有未完成的任務可以繼續。"}
 
         shortcut = _maybe_plan_come(message, activity, player_name)
         if shortcut:
