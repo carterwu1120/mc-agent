@@ -392,7 +392,11 @@ async function _placeCraftingTable(bot, tableBlockId) {
             if (!freshItem) break
             if (!await _safeEquipHand(bot, 'crafting_table', freshItem)) continue
             await bot.lookAt(ground.position.offset(0.5, 1, 0.5))
-            await bot.placeBlock(ground, new Vec3(0, 1, 0))
+            try {
+                await bot.placeBlock(ground, new Vec3(0, 1, 0))
+            } catch (_) {
+                // blockUpdate 事件超時 — 仍需確認方塊是否實際放置成功
+            }
             await _sleep(400)
             const placed = bot.blockAt(spacePos)
             if (placed && placed.type === tableBlockId) {
@@ -400,6 +404,7 @@ async function _placeCraftingTable(bot, tableBlockId) {
                 _placedTablePos = spacePos.clone()
                 return placed
             }
+            console.log('[Craft] 放置工作檯失敗:', spacePos)
         } catch (e) {
             console.log('[Craft] 放置工作檯失敗:', e.message)
         }
@@ -484,8 +489,7 @@ async function _smeltIfNeeded(bot, toolSuffix) {
 
     console.log(`[Craft] 有 ${oreEntry.name}，先燒製 ${needed} 個 ${neededIngot}...`)
     const { startSmelting, isActive: isSmeltingActive } = require('./smelting')
-    const { resumeMining } = require('./mining')
-    startSmelting(bot, { target, count: needed })  // 內部會停 mining
+    startSmelting(bot, { target, count: needed })  // 內部會停 mining，完成後由 activity stack 接回上一層
 
     while (isSmeltingActive()) {
         await _sleep(3000)
@@ -493,7 +497,6 @@ async function _smeltIfNeeded(bot, toolSuffix) {
     const ingotCount = bot.inventory.items()
         .filter(i => i.name === neededIngot)
         .reduce((s, i) => s + i.count, 0)
-    resumeMining()
     return ingotCount >= needed
 }
 

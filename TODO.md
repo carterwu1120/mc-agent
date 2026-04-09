@@ -5,7 +5,7 @@
 - [ ] 強化 planner 前置條件推理（模糊指令 → 自動展開完整 plan）
 - [ ] 強化 self_task 自主規劃能力（探索、找資源、目標分解）
 - [ ] executor 錯誤處理（step 失敗時不卡住，能 skip 或 abort）
-- [ ] 復活後要檢查task.json裡面的steps，看哪一個是剛剛還在執行的，再判斷要不要繼續執行。而不是直接蓋過
+
 ## 中期
 
 - [ ] 加入 per-agent 中期記憶（探索記錄、資源地圖，存 DB）
@@ -29,3 +29,4 @@
 - [x] Planner 禁止 LLM 使用清單外指令
 - [x] CLAUDE.md 分層（agent / bot / skills）
 - [x] Planner prompt 加入箱子詳情（label, freeSlots, contents）
+- [x] 復活後要檢查task.json裡面的steps，看哪一個是剛剛還在執行的，再判斷要不要繼續執行。而不是直接蓋過

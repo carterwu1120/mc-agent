@@ -199,7 +199,11 @@ function _findLargeChestSpot(bot) {
         // Try right side first, then left
         for (const sign of [1, -1]) {
             const g2 = _findGround(bot, fdx * dist + sign * rdx, fdz * dist + sign * rdz)
-            if (g2 && _checkSpot(bot, g2)) return [g1, g2]
+            if (!g2 || !_checkSpot(bot, g2)) continue
+            // 兩個箱子必須同高且水平直接相鄰（XZ Manhattan distance = 1），否則無法合併成大箱子
+            const c1 = g1.position.offset(0, 1, 0)
+            const c2 = g2.position.offset(0, 1, 0)
+            if (c1.y === c2.y && Math.abs(c1.x - c2.x) + Math.abs(c1.z - c2.z) === 1) return [g1, g2]
         }
     }
     return null
@@ -217,11 +221,18 @@ async function _placeChest(bot) {
             await bot.equip(item, 'hand')
             // Look at chest-level of target position so facing is consistent (toward bot)
             await bot.lookAt(ground.position.offset(0.5, 1, 0.5))
-            await bot.placeBlock(ground, new Vec3(0, 1, 0))
+            try {
+                await bot.placeBlock(ground, new Vec3(0, 1, 0))
+            } catch (_) {
+                // blockUpdate 事件超時 — 仍需確認方塊是否實際放置成功
+            }
             await _sleep(400)
             const block = bot.blockAt(ground.position.offset(0, 1, 0))
             if (block && _isContainer(block.name)) {
                 placed.push(block.position)
+            } else {
+                console.log('[Chest] 放置箱子失敗:', ground.position)
+                return false
             }
         } catch (e) {
             console.log('[Chest] 放置箱子失敗:', e.message)
