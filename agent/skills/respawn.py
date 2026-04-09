@@ -33,22 +33,32 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡復活處理助手。
 
 【決策原則】
 - 重生已在地表，優先直接繼續剩餘任務
-- 死因 other 且 startPos 有效 → 考慮先 tp 回死亡地點（撿裝備或繼續任務）
+- 若 prompt 中有「中斷步驟當前位置（優先續接點）」→ 這比舊 activity 的 startPos 更重要，優先以它作為 tp 目標
+- 若沒有中斷步驟當前位置，才退回使用 workPos 或 startPos
+- 死因 other 且有有效續接點 → 考慮先 tp 回該位置（撿裝備或繼續任務）
 - 死因 lava 或 drowning → 不要 tp 回原位（危險），直接從重生點繼續
 - 若任務明確無法繼續（例如工具全燒光且無法補充）→ chat 告知玩家
 - 優先想辦法繼續任務，只有真的無法繼續才選 idle 或 chat
 - commands 中只放實際需要的前置指令，不要多餘的步驟
 - 不要把剩餘主任務指令再寫進 commands；系統會自動接回原本中斷的 task
 - 禁止憑空捏造新的主活動指令
+- 中斷步驟目標（taskGoal）比 lastGoal 更能反映目前真正要做的事
 """
 
 
 async def handle(state: dict, llm: LLMClient) -> list | dict | None:
     cause = state.get('cause', 'other')
     start_pos = state.get('startPos')
+    death_pos = state.get('deathPos')
     spawn_pos = state.get('spawnPos') or state.get('pos') or {}
     remaining = state.get('remaining', [])
     goal = state.get('goal', '')
+    task_current_cmd = state.get('taskCurrentCmd')
+    task_current_pos = state.get('taskCurrentPos')
+    task_work_pos = state.get('taskWorkPos')
+    task_goal = state.get('taskGoal') or {}
+    task_progress = state.get('taskProgress') or {}
+    task_activity = state.get('taskActivity')
     inventory = state.get('inventory', [])
     health = state.get('health', 20)
     food = state.get('food', 20)
@@ -58,16 +68,26 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
     start_pos_str = f"({start_pos['x']:.0f}, {start_pos['y']:.0f}, {start_pos['z']:.0f})" if start_pos else "（無）"
+    death_pos_str = f"({death_pos['x']:.0f}, {death_pos['y']:.0f}, {death_pos['z']:.0f})" if death_pos else "（無）"
     spawn_pos_str = f"({spawn_pos.get('x', 0):.0f}, {spawn_pos.get('y', 0):.0f}, {spawn_pos.get('z', 0):.0f})"
+    task_current_pos_str = f"({task_current_pos['x']:.0f}, {task_current_pos['y']:.0f}, {task_current_pos['z']:.0f})" if task_current_pos else "（無）"
+    task_work_pos_str = f"({task_work_pos['x']:.0f}, {task_work_pos['y']:.0f}, {task_work_pos['z']:.0f})" if task_work_pos else "（無）"
 
     equip_summary = equipment_summary(state)
 
     prompt = (
         f"機器人剛死亡重生。\n"
         f"死亡原因：{cause}\n"
-        f"死前工作位置（startPos）：{start_pos_str}\n"
+        f"死亡位置：{death_pos_str}\n"
+        f"舊 activity startPos：{start_pos_str}\n"
         f"重生位置：{spawn_pos_str}\n"
         f"未完成任務目標：{goal}\n"
+        f"目前中斷步驟：{task_current_cmd or '（無）'}\n"
+        f"中斷步驟 activity：{task_activity or '（無）'}\n"
+        f"中斷步驟當前位置（優先續接點）：{task_current_pos_str}\n"
+        f"中斷步驟工作位置：{task_work_pos_str}\n"
+        f"中斷步驟目標：{json.dumps(task_goal, ensure_ascii=False)}\n"
+        f"中斷步驟進度：{json.dumps(task_progress, ensure_ascii=False)}\n"
         f"剩餘任務指令：{remaining}\n\n"
         f"目前裝備：\n{equip_summary}\n\n"
         f"背包內容：\n{inv_summary}\n\n"
@@ -77,7 +97,7 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
     response = None
     try:
-        print(f"[Respawn] 死因={cause}，startPos={start_pos_str}，剩餘={remaining}")
+        print(f"[Respawn] 死因={cause}，taskCurrentPos={task_current_pos_str}，workPos={task_work_pos_str}，剩餘={remaining}")
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=SYSTEM_PROMPT,

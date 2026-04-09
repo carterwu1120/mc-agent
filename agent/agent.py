@@ -91,19 +91,39 @@ async def _on_player_died(state: dict, _llm: LLMClient):
     start_pos = state.get('startPos')
     last_activity = state.get('lastActivity')
     last_goal = state.get('lastGoal')
+    death_pos = state.get('pos')
+
+    task = task_memory.load()
+    current_step = None
+    current_step_ctx = {}
+    current_cmd = None
+    if task:
+        current_step = task.get('currentStep', 0)
+        steps = task.get('steps', [])
+        if isinstance(current_step, int) and 0 <= current_step < len(steps):
+            step_obj = steps[current_step] or {}
+            current_cmd = step_obj.get('cmd')
+            current_step_ctx = step_obj.get('context') or {}
 
     if executor.is_running():
         executor.abort()
 
-    task = task_memory.load()
     if task and task.get('status') == 'running':
         task_memory.interrupt('death')
 
     death_info = {
         'cause': cause,
         'startPos': start_pos,
+        'deathPos': death_pos,
         'lastActivity': last_activity,
         'lastGoal': last_goal,
+        'taskCurrentStep': current_step,
+        'taskCurrentCmd': current_cmd,
+        'taskCurrentPos': current_step_ctx.get('currentPos'),
+        'taskWorkPos': current_step_ctx.get('workPos'),
+        'taskGoal': current_step_ctx.get('goal') or {},
+        'taskProgress': current_step_ctx.get('progress') or {},
+        'taskActivity': current_step_ctx.get('stackActivity') or current_step_ctx.get('expectedActivity'),
     }
     DEATH_FILE.write_text(json.dumps(death_info), encoding='utf-8')
     print(f'[Death] 死亡記錄：{death_info}')
@@ -120,6 +140,7 @@ async def _on_player_respawned(state: dict, llm: LLMClient):
 
     cause = death_info.get('cause', 'other')
     start_pos = death_info.get('startPos')
+    death_pos = death_info.get('deathPos')
 
     task = task_memory.load()
     if not task or task.get('status') != 'interrupted':
@@ -143,6 +164,14 @@ async def _on_player_respawned(state: dict, llm: LLMClient):
     respawn_state.update({
         'cause': cause,
         'startPos': start_pos,
+        'deathPos': death_pos,
+        'taskCurrentStep': death_info.get('taskCurrentStep'),
+        'taskCurrentCmd': death_info.get('taskCurrentCmd'),
+        'taskCurrentPos': death_info.get('taskCurrentPos'),
+        'taskWorkPos': death_info.get('taskWorkPos'),
+        'taskGoal': death_info.get('taskGoal') or {},
+        'taskProgress': death_info.get('taskProgress') or {},
+        'taskActivity': death_info.get('taskActivity'),
         'remaining': remaining,
         'goal': task.get('goal', ''),
     })
