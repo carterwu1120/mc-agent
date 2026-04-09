@@ -128,14 +128,14 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     if mode == "companion":
         return None
 
-    # workflow mode：優先恢復未完成任務
-    if mode == "workflow":
-        task = task_memory.load()
-        if task and task.get("status") == "interrupted":
-            remaining = task["commands"][task["currentStep"]:]
-            if remaining:
-                print(f"[SelfTask] workflow 模式，自動恢復任務: {task['goal']}")
-                return {"action": "plan", "commands": remaining, "goal": task["goal"]}
+    # 所有模式：若有未完成任務，優先恢復（避免新計畫蓋掉舊任務）
+    task = task_memory.load()
+    if task and task.get("status") == "interrupted":
+        steps = task.get("steps", [])
+        remaining = [s["cmd"] for s in steps if s.get("status") not in ("done", "failed")]
+        if remaining:
+            print(f"[SelfTask] 有未完成任務，自動恢復: {task['goal']}")
+            return {"action": "plan", "commands": remaining, "goal": task["goal"], "resume_task": True}
 
 
     prompt = (
