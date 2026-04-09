@@ -30,6 +30,27 @@ function _shouldAbort(expectedGen = null) {
     return !isHunting || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
+async function _gotoNearWithTimeout(bot, x, y, z, range, timeoutMs) {
+    let timedOut = false
+    const timeoutPromise = _sleep(timeoutMs).then(() => {
+        timedOut = true
+        throw new Error('goto timeout')
+    })
+
+    try {
+        await Promise.race([
+            bot.pathfinder.goto(new goals.GoalNear(x, y, z, range)),
+            timeoutPromise,
+        ])
+        return true
+    } catch (e) {
+        if (timedOut) {
+            bot.pathfinder.setGoal(null)
+        }
+        return false
+    }
+}
+
 async function _safeEquip(bot, item, slot = 'hand', label = '裝備武器') {
     if (!item) return false
     try {
@@ -122,20 +143,6 @@ async function _loop(bot, goal) {
 
         console.log(`[Hunt] 目標：${animal.name}（進度 ${_killCount}/${maxCount}）`)
 
-        // 移動靠近
-        if (animal.position.distanceTo(bot.entity.position) > 3) {
-            try {
-                await Promise.race([
-                    bot.pathfinder.goto(
-                        new goals.GoalNear(animal.position.x, animal.position.y, animal.position.z, 2)
-                    ),
-                    _sleep(10000).then(() => { bot.pathfinder.setGoal(null) }),
-                ])
-            } catch (_) {}
-        }
-
-        if (_shouldAbort(_myGen)) return
-
         // 攻擊直到死亡
         const killed = await _killAnimal(bot, animal, _myGen)
         if (killed) {
@@ -169,14 +176,14 @@ async function _killAnimal(bot, animal, expectedGen = null) {
 
         const dist = animal.position.distanceTo(bot.entity.position)
         if (dist > 3) {
-            try {
-                await Promise.race([
-                    bot.pathfinder.goto(
-                        new goals.GoalNear(animal.position.x, animal.position.y, animal.position.z, 2)
-                    ),
-                    _sleep(4000).then(() => { bot.pathfinder.setGoal(null) }),
-                ])
-            } catch (_) {}
+            await _gotoNearWithTimeout(
+                bot,
+                animal.position.x,
+                animal.position.y,
+                animal.position.z,
+                2,
+                4000
+            )
             if (!animal.isValid) return true
         }
 
