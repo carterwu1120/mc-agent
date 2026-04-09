@@ -47,6 +47,16 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 【前置條件推理（重要）】
 收到模糊或複合目標時，根據背包狀態（inventory）和裝備狀態（capabilities）自動推斷前置步驟，依序加入 commands：
 
+【內建合成能力（重要）】
+- bot 具備內建合成能力；某些指令在執行時，會自動合成完成該目標所需的中間物品
+- 因此規劃時不能只停在「取得原料」，而要判斷「是否已經能真正完成玩家要的成品/結果」
+- 若玩家要求的是某個成品、裝備、工具、箱子、熟食，且完成該目標需要先合成/製作，則 plan 必須包含能把目標真正做出來的最後一步，而不只是停在蒐集材料
+- 換句話說：
+  - 「做一套鑽石裝」不是只挖到鑽石，還要把裝備真正做出並穿上
+  - 「做箱子」不是只有木材，還要 makechest
+  - 「補食物」不是只有生食，還要 getfood / smelt 成熟食
+- 若某步驟本身就會觸發內建合成（例如 equip 可能會把可製作的缺失裝備做出並穿上、makechest 會合成並放置箱子、getfood 會處理生食），可用該步驟作為收尾；不要把 plan 停在原料階段
+
 裝備類：
 - 若目標需要挖掘或戰鬥，先確認工具；若缺對應工具 → 先 equip
   ⚠️ equip 是裝備現有工具，不是「去打架」。combat 不是前置步驟，絕對不要把 combat 加進 commands 作為準備步驟
@@ -73,6 +83,13 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
   - 補 iron_pickaxe：mine iron 3 → smelt raw_iron 3 → equip
   - 不要產生 chop → equip → smelt、或 equip → equip 這類沒有實際意義的序列
   - 不要在缺口明確時一律回 mine iron 16 / smelt raw_iron 16
+
+裝備升級目標：
+- 若玩家要求「做一套鑽石裝 / 鑽石盔甲 / diamond armor set」，目標不是只有拿到鑽石，而是最後要能穿上完整鑽石裝
+- 先根據狀態摘要中的 armor_progress.diamond_missing / diamond_shortfall_for_full_set 計算缺口
+- 若熟食不足，先補食物；若鑽石不足，加入 mine diamond <shortfall>
+- 最後必須加入 equip，讓機器人把可製作的鑽石裝備做出並穿上；沒有 equip 不算完成這類目標
+- 若已經有部分鑽石裝，鑽石數量只補缺口，不要固定一律 24
 
 範例：
 玩家說「幫我準備去挖鑽石」，背包無鐵鎬、食物只剩 2：
@@ -198,6 +215,47 @@ def _parse_decision_text(response: str) -> dict:
 
 def _planner_failure_chat() -> dict:
     return {"command": "chat", "text": "我這次規劃失敗了，請再說一次。"}
+
+
+def _armor_goal_shortcut(message: str, state: dict, activity: str) -> dict | None:
+    lowered = message.lower()
+    armor_patterns = (
+        "鑽石裝",
+        "鑽石裝備",
+        "鑽石盔甲",
+        "一套鑽石裝",
+        "diamond armor",
+        "diamond armour",
+        "diamond armor set",
+    )
+    if not any(p in lowered or p in message for p in armor_patterns):
+        return None
+
+    summary = json.loads(summary_json(state))
+    shortfall = int((((summary.get("armor_progress") or {}).get("diamond_shortfall_for_full_set")) or 0))
+    cooked_total = int(((((summary.get("resources") or {}).get("food") or {}).get("cooked_total")) or 0))
+
+    commands: list[str] = []
+    stop_cmd = _stop_command_for_activity(activity)
+    if activity not in (None, "idle") and stop_cmd:
+        commands.append(stop_cmd)
+
+    # Keep armor-goal shortcut consistent with the planner's general food rule:
+    # only add a food-prep step when cooked food is actually low, rather than
+    # always topping up to 32 for every armor request.
+    if cooked_total < 5:
+        commands.append("getfood count 32")
+
+    if shortfall > 0:
+        commands.append(f"mine diamond {shortfall}")
+
+    commands.append("equip")
+
+    return {
+        "action": "plan",
+        "goal": "製作一套鑽石裝備",
+        "commands": normalize_commands(commands),
+    }
 
 
 async def _reprompt_invalid_plan(
@@ -376,6 +434,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         shortcut = _maybe_plan_come(message, activity, player_name)
         if shortcut:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
+            return shortcut
+        shortcut = _armor_goal_shortcut(message, state, activity)
+        if shortcut:
+            print(f"[Planner] 裝備目標快捷規劃: {shortcut.get('commands')}")
             return shortcut
         shortcut = _maybe_plan_surface(message, activity)
         if shortcut:

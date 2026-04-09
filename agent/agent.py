@@ -283,7 +283,7 @@ def _matching_work_frame(state: dict, expected_activity: str | None) -> dict | N
     for frame in reversed(stack):
         if frame.get("activity") == expected_activity:
             return frame
-    return stack[-1] if stack else None
+    return None
 
 
 def _sync_task_context(state: dict) -> None:
@@ -464,6 +464,21 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
+
+        # During activity_stuck handling, control-flow actions like replan/skip
+        # must be applied before any chat/action side effects. Otherwise a chat
+        # action_done can prematurely unblock the executor and skip the first
+        # replan step.
+        if event_type == "activity_stuck":
+            prioritized = []
+            deferred = []
+            for a in actions:
+                if isinstance(a, dict) and a.get("action") in {"plan", "replan", "skip"}:
+                    prioritized.append(a)
+                else:
+                    deferred.append(a)
+            actions = prioritized + deferred
+
         for a in actions:
             if isinstance(a, dict) and a.get("action") == "plan":
                 commands = a.get("commands", [])

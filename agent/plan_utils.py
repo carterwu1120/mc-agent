@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 EQUIP_WORTHY_NEXT = {"mine", "combat", "hunt", "explore"}
+EQUIP_WORTHY_PREV = {"mine", "smelt", "withdraw"}
 EQUIPMENT_CHANGING = {"mine", "smelt", "withdraw", "makechest"}
 NON_PROGRESS = {"chat", "idle"}
 
@@ -32,8 +33,15 @@ def normalize_commands(commands: list[str], previous_command: str | None = None)
             # Never keep repeated equip chains.
             if last_non_chat == "equip":
                 continue
-            # equip is only meaningful right before actions that use gear.
-            if next_name not in EQUIP_WORTHY_NEXT:
+            # equip is meaningful either right before gear-using work,
+            # or as the final "apply crafted/upgraded gear" step.
+            if next_name in EQUIP_WORTHY_NEXT:
+                normalized.append(cmd)
+                last_non_chat = name
+                continue
+            if next_name:
+                continue
+            if last_non_chat not in EQUIP_WORTHY_PREV:
                 continue
 
         normalized.append(cmd)

@@ -29,6 +29,19 @@ LOG_SUFFIX = "_log"
 PLANK_SUFFIX = "_planks"
 GOOD_WEAPON_PREFIXES = ("iron_", "diamond_", "netherite_")
 GOOD_ARMOR_PREFIXES = ("iron_", "diamond_", "netherite_")
+ARMOR_SUFFIXES = ("_helmet", "_chestplate", "_leggings", "_boots")
+DIAMOND_ARMOR_COSTS = {
+    "diamond_helmet": 5,
+    "diamond_chestplate": 8,
+    "diamond_leggings": 7,
+    "diamond_boots": 4,
+}
+BLOCK_EQUIVALENTS = {
+    "coal_block": ("coal", 9),
+    "iron_block": ("iron_ingot", 9),
+    "gold_block": ("gold_ingot", 9),
+    "diamond_block": ("diamond", 9),
+}
 
 
 def _inventory_counts(state: dict) -> Counter:
@@ -39,6 +52,9 @@ def _inventory_counts(state: dict) -> Counter:
         count = int(item.get("count", 0) or 0)
         if name:
             counter[name] += count
+            if name in BLOCK_EQUIVALENTS:
+                base_name, multiplier = BLOCK_EQUIVALENTS[name]
+                counter[base_name] += count * multiplier
     return counter
 
 
@@ -133,6 +149,23 @@ def _has_good_armor(counter: Counter, equipment: dict) -> bool:
     return good_count >= 2
 
 
+def _owned_armor_pieces(counter: Counter, equipment: dict, material_prefix: str) -> list[str]:
+    pieces = set()
+    armor = ((equipment or {}).get("armor") or {})
+    for piece in armor.values():
+        if _is_broken(piece):
+            continue
+        name = _item_name(piece)
+        if name and name.startswith(f"{material_prefix}_") and name.endswith(ARMOR_SUFFIXES):
+            pieces.add(name)
+    for name, count in counter.items():
+        if count <= 0:
+            continue
+        if name.startswith(f"{material_prefix}_") and name.endswith(ARMOR_SUFFIXES):
+            pieces.add(name)
+    return sorted(pieces)
+
+
 def _low_durability_equipment(equipment: dict) -> list[str]:
     """Return list of equipped item names with durability <= 10%."""
     low = []
@@ -186,6 +219,22 @@ def _capabilities(resources: dict, equipment: dict) -> dict:
         }), equipment),
         "has_good_armor": _has_good_armor(Counter(), equipment),
         "low_durability_equipment": _low_durability_equipment(equipment),
+    }
+
+
+def _armor_progress(counter: Counter, equipment: dict, resources: dict) -> dict:
+    diamond_owned = _owned_armor_pieces(counter, equipment, "diamond")
+    missing = [
+        piece for piece in DIAMOND_ARMOR_COSTS
+        if piece not in diamond_owned
+    ]
+    diamond_needed = sum(DIAMOND_ARMOR_COSTS[piece] for piece in missing)
+    diamond_have = resources["materials"]["diamond"]
+    return {
+        "diamond_owned": diamond_owned,
+        "diamond_missing": missing,
+        "diamond_needed_for_full_set": diamond_needed,
+        "diamond_shortfall_for_full_set": max(0, diamond_needed - diamond_have),
     }
 
 
@@ -260,6 +309,7 @@ def summarize_state(state: dict, mode: str = "companion_survival") -> dict:
             "equipment": equipment,
         },
         "resources": resources,
+        "armor_progress": _armor_progress(counter, equipment, resources),
         "capabilities": _capabilities(resources, equipment),
         "environment": _environment(state),
         "inventory_slots": state.get("inventory_slots") or {"used": len(state.get("inventory") or []), "total": 36, "free": 36 - len(state.get("inventory") or [])},

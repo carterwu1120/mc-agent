@@ -83,11 +83,18 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
         result = []
 
         if decision.get("action") == "plan":
-            commands = decision.get("commands", [])
+            commands = list(decision.get("commands", []) or [])
             if text:
                 result.append({"command": "chat", "text": text})
             if commands:
-                result.append({"action": "plan", "commands": commands, "goal": f"修復裝備 {item_names}"})
+                if "resumetask" not in commands:
+                    commands.append("resumetask")
+                result.append({
+                    "action": "plan",
+                    "commands": commands,
+                    "goal": f"修復裝備 {item_names}",
+                    "preserve_task": True,
+                })
             return result or None
 
         if decision.get("command") == "chat":

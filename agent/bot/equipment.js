@@ -9,6 +9,16 @@ const ARMOR_PRIORITY = {
     legs: ['diamond_leggings', 'iron_leggings', 'chainmail_leggings', 'golden_leggings', 'leather_leggings'],
     feet: ['diamond_boots', 'iron_boots', 'chainmail_boots', 'golden_boots', 'leather_boots'],
 }
+const ARMOR_COSTS = {
+    diamond_helmet: 5,
+    diamond_chestplate: 8,
+    diamond_leggings: 7,
+    diamond_boots: 4,
+    iron_helmet: 5,
+    iron_chestplate: 8,
+    iron_leggings: 7,
+    iron_boots: 4,
+}
 
 const EQUIP_SLOTS = ['hand', 'off-hand', 'head', 'torso', 'legs', 'feet']
 const SLOT_ALIASES = {
@@ -52,6 +62,67 @@ function _normalizeSlot(target) {
     return SLOT_ALIASES[target] ?? target
 }
 
+function _countItem(bot, itemName) {
+    return bot.inventory.items()
+        .filter(i => i.name === itemName)
+        .reduce((sum, i) => sum + i.count, 0)
+}
+
+function _diamondReserve(bot) {
+    const inv = bot.inventory.items()
+    return (
+        (inv.some(i => i.name === 'diamond_pickaxe') ? 0 : 3) +
+        (inv.some(i => i.name === 'diamond_sword') ? 0 : 2)
+    )
+}
+
+function _canCraftArmorItem(bot, itemName) {
+    const cost = ARMOR_COSTS[itemName] ?? 0
+    if (itemName.startsWith('diamond_')) {
+        return _countItem(bot, 'diamond') - _diamondReserve(bot) >= cost
+    }
+    if (itemName.startsWith('iron_')) {
+        return _countItem(bot, 'iron_ingot') >= cost
+    }
+    return false
+}
+
+async function _craftArmorUpgrade(bot, slot) {
+    const priority = ARMOR_PRIORITY[slot]
+    if (!priority) return null
+
+    const { ensureCraftingTable, reclaimCraftingTable } = require('./crafting')
+    const table = await ensureCraftingTable(bot)
+    if (!table) return null
+
+    try {
+        for (const itemName of priority) {
+            const itemDef = bot.registry.itemsByName[itemName]
+            if (!itemDef) continue
+
+            if (!_canCraftArmorItem(bot, itemName) && (itemName.startsWith('diamond_') || itemName.startsWith('iron_'))) continue
+
+            const recipe = bot.recipesFor(itemDef.id, null, 1, table)[0]
+            if (!recipe) continue
+
+            try {
+                await bot.craft(recipe, 1, table)
+                const crafted = bot.inventory.items().find(i => i.name === itemName)
+                if (crafted) {
+                    console.log(`[Equip] 合成 ${itemName}`)
+                    return crafted
+                }
+            } catch (e) {
+                console.log(`[Equip] 合成 ${itemName} 失敗: ${e.message}`)
+            }
+        }
+    } finally {
+        await reclaimCraftingTable(bot)
+    }
+
+    return null
+}
+
 async function equipBestWeapon(bot) {
     const weapon = _findBestItem(bot, WEAPON_PRIORITY)
     if (!weapon) {
@@ -90,7 +161,13 @@ async function equipBestArmor(bot) {
     const equipped = []
 
     for (const [slot, priority] of Object.entries(ARMOR_PRIORITY)) {
-        const armor = _findBestItem(bot, priority)
+        let armor = _findBestItem(bot, priority)
+        const topTierName = priority[0]
+        if ((!armor || armor.name !== topTierName) && _canCraftArmorItem(bot, topTierName)) {
+            armor = await _craftArmorUpgrade(bot, slot)
+        } else if (!armor) {
+            armor = await _craftArmorUpgrade(bot, slot)
+        }
         if (!armor) continue
 
         try {
@@ -142,7 +219,13 @@ async function equipSpecific(bot, target) {
         return await equipShield(bot)
     }
     if (Object.prototype.hasOwnProperty.call(ARMOR_PRIORITY, target)) {
-        const armor = _findBestItem(bot, ARMOR_PRIORITY[target])
+        let armor = _findBestItem(bot, ARMOR_PRIORITY[target])
+        const topTierName = ARMOR_PRIORITY[target][0]
+        if ((!armor || armor.name !== topTierName) && _canCraftArmorItem(bot, topTierName)) {
+            armor = await _craftArmorUpgrade(bot, target)
+        } else if (!armor) {
+            armor = await _craftArmorUpgrade(bot, target)
+        }
         if (!armor) {
             console.log(`[Equip] 背包裡沒有可裝到 ${target} 的護甲`)
             return null

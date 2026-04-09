@@ -113,7 +113,16 @@ async function depositToChest(bot, chestId) {
     if (!block || !_isContainer(block.name)) { bot.chat(`箱子 id=${chestId} 位置無效`); return }
     try {
         const container = await bot.openContainer(block)
-        const toDeposit = bot.inventory.items().filter(i => !_isEquipment(i.name) && _itemLabel(i.name) === target.label)
+        const toDeposit = bot.inventory.items().filter(i => {
+            if (_isEquipment(i.name)) return false
+            const label = _itemLabel(i.name)
+            if (target.label === 'misc') {
+                // "misc" is the emergency cleanup chest: keep food on hand,
+                // but free space by accepting every other non-equipment item.
+                return label !== 'food'
+            }
+            return label === target.label
+        })
         let deposited = 0
         for (const item of toDeposit) {
             try { await container.deposit(item.type, null, item.count); deposited++ } catch (_) {}

@@ -3,6 +3,18 @@ import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import equipment_summary
 
+LABEL_PATTERNS = {
+    "food": ["cooked_", "bread", "apple", "carrot", "potato", "beef", "pork", "chicken", "mutton", "rabbit", "salmon", "cod"],
+    "wood": ["_log", "_planks", "_sapling", "bamboo"],
+    "stone": ["cobblestone", "deepslate", "gravel", "sand", "diorite", "andesite", "granite", "tuff", "calcite"],
+    "ore": ["_ingot", "raw_iron", "raw_gold", "raw_copper", "lapis_lazuli", "quartz", "diamond", "emerald", "coal"],
+}
+
+EQUIPMENT_SUFFIXES = (
+    "_pickaxe", "_axe", "_sword", "_shovel", "_hoe", "_helmet", "_chestplate",
+    "_leggings", "_boots", "_bow", "crossbow", "shield", "elytra", "trident",
+)
+
 SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
 背包格數已達警戒線（34/36 格），需要提前整理以保留合成空間。
 策略：提前在背包快滿時就處理，而不是等到完全滿再亂丟，目的是確保合成物品時背包有足夠空間。
@@ -76,6 +88,36 @@ items 清單填英文 item name，不包含數量。
 """
 
 
+def _is_equipment(name: str) -> bool:
+    return any(name.endswith(s) for s in EQUIPMENT_SUFFIXES) or name in {"crafting_table", "furnace"}
+
+
+def _item_label(name: str) -> str | None:
+    if _is_equipment(name):
+        return None
+    for label, patterns in LABEL_PATTERNS.items():
+        if any(p in name for p in patterns):
+            return label
+    return "misc"
+
+
+def _should_make_misc_chest(inventory: list[dict]) -> bool:
+    counts: dict[str, int] = {}
+    total = 0
+    for item in inventory:
+        label = _item_label(str(item.get("name", "")))
+        if not label:
+            continue
+        counts[label] = counts.get(label, 0) + 1
+        total += 1
+    if total <= 0:
+        return False
+    if len(counts) >= 3:
+        return True
+    dominant = max(counts.values(), default=0)
+    return dominant * 2 <= total
+
+
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     inventory = state.get("inventory", [])
     activity = state.get("activity", "idle")
@@ -106,6 +148,18 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     can_make_chest = wood_as_planks >= 16
     if not labeled_chests:
         chests_summary += f"\n（背包中有木材：{logs_count} logs + {planks_count} planks = {wood_as_planks} planks 等效，{'足夠' if can_make_chest else '不足'}製作箱子（需要 16 planks））"
+
+    if not labeled_chests and can_make_chest and _should_make_misc_chest(inventory):
+        return {
+            "action": "plan",
+            "commands": [
+                "home",
+                "makechest",
+                "labelchest {new_chest_id} misc",
+                "deposit {new_chest_id}",
+                "back",
+            ],
+        }
 
     # Current goal/progress from stack for mine remaining calculation
     top = stack[-1] if stack else {}

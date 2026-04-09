@@ -1,7 +1,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const bridge = require('./bridge')
 const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
-const { applyInventoryDecision, checkFull } = require('./inventory')
+const { applyInventoryDecision, checkFull, handleFull } = require('./inventory')
 const { startChopping, stopChopping } = require('./woodcutting')
 const { startMining, stopMining } = require('./mining')
 const { startSmelting, stopSmelting } = require('./smelting')
@@ -24,6 +24,22 @@ function handle(bot, msg) {
     console.log('[Action]', JSON.stringify(msg))
     if (ACTIVITY_COMMANDS.has(msg.command) && checkFull(bot)) {
         console.log(`[Action] 背包已滿，拒絕執行 ${msg.command}`)
+        if (!msg._inventoryRetry) {
+            ;(async () => {
+                try {
+                    await handleFull(bot)
+                    const slots = bot.inventory.items().length
+                    if (slots < 34) {
+                        console.log(`[Action] 背包整理完成，重試 ${msg.command}`)
+                        handle(bot, { ...msg, _inventoryRetry: true })
+                    } else {
+                        console.log(`[Action] 背包整理後仍接近滿載，放棄重試 ${msg.command}`)
+                    }
+                } catch (e) {
+                    console.log(`[Action] 背包整理後重試 ${msg.command} 失敗:`, e.message)
+                }
+            })()
+        }
         return
     }
     switch (msg.command) {
