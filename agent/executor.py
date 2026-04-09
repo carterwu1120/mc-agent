@@ -285,9 +285,13 @@ class PlanExecutor:
     def is_in_stuck_recovery(self) -> bool:
         return self._in_stuck_recovery
 
-    def abort(self) -> None:
+    def abort(self, preserve_task: bool = False, reason: str = "aborted") -> None:
         if self._running:
-            task_memory.mark_step_failed(self._current_step_index, "aborted")
+            if preserve_task:
+                task_memory.interrupt(reason)
+            else:
+                task_memory.mark_step_failed(self._current_step_index, "aborted")
+                task_memory.interrupt(reason)
         self._run_id += 1  # invalidate any running execute() coroutine
         self._running = False
         self._current_command = None

@@ -434,16 +434,32 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         if _is_stale_response(event_type, state):
             print(f"[Agent] 忽略過期的 {event_type} 回應")
             return
+
+        def _normalize_temporary_inventory_plan(commands: list, preserve_task: bool) -> tuple[list, bool]:
+            if event_type != "inventory_full":
+                return commands, preserve_task
+            if not executor.is_running():
+                return commands, preserve_task
+            normalized = list(commands or [])
+            if "resumetask" not in normalized:
+                normalized.append("resumetask")
+            return normalized, True
+
         # Plan response: execute commands sequentially
         if isinstance(result, dict) and result.get('action') == 'plan':
             commands = result.get('commands', [])
             goal = result.get('goal', '')
             resume_task = bool(result.get('resume_task'))
             preserve_task = bool(result.get('preserve_task'))
+            commands, preserve_task = _normalize_temporary_inventory_plan(commands, preserve_task)
             if commands:
                 if executor.is_running():
-                    print('[Agent] 計畫執行中，中止舊計畫')
-                    executor.abort()
+                    if preserve_task:
+                        print('[Agent] 暫停舊計畫，插入臨時 recovery 計畫')
+                        executor.abort(preserve_task=True, reason=event_type)
+                    else:
+                        print('[Agent] 計畫執行中，中止舊計畫')
+                        executor.abort()
                 asyncio.create_task(executor.execute(commands, ws, goal=goal, resume_task=resume_task, preserve_task=preserve_task))
             return
         # Standard response: send immediately
@@ -454,10 +470,15 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 goal = a.get("goal", "")
                 resume_task = bool(a.get("resume_task"))
                 preserve_task = bool(a.get("preserve_task"))
+                commands, preserve_task = _normalize_temporary_inventory_plan(commands, preserve_task)
                 if commands:
                     if executor.is_running():
-                        print('[Agent] 計畫執行中，中止舊計畫')
-                        executor.abort()
+                        if preserve_task:
+                            print('[Agent] 暫停舊計畫，插入臨時 recovery 計畫')
+                            executor.abort(preserve_task=True, reason=event_type)
+                        else:
+                            print('[Agent] 計畫執行中，中止舊計畫')
+                            executor.abort()
                     asyncio.create_task(executor.execute(commands, ws, goal=goal, resume_task=resume_task, preserve_task=preserve_task))
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
