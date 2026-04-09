@@ -20,6 +20,7 @@ from agent.skills import respawn as respawn_skill
 from agent.skills import tool_durability as tool_durability_skill
 from agent.executor import PlanExecutor
 from agent import task_memory
+from agent import exploration_memory
 
 load_dotenv()
 init_logger("brain")
@@ -33,10 +34,29 @@ llm: LLMClient = GeminiClient()
 
 executor = PlanExecutor()
 
+def _record_to_exploration_memory(state: dict) -> None:
+    """activity_done 時把位置記錄到 spatial memory。"""
+    if state.get('type') != 'activity_done':
+        return
+    try:
+        goal_target = state.get('goal_target')
+        mined_pos   = state.get('mined_pos')
+        mined_count = state.get('mined_count', 0)
+        chop_pos    = state.get('chop_pos')
+        hunt_pos    = state.get('hunt_pos')
+
+        if goal_target and goal_target != 'general' and mined_pos:
+            exploration_memory.record_ore(goal_target, mined_pos, int(mined_count or 0))
+        if chop_pos:
+            exploration_memory.record_forest(chop_pos)
+        if hunt_pos:
+            exploration_memory.record_animal_area(hunt_pos)
+    except Exception as e:
+        print(f"[ExplMem] 記錄失敗: {e}")
+
+
 async def _on_done(_state: dict, _llm: LLMClient):
     if executor.is_running() and executor.is_in_stuck_recovery():
-        # Use activity-aware check: don't mark step done for recovery actions
-        # (e.g. surface completing during a chop step)
         executor.signal_done_after_stuck(_state)
     else:
         executor.signal_done(_state)
@@ -46,6 +66,7 @@ async def _on_done(_state: dict, _llm: LLMClient):
         task = task_memory.load()
         if task and task.get('status') == 'running':
             task_memory.done()
+    _record_to_exploration_memory(_state)
     return None
 
 

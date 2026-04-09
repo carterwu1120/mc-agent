@@ -3,9 +3,10 @@ import re
 from agent.brain import LLMClient
 from agent.skills.state_summary import summary_json
 from agent.skills.commands_ref import command_list
-
-_SELF_TASK_COMMANDS = command_list(["getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "idle"])
 from agent import task_memory
+from agent import exploration_memory
+
+_SELF_TASK_COMMANDS = command_list(["getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "tp", "idle"])
 
 SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手。
 機器人目前沒有玩家直接指定的新任務，請根據它自己的狀態，決定下一個最合理的生存/補給任務。
@@ -15,7 +16,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 {{"command":"idle","text":"..."}}
 
 或 plan（步驟數根據需求決定，不設上限）：
-{{"action":"plan","commands":["mine iron 16","smelt iron 16","equip"],"goal":"補充鐵製工具","text":"..."}}
+{{"action":"plan","commands":["tp 376 -55 -1078","mine diamond 10","equip"],"goal":"補充鑽石工具","text":"..."}}
 
 【可用指令】
 {_SELF_TASK_COMMANDS}
@@ -35,13 +36,20 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 - 缺木材（logs < 16）→ chop logs 32
 - 有大量原礦未冶煉（raw_iron > 16）→ smelt iron <count>
 
+【善用已知資源位置】
+若 prompt 中有「已知資源位置」段落，代表 bot 過去找到過這些資源：
+- 需要挖礦時：優先 tp 到已知礦物位置，再執行 mine，而不是隨機 explore
+- 需要砍樹時：優先 tp 到已知森林位置
+- 需要補食物時：若有已知動物區域，可加 tp 再 hunt/getfood
+- tp 格式：tp <x> <y> <z>（整數座標）
+
 【禁止】
 - 不要輸出 chat、follow、withdraw、combat、fish
 - 不要規劃沒有明確缺口的步驟（背包夠用就 idle）
 - 不要假設缺少實際上已有的物品（先看 inventory）
 """
 
-ALLOWED_COMMANDS = {"getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "idle"}
+ALLOWED_COMMANDS = {"getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "tp", "idle"}
 
 
 def _extract_first_json_object(text: str) -> dict:
@@ -138,9 +146,13 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             return {"action": "plan", "commands": remaining, "goal": task["goal"], "resume_task": True}
 
 
+    mem_summary = exploration_memory.summary_for_prompt()
+    mem_section = f"\n【已知資源位置（探索記憶）】\n{mem_summary}\n" if mem_summary else ""
+
     prompt = (
         "請根據以下機器人狀態摘要，決定下一個自主任務。\n\n"
         f"{summary_json(state)}"
+        f"{mem_section}"
     )
 
     response = None

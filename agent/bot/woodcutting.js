@@ -123,13 +123,13 @@ async function _loop(bot, goal = {}) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Wood] 達到時間目標 ${goal.duration}s，停止`)
             isChopping = false
-            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
+            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
             break
         }
         if (goal.logs && _logsCollected >= goal.logs) {
             console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
             isChopping = false
-            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
+            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
             break
         }
         // 如果在地底或水中，先浮出地表再找樹
@@ -269,7 +269,7 @@ async function _loop(bot, goal = {}) {
                     console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
                     goalReached = true
                     isChopping = false
-                    bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached' })
+                    bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
                     break
                 }
             } catch (e) {
