@@ -13,6 +13,119 @@ from agent.skills.stuck import smelting as smelting_stuck
 
 ALLOWED_COMMANDS = decision_utils.ALLOWED_ACTIVITY_STUCK_COMMANDS
 
+# ── Rule table: (child_activity, parent_activity) pairs where skip is forbidden ──
+# Skipping the child would make the parent's goal impossible to achieve.
+# Add pairs here when production logs reveal a skip actually broke a task.
+_CRITICAL_DEPENDENCY_PAIRS: frozenset[tuple[str, str]] = frozenset()
+
+
+def _compute_is_critical_subtask(activity: str, state: dict) -> bool:
+    """True if skipping this activity would break the parent activity's goal."""
+    stack = state.get("stack") or []
+    parent_activities = [f.get("activity") for f in stack[:-1]]
+    return any((activity, p) in _CRITICAL_DEPENDENCY_PAIRS for p in parent_activities)
+
+
+def _enforce_pending_steps(decision: dict, plan_context: dict | None) -> dict:
+    """Ensure replan commands include pending_steps from plan_context.
+    If the LLM omitted them, append them automatically."""
+    if not plan_context:
+        return decision
+    pending_steps = plan_context.get("pending_steps") or []
+    if not pending_steps:
+        return decision
+    commands = list(decision.get("commands") or [])
+    # Already ends with pending_steps — nothing to do
+    if len(commands) >= len(pending_steps) and commands[-len(pending_steps):] == pending_steps:
+        return decision
+    # Strip any trailing overlap (partial suffix already included)
+    for overlap in range(min(len(commands), len(pending_steps)), 0, -1):
+        if commands[-overlap:] == pending_steps[:overlap]:
+            commands = commands + pending_steps[overlap:]
+            print(f"[Stuck/Rule] replan 部分包含 pending_steps，補上剩餘 {pending_steps[overlap:]}")
+            return {**decision, "commands": commands}
+    print(f"[Stuck/Rule] replan 缺少 pending_steps，自動補上: {pending_steps}")
+    return {**decision, "commands": commands + pending_steps}
+
+
+def _build_skip_blocked_response(
+    activity: str, state: dict, parent: str, parent_frame: dict | None
+) -> dict:
+    """Build the blocked-skip response for a specific (activity, parent) pair."""
+    parent_goal = (parent_frame or {}).get("goal") or {}
+    if activity == "smelting":
+        target = parent_goal.get("target", "diamond")
+        count = parent_goal.get("count", 10)
+        smelt_item = state.get("smelt_item") or state.get("item") or "iron_ore"
+        smelt_count = state.get("smelt_count") or state.get("count") or 3
+        return {
+            "reason": f"smelting 是 {parent} 的必要前置步驟，不能 skip",
+            "fallback": {
+                "action": "replan",
+                "commands": [f"smelt {smelt_item} {smelt_count}", f"mine {target} {count}"],
+                "text": "冶煉是採礦的必要前置，不能跳過，改為重試",
+            },
+        }
+    # Generic fallback for other pairs: replan back to parent goal
+    target = parent_goal.get("target", "")
+    count = parent_goal.get("count", "")
+    fallback_cmd = f"{parent} {target} {count}".strip()
+    return {
+        "reason": f"{activity} 是 {parent} 的必要前置步驟，不能 skip",
+        "fallback": {
+            "action": "replan",
+            "commands": [fallback_cmd] if fallback_cmd != parent else [],
+            "text": f"不能跳過 {activity}，改為重試 {parent}",
+        },
+    }
+
+
+def _block_invalid_skip(activity: str, state: dict) -> dict | None:
+    """Block skip when activity is a necessary sub-task that cannot be safely skipped.
+    Driven by _CRITICAL_DEPENDENCY_PAIRS — add new pairs there to extend coverage.
+    Returns None if skip is allowed, or {'reason': ..., 'fallback': decision} if blocked."""
+    stack = state.get("stack") or []
+    for parent_frame in reversed(stack[:-1]):
+        parent = parent_frame.get("activity")
+        if parent and (activity, parent) in _CRITICAL_DEPENDENCY_PAIRS:
+            return _build_skip_blocked_response(activity, state, parent, parent_frame)
+    return None
+
+
+def _filter_done_steps_from_replan(decision: dict, plan_context: dict | None) -> dict:
+    """Remove leading replan commands that duplicate already-completed steps.
+    LLMs sometimes regenerate the full plan from scratch, including done steps."""
+    done_steps = list((plan_context or {}).get("done_steps") or [])
+    if not done_steps:
+        return decision
+    commands = list(decision.get("commands") or [])
+    done_set = set(done_steps)
+    i = 0
+    while i < len(commands) and commands[i] in done_set:
+        i += 1
+    if i:
+        print(f"[Stuck/Rule] replan 開頭重複 {i} 個已完成步驟，已移除: {commands[:i]}")
+        return {**decision, "commands": commands[i:]}
+    return decision
+
+
+def _deduplicate_adjacent_cmds(decision: dict) -> dict:
+    """Remove consecutive identical commands (e.g. ['equip', 'equip', 'mine ...'])."""
+    commands = list(decision.get("commands") or [])
+    deduped = [cmd for i, cmd in enumerate(commands) if i == 0 or cmd != commands[i - 1]]
+    if len(deduped) != len(commands):
+        print(f"[Stuck/Rule] replan 移除 {len(commands) - len(deduped)} 個連續重複指令")
+        return {**decision, "commands": deduped}
+    return decision
+
+
+def _apply_replan_pipeline(decision: dict, plan_context: dict | None) -> dict:
+    """Apply all post-LLM replan validation rules in order."""
+    decision = _enforce_pending_steps(decision, plan_context)
+    decision = _filter_done_steps_from_replan(decision, plan_context)
+    decision = _deduplicate_adjacent_cmds(decision)
+    return decision
+
 
 def _should_prefer_replan(activity: str, reason: str, plan_context: dict | None) -> bool:
     if activity == "mining":
@@ -56,6 +169,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     detail = state.get("detail")
     missing_count = state.get("missing_count")
     plan_context = state.get("plan_context")
+
+    # ── Layer 1: Pre-LLM state enrichment ─────────────────────────────────────
+    is_critical = _compute_is_critical_subtask(activity, state)
+    if is_critical:
+        state = {**state, "is_critical_subtask": True}
 
     if _looks_like_getfood_subflow(activity, reason, plan_context):
         shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
@@ -183,6 +301,8 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                 if not repaired:
                     return llm_utils.replan_fallback("我剛剛重新規劃失敗，先跳過這一步繼續。")
                 decision = repaired
+            # ── Deterministic rules pipeline ───────────────────────────────
+            decision = _apply_replan_pipeline(decision, plan_context)
             result = []
             if decision.get("text"):
                 result.append({"command": "chat", "text": decision["text"]})
@@ -190,6 +310,18 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             return result
 
         if decision.get("action") == "skip":
+            # ── Deterministic rule: 不可在必要的子任務 skip ─────────────────
+            blocked = _block_invalid_skip(activity, state)
+            if blocked:
+                print(f"[Skill/activity_stuck] skip 被系統層阻擋: {blocked['reason']}")
+                decision = blocked["fallback"]
+                if decision.get("action") == "replan":
+                    decision = _apply_replan_pipeline(decision, plan_context)
+                    result = []
+                    if decision.get("text"):
+                        result.append({"command": "chat", "text": decision["text"]})
+                    result.append({"action": "replan", "commands": decision["commands"]})
+                    return result
             result = []
             if decision.get("text"):
                 result.append({"command": "chat", "text": decision["text"]})

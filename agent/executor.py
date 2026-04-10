@@ -7,6 +7,79 @@ from agent.plan_utils import normalize_commands
 HEARTBEAT_TIMEOUT = 30.0   # seconds without a tick before declaring JS unresponsive
 POLL_INTERVAL    = 10.0   # how often to check heartbeat while waiting
 
+
+def _inventory_counts(inventory: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in (inventory or []):
+        name = item.get("name")
+        if name:
+            counts[name] = counts.get(name, 0) + int(item.get("count", 0))
+    return counts
+
+
+def _verify_step(cmd_str: str, before: dict | None, after: dict | None) -> str | None:
+    """
+    Compare before/after state for a completed command.
+    Returns a warning string if something looks wrong, else None.
+    Soft-check only — never blocks execution.
+    """
+    if not before or not after:
+        return None
+
+    parts = cmd_str.split()
+    verb = parts[0] if parts else ""
+
+    if verb == "equip":
+        before_eq = before.get("equipment") or {}
+        after_eq  = after.get("equipment") or {}
+        if before_eq == after_eq:
+            return "equip 後裝備狀態未改變，可能裝備失敗"
+
+    elif verb == "smelt" and len(parts) >= 3:
+        target_raw = parts[1]   # e.g. "iron" → "iron_ingot"
+        try:
+            expected_count = int(parts[2])
+        except ValueError:
+            return None
+        _SMELT_OUTPUT = {
+            "iron": "iron_ingot", "raw_iron": "iron_ingot",
+            "gold": "gold_ingot", "raw_gold": "gold_ingot",
+            "copper": "copper_ingot", "raw_copper": "copper_ingot",
+            "sand": "glass", "cobblestone": "stone",
+        }
+        output_item = _SMELT_OUTPUT.get(target_raw, target_raw)
+        before_counts = _inventory_counts(before.get("inventory", []))
+        after_counts  = _inventory_counts(after.get("inventory", []))
+        gained = after_counts.get(output_item, 0) - before_counts.get(output_item, 0)
+        if gained <= 0:
+            return f"smelt 後 {output_item} 數量未增加（預期 +{expected_count}，實際 +{gained}）"
+        if gained < expected_count:
+            return f"smelt 只完成部分：{output_item} +{gained}（目標 {expected_count}）"
+
+    elif verb == "mine" and len(parts) >= 2:
+        target = parts[1]
+        # Map ore name to item name (simplified)
+        _ORE_TO_ITEM = {
+            "diamond": "diamond", "iron": "raw_iron", "gold": "raw_gold",
+            "coal": "coal", "copper": "raw_copper", "emerald": "emerald",
+            "stone": "cobblestone", "gravel": "gravel", "sand": "sand",
+        }
+        item_name = _ORE_TO_ITEM.get(target, target)
+        before_counts = _inventory_counts(before.get("inventory", []))
+        after_counts  = _inventory_counts(after.get("inventory", []))
+        gained = after_counts.get(item_name, 0) - before_counts.get(item_name, 0)
+        if gained <= 0:
+            return f"mine 後 {item_name} 數量未增加，可能採礦失敗或掉落物未撿"
+
+    elif verb == "deposit":
+        before_slots = (before.get("inventory_slots") or {}).get("used", 0)
+        after_slots  = (after.get("inventory_slots") or {}).get("used", 0)
+        if after_slots >= before_slots:
+            return f"deposit 後背包槽位未減少（{before_slots} → {after_slots}）"
+
+    return None
+
+
 class PlanExecutor:
     def __init__(self):
         self._running = False
@@ -22,10 +95,17 @@ class PlanExecutor:
         self._last_heartbeat: float = 0.0
         self._run_id: int = 0
         self._context: dict = {}  # runtime values substituted into later commands
+        self._latest_state: dict = {}   # updated every tick from agent.py
+        self._before_state: dict = {}   # snapshot before each command
+        self._after_state: dict = {}    # snapshot from action_done / activity_done
 
     def heartbeat(self) -> None:
         """Called on every tick event to confirm JS is still alive."""
         self._last_heartbeat = asyncio.get_event_loop().time()
+
+    def update_state(self, state: dict) -> None:
+        """Called from agent.py on every state update so executor has current world state."""
+        self._latest_state = state
 
     async def execute(self, commands: list, ws, goal: str = "", resume_task: bool = False, preserve_task: bool = False) -> None:
         self._run_id += 1
@@ -73,6 +153,8 @@ class PlanExecutor:
 
             msg = _parse(cmd_str)
             self._current_command = msg
+            self._before_state = dict(self._latest_state)
+            self._after_state = {}
             print(f'[Executor] 執行步驟 {i}: {cmd_str}')
             await ws.send(json.dumps(msg))
 
@@ -158,12 +240,18 @@ class PlanExecutor:
                     # resumed it.
                     if not preserve_task:
                         task_memory.mark_step_done(i)
-                    self._step_results.append({"cmd": cmd_str, "status": "done"})
+                    warning = _verify_step(cmd_str, self._before_state, self._after_state)
+                    if warning:
+                        print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
+                    self._step_results.append({"cmd": cmd_str, "status": "done", "warning": warning})
                 else:
                     # Normal completion
                     if not preserve_task:
                         task_memory.mark_step_done(i)
-                    self._step_results.append({"cmd": cmd_str, "status": "done"})
+                    warning = _verify_step(cmd_str, self._before_state, self._after_state)
+                    if warning:
+                        print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
+                    self._step_results.append({"cmd": cmd_str, "status": "done", "warning": warning})
 
             except asyncio.CancelledError:
                 if not preserve_task:
@@ -193,6 +281,7 @@ class PlanExecutor:
         if state:
             if 'new_chest_id' in state:
                 self._context['new_chest_id'] = str(state['new_chest_id'])
+            self._after_state = state
 
         event_type = (state or {}).get('type')
         command = self._current_command.get('command')

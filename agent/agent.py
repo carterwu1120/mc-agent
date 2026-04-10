@@ -675,6 +675,7 @@ async def run():
                     state = json.loads(raw)
                     _latest_state.clear()
                     _latest_state.update(state)
+                    executor.update_state(state)
                     _sync_task_context(state)
                     event_type = state.get("type")
                     if event_type == "tick":

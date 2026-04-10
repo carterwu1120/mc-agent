@@ -47,6 +47,53 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
 ---
 
+## activity_stuck — Deterministic Rules System
+
+`activity_stuck.py` 實作四層規則系統，確保規則在系統層強制執行，不依賴 LLM 記憶。
+
+### 架構
+
+```
+activity_stuck event
+  │
+  ▼
+[Layer 1] Pre-LLM 狀態豐富化
+  _compute_is_critical_subtask() → 注入 state["is_critical_subtask"]
+  prompt_builder 若 is_critical_subtask=True，在 prompt 加 ⚠ 警告
+  │
+  ▼
+  Deterministic shortcuts（各 stuck/ 子模組）
+  │
+  ▼
+  LLM call
+  │
+  ▼
+[Layer 2] Post-LLM Skip 驗證
+  _block_invalid_skip() → 由 _CRITICAL_DEPENDENCY_PAIRS 驅動
+  若 skip 被阻擋，轉為 replan 並走 Layer 3 pipeline
+  │
+  ▼
+[Layer 3] Post-LLM Replan Pipeline（_apply_replan_pipeline）
+  _enforce_pending_steps()          — 自動補上漏掉的 pending_steps
+  _filter_done_steps_from_replan()  — 移除 replan 開頭已完成的步驟
+  _deduplicate_adjacent_cmds()      — 移除連續重複指令（如 equip equip）
+```
+
+### 擴充規則
+
+新增 skip 禁止規則只需在 `_CRITICAL_DEPENDENCY_PAIRS` 加一行：
+
+```python
+_CRITICAL_DEPENDENCY_PAIRS: frozenset[tuple[str, str]] = frozenset({
+    # ("smelting", "mining"),  # 範例格式
+    # 從 production log 確認有強依賴才加，不要猜
+})
+```
+
+**重要**：這個 pair 的條件是 child activity 在 LIFO `stack` 裡真的是 parent 的子任務（JS push 出來的）。若 smelting 和 mining 只是 executor plan 裡的平行步驟（siblings），這個 rule 不會觸發——需改用 `plan_context.pending_steps` 判斷。
+
+---
+
 ## LLM Response Formats
 
 **Single command:**

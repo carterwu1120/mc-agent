@@ -140,6 +140,11 @@ def build_activity_prompt(
             parts.append(f"{name}（goal={goal_str}）")
         parent_section = f"\n【上層活動（觸發當前 {activity} 的背景任務）】\n" + " → ".join(parts) + "\n"
 
+    critical_warning = (
+        "\n⚠ 注意：當前活動是上層任務的必要前置步驟，不可 skip。\n"
+        if state.get("is_critical_subtask") else ""
+    )
+
     prompt = (
         f"機器人在執行「{activity}」時中斷（原因：{reason_desc}）\n"
         f"當前狀態：位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
@@ -151,6 +156,7 @@ def build_activity_prompt(
         f"{pending_note}"
         f"{plan_section}\n"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
+        f"{critical_warning}"
         f"請決定機器人接下來要做什麼。"
     )
     return prompt, pending_steps
