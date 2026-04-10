@@ -403,8 +403,18 @@ async function _loop(bot, goal = {}) {
                 } else {
                     pollTries++
                     console.log(`[Smelt] 燒製中... (${pollTries * 10}s)`)
+                    const hasInput = !!furnace.slots[0]
+                    const hasFuelSlot = !!furnace.slots[1]
+                    const isBurning = !!furnace.fuel
+
+                    // 熔爐仍有材料且尚可繼續燃燒時，回報 heartbeat，避免 watchdog
+                    // 將正常等待下一個成品的過程誤判成 stuck。
+                    if (hasInput && (isBurning || hasFuelSlot)) {
+                        activityStack.touch('smelting', isBurning ? 'burning' : 'waiting_fuel_consumption')
+                    }
+
                     // 若爐子既沒有輸入槽材料也沒有燃料，代表已燒完或燃料耗盡
-                    if (!furnace.slots[0] && !furnace.slots[1]) {
+                    if (!hasInput && !hasFuelSlot && !isBurning) {
                         console.log('[Smelt] 爐膛已空（無輸入、無燃料），結束本批')
                         _inputPending = false
                         furnace.close()
