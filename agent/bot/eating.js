@@ -4,6 +4,12 @@ const { getActivity } = require('./activity')
 const FOOD_THRESHOLD = 18     // 食物低於此值就吃東西
 const FOOD_LOW_THRESHOLD = 10 // 食物低於此值且無食物時發送 food_low 事件
 const FOOD_LOW_COOLDOWN = 30000
+const EAT_DEFER_ACTIVITIES = new Set([
+    'hunting',
+    'combat',
+    'mining',
+    'chopping',
+])
 
 // 可以放進熔爐的生食（需要先燒熟）
 const RAW_FOOD_ITEMS = new Set([
@@ -56,6 +62,13 @@ async function _tryEat(bot) {
     if (_isEating) return
     if (Date.now() - _lastEatTime < EAT_COOLDOWN) return
     if (bot.food >= 20) return
+
+    const activity = getActivity()
+    // 在戰鬥、狩獵、挖礦等高度依賴 path goal 的活動中，非緊急先不要插隊吃，
+    // 否則 setGoal(null) 會一直打斷主行為。
+    if (activity !== 'idle' && EAT_DEFER_ACTIVITIES.has(activity) && bot.food > FOOD_LOW_THRESHOLD) {
+        return
+    }
 
     const food = bot.inventory.items().find(i => FOOD_ITEMS.has(i.name))
     if (!food) {

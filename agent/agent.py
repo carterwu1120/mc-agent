@@ -307,6 +307,37 @@ def _matching_work_frame(state: dict, expected_activity: str | None) -> dict | N
     return None
 
 
+def _format_runtime_command(frame: dict | None) -> str | None:
+    if not frame:
+        return None
+    activity = frame.get("activity")
+    goal = frame.get("goal") or {}
+
+    if activity == "hunting":
+        return f"hunt count {goal.get('count', 0)}"
+    if activity == "getfood":
+        return f"getfood count {goal.get('count', 0)}"
+    if activity == "smelting":
+        return f"smelt {goal.get('target', 'unknown')} {goal.get('count', 0)}"
+    if activity == "mining":
+        return f"mine {goal.get('target', 'unknown')} {goal.get('count', 0)}"
+    if activity == "explore":
+        return f"explore {goal.get('target', 'general')}"
+    if activity == "surface":
+        return "surface"
+    if activity == "combat":
+        return "combat"
+    if activity == "chopping":
+        return f"chop logs {goal.get('logs', 0)}"
+    if activity == "fishing":
+        return f"fish catches {goal.get('catches', 0)}"
+    return activity
+
+
+def _stack_activity_names(state: dict) -> list[str]:
+    return [frame.get("activity") for frame in (state.get("stack") or []) if frame.get("activity")]
+
+
 def _sync_task_context(state: dict) -> None:
     task = task_memory.load()
     if not task or task.get("status") not in ("running", "interrupted"):
@@ -319,29 +350,68 @@ def _sync_task_context(state: dict) -> None:
 
     current_cmd = steps[idx].get("cmd", "")
     expected_activity = _EXPECTED_ACTIVITY.get(_command_name(current_cmd))
+    stack = state.get("stack") or []
+    top_frame = stack[-1] if stack else None
     frame = _matching_work_frame(state, expected_activity)
-    if not frame:
-        return
-
-    work_pos = _clean_pos(frame.get("startPos")) or _clean_pos(state.get("pos"))
     current_pos = _clean_pos(state.get("pos"))
-    patch = {
-        "currentStepCmd": current_cmd,
-        "expectedActivity": expected_activity,
-        "stackActivity": frame.get("activity"),
-        "workPos": work_pos,
+    active_activity = (top_frame or {}).get("activity") or state.get("activity")
+    active_goal = (top_frame or {}).get("goal") or {}
+    active_progress = (top_frame or {}).get("progress") or {}
+    active_work_pos = _clean_pos((top_frame or {}).get("startPos")) or current_pos
+    active_command = _format_runtime_command(top_frame)
+    stack_names = _stack_activity_names(state)
+
+    task_memory.update_runtime({
+        "activeActivity": active_activity,
+        "activeCommand": active_command,
+        "activityStack": stack_names,
+        "activeGoal": active_goal,
+        "activeProgress": active_progress,
+        "activeWorkPos": active_work_pos,
         "currentPos": current_pos,
-        "goal": frame.get("goal") or {},
-        "progress": frame.get("progress") or {},
-    }
-    task_memory.update_context({
+    })
+
+    context_patch = {
         "currentStep": idx,
         "currentStepCmd": current_cmd,
         "expectedActivity": expected_activity,
-        "workPos": work_pos,
+        "activeActivity": active_activity,
+        "activeCommand": active_command,
+        "activityStack": stack_names,
         "currentPos": current_pos,
-    })
-    task_memory.update_step_context(idx, patch)
+    }
+
+    if frame:
+        work_pos = _clean_pos(frame.get("startPos")) or current_pos
+        context_patch["workPos"] = work_pos
+        step_patch = {
+            "currentStepCmd": current_cmd,
+            "expectedActivity": expected_activity,
+            "stackActivity": frame.get("activity"),
+            "workPos": work_pos,
+            "currentPos": current_pos,
+            "goal": frame.get("goal") or {},
+            "progress": frame.get("progress") or {},
+            "activeActivity": active_activity,
+            "activeCommand": active_command,
+            "activityStack": stack_names,
+            "activeGoal": active_goal,
+            "activeProgress": active_progress,
+        }
+    else:
+        step_patch = {
+            "currentStepCmd": current_cmd,
+            "expectedActivity": expected_activity,
+            "currentPos": current_pos,
+            "activeActivity": active_activity,
+            "activeCommand": active_command,
+            "activityStack": stack_names,
+            "activeGoal": active_goal,
+            "activeProgress": active_progress,
+        }
+
+    task_memory.update_context(context_patch)
+    task_memory.update_step_context(idx, step_patch)
 
 
 

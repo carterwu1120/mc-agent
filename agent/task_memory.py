@@ -16,6 +16,7 @@ def save(goal: str, commands: list) -> dict:
         "steps": build_step_records(commands),
         "currentStep": 0,
         "context": {},
+        "runtime": {},
         "status": "running",
         "interruptedBy": None,
         "createdAt": datetime.utcnow().isoformat(),
@@ -80,6 +81,22 @@ def update_step_context(step: int, patch: dict) -> None:
     if not changed:
         return
     step_obj["context"] = ctx
+    _write(t)
+
+
+def update_runtime(patch: dict) -> None:
+    t = _load_raw()
+    if t is None:
+        return
+    runtime = dict(t.get("runtime") or {})
+    changed = False
+    for key, value in (patch or {}).items():
+        if runtime.get(key) != value:
+            runtime[key] = value
+            changed = True
+    if not changed:
+        return
+    t["runtime"] = runtime
     _write(t)
 
 
