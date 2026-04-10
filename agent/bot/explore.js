@@ -11,6 +11,11 @@ const NON_SOLID = new Set([
 let isExploring = false
 let _isPaused = false
 let _runToken = 0
+const RECENT_EXPLORE_TARGETS = []
+const RECENT_EXPLORE_LIMIT = 16
+const FOOD_ANIMALS = new Set([
+    'cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom', 'mushroom_cow',
+])
 
 function _worldMinY(bot) {
     return bot.game?.minY ?? -64
@@ -47,8 +52,22 @@ function _isSurfaceLike(bot, pos) {
     return sky >= 14 && _isPassable(head?.name) && _isPassable(above?.name)
 }
 
+function _isStandable(bot, pos) {
+    const feet = pos ?? bot.entity.position.floored()
+    const head = bot.blockAt(feet.offset(0, 1, 0))
+    const above = bot.blockAt(feet.offset(0, 2, 0))
+    const ground = bot.blockAt(feet.offset(0, -1, 0))
+    return _isPassable(head?.name) && _isPassable(above?.name) && _isSolidGround(ground?.name)
+}
+
 function _candidateScore(bot, pos) {
     return bot.entity.position.distanceTo(pos.offset(0.5, 0, 0.5))
+}
+
+function _distanceXZ(a, b) {
+    const dx = a.x - b.x
+    const dz = a.z - b.z
+    return Math.sqrt((dx * dx) + (dz * dz))
 }
 
 async function _sleep(ms) {
@@ -69,7 +88,7 @@ function _countNearbyLogs(bot, pos, radius = 24) {
     }
 }
 
-function _findSurfaceSpotNear(bot, center, searchRadius = 8) {
+function _findSurfaceSpotNear(bot, center, searchRadius = 8, requireSky = true) {
     if (bot.game?.dimension && bot.game.dimension !== 'overworld') {
         return null
     }
@@ -93,7 +112,7 @@ function _findSurfaceSpotNear(bot, center, searchRadius = 8) {
                     if (!feet || !head || !ground) continue
                     if (!_isPassable(feet.name) || !_isPassable(head.name)) continue
                     if (!_isSolidGround(ground.name)) continue
-                    if (_skyLightAt(bot, feet.position) < 14) continue
+                    if (requireSky && _skyLightAt(bot, feet.position) < 14) continue
 
                     candidates.push({
                         pos: feet.position.clone(),
@@ -108,6 +127,38 @@ function _findSurfaceSpotNear(bot, center, searchRadius = 8) {
 
     candidates.sort((a, b) => a.score - b.score)
     return candidates[0]?.pos ?? null
+}
+
+function _rememberExploreTarget(type, pos, reason = 'visited') {
+    if (!pos) return
+    RECENT_EXPLORE_TARGETS.push({
+        type,
+        pos: pos.clone ? pos.clone() : pos,
+        reason,
+        at: Date.now(),
+    })
+    while (RECENT_EXPLORE_TARGETS.length > RECENT_EXPLORE_LIMIT) {
+        RECENT_EXPLORE_TARGETS.shift()
+    }
+}
+
+function _wasRecentlyTried(type, pos, minDistance = 24) {
+    return RECENT_EXPLORE_TARGETS.some(item => {
+        if (!item?.pos) return false
+        if (item.type !== type) return false
+        return _distanceXZ(item.pos, pos) < minDistance
+    })
+}
+
+function _countNearbyFoodAnimals(bot, radius = 32) {
+    const base = bot.entity.position
+    let count = 0
+    for (const entity of Object.values(bot.entities ?? {})) {
+        if (!entity?.position) continue
+        if (!FOOD_ANIMALS.has(entity.name)) continue
+        if (entity.position.distanceTo(base) <= radius) count += 1
+    }
+    return count
 }
 
 function findExploreSpotForTrees(bot, maxRadius = 96, minRadius = 12, treeRadius = 24) {
@@ -128,6 +179,40 @@ function findExploreSpotForTrees(bot, maxRadius = 96, minRadius = 12, treeRadius
         if (!target) continue
         const nearbyLogs = _countNearbyLogs(bot, target, treeRadius)
         if (nearbyLogs > 0) {
+            return target
+        }
+    }
+
+    return null
+}
+
+function findExploreSpotForSurface(bot, maxRadius = 96, minRadius = 20, options = {}) {
+    const base = bot.entity.position.floored()
+    const targetType = options.targetType ?? 'surface'
+    const minRecentDistance = Number.isFinite(options.minRecentDistance)
+        ? options.minRecentDistance
+        : 24
+    const maxYDelta = Number.isFinite(options.maxYDelta)
+        ? options.maxYDelta
+        : null
+    const directions = [
+        [1, 0], [0, 1], [-1, 0], [0, -1],
+        [1, 1], [1, -1], [-1, 1], [-1, -1],
+    ]
+
+    for (let radius = minRadius; radius <= maxRadius; radius += 16) {
+        for (const [dx, dz] of directions) {
+            const scale = Math.max(Math.abs(dx), Math.abs(dz), 1)
+            const center = base.offset(
+                Math.round((dx * radius) / scale),
+                0,
+                Math.round((dz * radius) / scale),
+            )
+            const target = _findSurfaceSpotNear(bot, center, 10, false)
+            if (!target) continue
+            if (target.distanceTo(base) < minRadius) continue
+            if (maxYDelta !== null && Math.abs(target.y - base.y) > maxYDelta) continue
+            if (_wasRecentlyTried(targetType, target, minRecentDistance)) continue
             return target
         }
     }
@@ -182,7 +267,7 @@ function stopExploring(bot) {
 async function _run(bot, goal = {}, token) {
     try {
         const targetType = goal.target ?? 'trees'
-        if (targetType !== 'trees') {
+        if (!['trees', 'surface', 'animals'].includes(targetType)) {
             bridge.sendState(bot, 'activity_stuck', {
                 activity_name: 'explore',
                 reason: 'timeout',
@@ -191,51 +276,97 @@ async function _run(bot, goal = {}, token) {
             return
         }
 
-        const target = findExploreSpotForTrees(
-            bot,
-            Number.isFinite(goal.radius) ? goal.radius : 96,
-            Number.isFinite(goal.minRadius) ? goal.minRadius : 12,
-            Number.isFinite(goal.scanRadius) ? goal.scanRadius : 24,
-        )
+        const radius = Number.isFinite(goal.radius) ? goal.radius : 96
+        const minRadius = Number.isFinite(goal.minRadius)
+            ? goal.minRadius
+            : (targetType === 'trees' ? 12 : 20)
+        const scanRadius = Number.isFinite(goal.scanRadius) ? goal.scanRadius : 24
+        const maxAttempts = Number.isFinite(goal.maxAttempts)
+            ? goal.maxAttempts
+            : (targetType === 'trees' ? 1 : 6)
+        let lastDetail = targetType === 'trees'
+            ? '找不到附近有樹的可站立地表區域'
+            : '找不到可站立的新地表區域'
 
-        if (!target || !isExploring || token !== _runToken) {
-            bridge.sendState(bot, 'activity_stuck', {
-                activity_name: 'explore',
-                reason: 'timeout',
-                detail: '找不到附近有樹的可站立地表區域',
-            })
-            return
-        }
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const target = targetType === 'trees'
+                ? findExploreSpotForTrees(bot, radius, minRadius, scanRadius)
+                : findExploreSpotForSurface(bot, radius, minRadius, {
+                    targetType,
+                    minRecentDistance: targetType === 'animals' ? 32 : 24,
+                    maxYDelta: targetType === 'animals' ? 18 : null,
+                })
 
-        try {
-            bot.pathfinder?.setGoal(null)
-        } catch (_) {}
-        console.log(`[Explore] 傳送到探索點 (${target.x}, ${target.y}, ${target.z})`)
-        noteTeleportLikeAction()
-        bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
-        await _sleep(500)
-        if (token !== _runToken || !isExploring) return
+            if (!target || !isExploring || token !== _runToken) {
+                break
+            }
 
-        const pos = bot.entity.position
-        const arrived = Math.abs(pos.x - target.x) <= 1
-            && Math.abs(pos.y - target.y) <= 1
-            && Math.abs(pos.z - target.z) <= 1
-        const nearbyLogs = _countNearbyLogs(bot, bot.entity.position.floored(), goal.scanRadius ?? 24)
+            try {
+                bot.pathfinder?.setGoal(null)
+            } catch (_) {}
+            console.log(`[Explore] 傳送到探索點 (${target.x}, ${target.y}, ${target.z})`)
+            noteTeleportLikeAction()
+            bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
+            await _sleep(500)
+            if (token !== _runToken || !isExploring) return
 
-        if (arrived && _isSurfaceLike(bot) && nearbyLogs > 0) {
-            console.log(`[Explore] 已找到 trees 區域（附近 ${nearbyLogs} 個 log）`)
-            bridge.sendState(bot, 'activity_done', {
-                activity: 'explore',
-                reason: 'goal_reached',
-                found: targetType,
-            })
-            return
+            const pos = bot.entity.position
+            const arrived = Math.abs(pos.x - target.x) <= 1
+                && Math.abs(pos.y - target.y) <= 1
+                && Math.abs(pos.z - target.z) <= 1
+            const nearbyLogs = targetType === 'trees'
+                ? _countNearbyLogs(bot, bot.entity.position.floored(), scanRadius)
+                : 0
+            const nearbyAnimals = targetType === 'animals'
+                ? _countNearbyFoodAnimals(bot, Math.max(24, scanRadius))
+                : 0
+
+            const reachedGoal = targetType === 'trees'
+                ? (arrived && _isSurfaceLike(bot) && nearbyLogs > 0)
+                : (targetType === 'animals'
+                    ? (arrived && _isStandable(bot) && nearbyAnimals > 0)
+                    : (arrived && _isStandable(bot)))
+
+            if (reachedGoal) {
+                if (targetType === 'trees') {
+                    console.log(`[Explore] 已找到 trees 區域（附近 ${nearbyLogs} 個 log）`)
+                } else if (targetType === 'animals') {
+                    console.log(`[Explore] 已找到 animals 區域（附近 ${nearbyAnimals} 隻可食用動物）`)
+                } else {
+                    console.log(`[Explore] 已找到 ${targetType} 可探索區域`)
+                }
+                _rememberExploreTarget(targetType, target, 'success')
+                bridge.sendState(bot, 'activity_done', {
+                    activity: 'explore',
+                    reason: 'goal_reached',
+                    found: targetType,
+                })
+                return
+            }
+
+            _rememberExploreTarget(
+                targetType,
+                target,
+                targetType === 'animals' ? 'no_animals' : 'failed_validation',
+            )
+
+            lastDetail = targetType === 'trees'
+                ? '已移動到新區域，但附近仍未找到可用樹木'
+                : (targetType === 'animals'
+                    ? `已移動到第 ${attempt} 個外圍區域，但 ${Math.max(24, scanRadius)} 格內仍未發現可食用動物`
+                    : `已移動到第 ${attempt} 個外圍區域，但仍未成功站上新的地表位置`)
+
+            if (attempt < maxAttempts) {
+                console.log(`[Explore] 目前區域未命中 ${targetType}，繼續向外探索（${attempt}/${maxAttempts}）`)
+                await _sleep(200)
+                if (token !== _runToken || !isExploring) return
+            }
         }
 
         bridge.sendState(bot, 'activity_stuck', {
             activity_name: 'explore',
             reason: 'timeout',
-            detail: '已移動到新區域，但附近仍未找到可用樹木',
+            detail: lastDetail,
         })
     } catch (e) {
         if (token !== _runToken || !isExploring) return
@@ -258,4 +389,5 @@ module.exports = {
     startExploring,
     stopExploring,
     findExploreSpotForTrees,
+    findExploreSpotForSurface,
 }

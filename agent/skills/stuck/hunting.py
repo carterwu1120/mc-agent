@@ -6,7 +6,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的狩獵卡住處理助手。
 機器人在狩獵食物時遇到問題，請根據當前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{{"action": "replan", "commands": ["explore trees", "hunt count <n>"], "text": "...理由..."}}
+{{"action": "replan", "commands": ["explore animals", "hunt count <n>"], "text": "...理由..."}}
 {{"action": "replan", "commands": ["fish catches <n>", "getfood count <n>"], "text": "...理由..."}}
 {{"action": "replan", "commands": ["chop logs 2", "hunt count <n>"], "text": "...理由..."}}
 {{"action": "skip", "text": "...理由..."}}
@@ -17,8 +17,9 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的狩獵卡住處理助手。
 
 決策原則：
 - reason 為 no_animals：附近已沒有可食用動物，不能把這次狩獵當成完成
+- 若背包中的生食已達「先烤比較合理」門檻（raw_total >= 8 或 raw_total >= remaining * 0.5），優先改成 getfood count <remaining>，先把現有生食處理掉
 - 若有釣竿可改用 fish catches <remaining>，再接回 getfood 與原計畫
-- 若沒有釣竿，優先 explore trees 換到新的地表區域後，再 hunt count <remaining>
+- 若沒有釣竿，優先 explore animals 換到新的地表區域後，再 hunt count <remaining>
 - 若 reason 為 no_weapon：目前沒有可用武器，而且本地合成流程已失敗，必須重新規劃，不要繼續原地追動物
 - no_weapon 時，請優先根據 prompt 中的 candidate_routes / weapon_blockers / environment_hints 選擇：
   - `skip_hunt_if_food_already_enough`：如果熟食已足夠完成目前目標，直接 skip，不要再 hunt/getfood
@@ -103,6 +104,13 @@ def _drop_leading_getfood_step(pending_steps: list[str], remaining: int) -> list
     return pending_steps
 
 
+def _raw_food_ready_for_cooking(state: dict, remaining: int) -> tuple[bool, int, int]:
+    summary = summarize_state(state)
+    raw_total = int((((summary.get("resources") or {}).get("food") or {}).get("raw_total", 0)) or 0)
+    threshold = min(8, max(1, (int(remaining) + 1) // 2))
+    return raw_total >= threshold, raw_total, threshold
+
+
 def build_replan_no_animals(state: dict, plan_context: dict) -> list[dict] | None:
     current_cmd = (plan_context.get("current_cmd") or "").strip()
     if not current_cmd.startswith("hunt "):
@@ -119,13 +127,25 @@ def build_replan_no_animals(state: dict, plan_context: dict) -> list[dict] | Non
     pending_steps = plan_context.get("pending_steps", [])
     inventory = state.get("inventory") or []
     has_fishing_rod = any((item.get("name") == "fishing_rod") for item in inventory)
+    should_cook_now, raw_total, threshold = _raw_food_ready_for_cooking(state, remaining)
+
+    if should_cook_now:
+        commands = [f"getfood count {remaining}", *_drop_leading_getfood_step(pending_steps, remaining)]
+        text = (
+            f"附近暫時沒有動物，但背包已有 {raw_total} 份生食，已達先烹煮門檻 {threshold}，"
+            f"先處理現有食材再決定是否繼續補獵。"
+        )
+        return [
+            {"command": "chat", "text": text},
+            {"action": "replan", "commands": commands},
+        ]
 
     if has_fishing_rod:
         commands = [f"fish catches {remaining}", f"getfood count {remaining}", *pending_steps]
         text = f"附近已沒有動物可獵，改用釣魚補足剩餘 {remaining} 份食物再接回原計畫。"
     else:
-        commands = ["explore trees", f"hunt count {remaining}", *pending_steps]
-        text = f"附近已沒有動物可獵，先換到新的地表區域，再補足剩餘 {remaining} 份生食。"
+        commands = ["explore animals", f"hunt count {remaining}", *pending_steps]
+        text = f"附近已沒有動物可獵，先換到新的地表區域尋找動物，再補足剩餘 {remaining} 份生食。"
 
     return [
         {"command": "chat", "text": text},

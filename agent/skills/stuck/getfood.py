@@ -87,8 +87,8 @@ def build_replan_after_failed_hunt(state: dict, plan_context: dict) -> list[dict
         commands = [f"fish catches {remaining}", f"getfood count {remaining}", *pending_steps]
         text = f"剛才狩獵區域已經沒有動物，改用釣魚補足剩餘 {remaining} 份食物再接回原計畫。"
     else:
-        commands = ["explore trees", f"hunt count {remaining}", f"getfood count {remaining}", *pending_steps]
-        text = f"剛才狩獵區域已經沒有動物，先換到新的地表區域，再補足剩餘 {remaining} 份食物。"
+        commands = ["explore animals", f"hunt count {remaining}", f"getfood count {remaining}", *pending_steps]
+        text = f"剛才狩獵區域已經沒有動物，先換到新的地表區域尋找動物，再補足剩餘 {remaining} 份食物。"
 
     return [
         {"command": "chat", "text": text},

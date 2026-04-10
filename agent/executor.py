@@ -118,10 +118,17 @@ class PlanExecutor:
                 if self._run_id != my_run_id:
                     return
 
-                if self._stuck_event.is_set() and not self._done.is_set():
-                    # Paused for stuck handling — wait for resume, replan, or skip
+                if self._stuck_event.is_set():
+                    # Once a step enters stuck recovery, the executor must not
+                    # fall through to the old "normal completion" path. It has
+                    # to wait for an explicit resume / skip / replan signal and
+                    # then apply that control flow before touching the next step.
                     print(f'[Executor] 步驟 {i} 因 activity_stuck 暫停，等待 LLM 決策...')
                     await self._done.wait()
+
+                    # abort() increments _run_id while unblocking _done
+                    if self._run_id != my_run_id:
+                        return
 
                     if self._skip_event.is_set():
                         # LLM decided this step is unrecoverable — skip it
@@ -146,7 +153,9 @@ class PlanExecutor:
                         self._current_command = None
                         continue  # don't increment i — commands[i] is now the first new step
 
-                    # Single-step recovery completed — continue plan
+                    # Single-step recovery completed — keep the current plan and
+                    # mark this step done only after the recovery explicitly
+                    # resumed it.
                     if not preserve_task:
                         task_memory.mark_step_done(i)
                     self._step_results.append({"cmd": cmd_str, "status": "done"})
@@ -223,12 +232,6 @@ class PlanExecutor:
         completing during a chop step) keep the executor waiting."""
         event_type = (state or {}).get('type')
 
-        if event_type == 'action_done':
-            # Immediate recovery action finished — clear stuck flag and unblock
-            self._in_stuck_recovery = False
-            self._done.set()
-            return
-
         if event_type == 'activity_done':
             command = (self._current_command or {}).get('command')
             expected_activity = {
@@ -247,8 +250,9 @@ class PlanExecutor:
                 # Original step finished after recovery — unblock
                 self._in_stuck_recovery = False
                 self._done.set()
-            # else: recovery action finished (e.g. surface during chop step)
-            # Keep waiting — original activity will send its own activity_done
+            # else: some other recovery activity finished (e.g. surface during
+            # chop step). Keep waiting — the original step must explicitly
+            # finish, be skipped, or be replanned.
 
     def notify_stuck(self) -> None:
         """Signal that activity_stuck fired. Pauses executor until resume or replan."""

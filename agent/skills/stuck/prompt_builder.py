@@ -67,6 +67,19 @@ def build_activity_prompt(
         extra_lines.append("注意：目前看起來不是單純缺資源，而是 craft 流程可能異常失敗")
     if detail:
         extra_lines.append(f"補充說明：{detail}")
+    if activity == "hunting" and reason == "no_animals":
+        summary = state.get("summary") or {}
+        raw_total = ((((summary.get("resources") or {}).get("food") or {}).get("raw_total", None)))
+        if raw_total is None:
+            from agent.skills.state_summary import summarize_state
+            raw_total = int((((summarize_state(state).get("resources") or {}).get("food") or {}).get("raw_total", 0)) or 0)
+        remaining_for_food = remaining if isinstance(remaining, int) and remaining > 0 else None
+        if remaining_for_food is not None:
+            threshold = min(8, max(1, (remaining_for_food + 1) // 2))
+            extra_lines.append(
+                f"生食判斷：raw_total={int(raw_total)}，先烹煮門檻={threshold}"
+                "（當 raw_total >= 8 或 raw_total >= remaining * 0.5 時，優先先 getfood）"
+            )
     if activity == "hunting" and reason == "no_weapon":
         route_info = hunting_stuck.describe_no_weapon_options(state, plan_context)
         extra_lines.append(f"武器缺口診斷：{', '.join(route_info['weapon_blockers']) or '（無明確材料缺口）'}")
@@ -80,7 +93,7 @@ def build_activity_prompt(
         extra_lines.append(f"候選路線：{', '.join(route_info['candidate_routes'])}")
         extra_lines.append(
             "請只在候選路線中挑選最合理的一條；若熟食已足夠，優先跳過 hunt/getfood，"
-            "不要再回 explore trees。"
+            "不要再回 explore animals。"
         )
     extra = "\n".join(extra_lines)
 

@@ -77,7 +77,7 @@ const TOOL_PRIORITY = {
 
 // 通用工具合成：確保背包有指定類型且達到最低等級的工具
 // minTier: e.g. 'iron_pickaxe'（需要鐵稿以上），null 代表任何等級都可以
-async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false) {
+async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false, allowCraft = true) {
     const priority = TOOL_PRIORITY[toolSuffix] ?? []
     const minIdx = minTier ? priority.indexOf(minTier) : priority.length - 1
     // acceptable = priority 裡等級 >= minTier 的選項（index 越小等級越高）
@@ -87,6 +87,10 @@ async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false) 
     if (existing) {
         await bot.equip(existing, 'hand')
         return true
+    }
+
+    if (!allowCraft) {
+        return false
     }
 
     const toolName = minTier ?? toolSuffix.slice(1)
@@ -202,10 +206,10 @@ const _BLOCK_TOOL = [
 ]
 
 // 根據方塊類型確保有對應工具（不夠就合成），並裝備到手上
-async function ensureToolFor(bot, blockName) {
+async function ensureToolFor(bot, blockName, allowCraft = true) {
     for (const [suffix, patterns] of _BLOCK_TOOL) {
         if (patterns.some(p => blockName.includes(p))) {
-            const ok = await _ensureTool(bot, suffix)
+            const ok = await _ensureTool(bot, suffix, null, false, allowCraft)
             const tool = bot.inventory.items().find(i => i.name.endsWith(suffix))
             if (tool) await bot.equip(tool, 'hand')
             return ok

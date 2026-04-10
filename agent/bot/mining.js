@@ -146,8 +146,8 @@ function _countBySuffix(bot, suffix) {
 async function _equipToolForDig(bot, block) {
     if (!block) return
     try {
-        await ensureToolFor(bot, block.name)
-        return
+        const equipped = await ensureToolFor(bot, block.name, false)
+        if (equipped) return
     } catch (_) {}
     try {
         const tool = bot.pathfinder.bestHarvestTool(block)
@@ -1128,7 +1128,7 @@ async function _digEscape(bot, stopY = 60) {
         for (const dy of [2, 1]) {
             const b = bot.blockAt(feet.offset(0, dy, 0))
             if (!b || b.hardness < 0 || b.boundingBox !== 'block') continue
-            try { await ensureToolFor(bot, b.name); await bot.dig(b) } catch (_) {}
+            try { await _equipToolForDig(bot, b); await bot.dig(b) } catch (_) {}
         }
 
         _setEscapeMovements(bot)
