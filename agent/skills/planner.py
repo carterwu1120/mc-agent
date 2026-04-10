@@ -235,6 +235,25 @@ def _armor_goal_shortcut(message: str, state: dict, activity: str) -> dict | Non
     shortfall = int((((summary.get("armor_progress") or {}).get("diamond_shortfall_for_full_set")) or 0))
     cooked_total = int(((((summary.get("resources") or {}).get("food") or {}).get("cooked_total")) or 0))
 
+    extra_diamond_cost = 0
+    extra_goal_parts: list[str] = ["一套鑽石裝備"]
+
+    sword_patterns = ("鑽石劍", "diamond sword")
+    pickaxe_patterns = ("鑽石稿", "鑽石鎬", "鑽石稿子", "diamond pickaxe")
+    axe_patterns = ("鑽石斧", "diamond axe")
+
+    if any(p in lowered or p in message for p in sword_patterns):
+        extra_diamond_cost += 2
+        extra_goal_parts.append("鑽石劍")
+    if any(p in lowered or p in message for p in pickaxe_patterns):
+        extra_diamond_cost += 3
+        extra_goal_parts.append("鑽石稿")
+    if any(p in lowered or p in message for p in axe_patterns):
+        extra_diamond_cost += 3
+        extra_goal_parts.append("鑽石斧")
+
+    total_shortfall = shortfall + extra_diamond_cost
+
     commands: list[str] = []
     stop_cmd = _stop_command_for_activity(activity)
     if activity not in (None, "idle") and stop_cmd:
@@ -246,14 +265,14 @@ def _armor_goal_shortcut(message: str, state: dict, activity: str) -> dict | Non
     if cooked_total < 5:
         commands.append("getfood count 32")
 
-    if shortfall > 0:
-        commands.append(f"mine diamond {shortfall}")
+    if total_shortfall > 0:
+        commands.append(f"mine diamond {total_shortfall}")
 
     commands.append("equip")
 
     return {
         "action": "plan",
-        "goal": "製作一套鑽石裝備",
+        "goal": "、".join(extra_goal_parts),
         "commands": normalize_commands(commands),
     }
 
