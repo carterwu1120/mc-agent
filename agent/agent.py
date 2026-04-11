@@ -265,6 +265,27 @@ _EXPECTED_ACTIVITY = {
     "explore": "explore",
 }
 
+_STOP_COMMAND_FOR_ACTIVITY = {
+    "fishing": "stopfish",
+    "chopping": "stopchop",
+    "mining": "stopmine",
+    "smelting": "stopsmelt",
+    "surface": "stopsurface",
+    "explore": "stopexplore",
+    "combat": "stopcombat",
+    "hunting": "stophunt",
+    "getfood": "stopgetfood",
+}
+
+_NATURAL_INTERRUPT_PATTERNS = (
+    r"^\s*你先",
+    r"^\s*先去",
+    r"^\s*先來",
+    r"^\s*先回",
+    r"^\s*先別",
+    r"^\s*先停",
+)
+
 
 def _save_current_task_to_memory(state: dict) -> None:
     """把目前 activity stack 的頂層任務存進 task_memory，供之後 resume。"""
@@ -455,6 +476,59 @@ def _is_system_chat_message(message: str) -> bool:
     if re.match(r"^set\s+the\s+time\s+to\s+\d+]?$", lowered):
         return True
     return False
+
+
+def _parse_manual_override(message: str) -> dict | None:
+    text = (message or "").strip()
+    lowered = text.lower()
+
+    if re.fullmatch(r"!abort", lowered):
+        return {"kind": "abort"}
+    if re.fullmatch(r"!resume", lowered):
+        return {"kind": "resume"}
+
+    m = re.match(r"^!interrupt\s+(.+?)\s*$", text, flags=re.IGNORECASE)
+    if m:
+        payload = m.group(1).strip()
+        if payload:
+            return {"kind": "interrupt", "message": payload, "explicit": True}
+
+    if any(re.match(pattern, text) for pattern in _NATURAL_INTERRUPT_PATTERNS):
+        return {"kind": "interrupt", "message": text, "explicit": False}
+
+    return None
+
+
+async def _send_chat(ws, text: str) -> None:
+    await ws.send(json.dumps({"command": "chat", "text": text}))
+
+
+async def _apply_manual_abort(state: dict, ws) -> None:
+    if executor.is_running():
+        print("[TaskArb] 手動 abort：中止目前計畫")
+        executor.abort(preserve_task=True, reason="manual_abort")
+    else:
+        task_memory.interrupt("manual_abort")
+
+    activity = state.get("activity", "idle")
+    stop_cmd = _STOP_COMMAND_FOR_ACTIVITY.get(activity)
+    if stop_cmd:
+        print(f"[TaskArb] 手動 abort：停止當前活動 {activity}")
+        await ws.send(json.dumps({"command": stop_cmd}))
+    else:
+        await _send_chat(ws, "已停止目前任務。")
+
+
+async def _apply_manual_interrupt(state: dict, ws, planner_message: str) -> None:
+    if executor.is_running():
+        print("[TaskArb] 手動 interrupt：暫停目前計畫，切換到玩家要求")
+        executor.abort(preserve_task=True, reason="manual_interrupt")
+    elif state.get("activity") != "idle":
+        print("[TaskArb] 手動 interrupt：保存目前活動，切換到玩家要求")
+        _save_current_task_to_memory(state)
+
+    planner_state = _augment_state({**state, "message": planner_message}, player_task=planner_message)
+    await _handle_and_send(planner_state, planner_skill.handle, ws)
 
 
 def _distance_sq(a: dict | None, b: dict | None) -> float:
@@ -656,6 +730,24 @@ async def _handle_player_chat(state: dict, ws) -> None:
     if _is_system_chat_message(message):
         print(f"[TaskArb] 忽略系統聊天: {message}")
         return
+
+    override = _parse_manual_override(message)
+    if override:
+        kind = override["kind"]
+        if kind == "abort":
+            await _apply_manual_abort(state, ws)
+            return
+        if kind == "resume":
+            planner_state = _augment_state(state, player_task=message)
+            await _handle_and_send(planner_state, planner_skill.handle, ws)
+            return
+        if kind == "interrupt":
+            planner_message = override.get("message", "").strip()
+            if not planner_message:
+                await _send_chat(ws, "你要我改做什麼？")
+                return
+            await _apply_manual_interrupt(state, ws, planner_message)
+            return
 
     # Resume commands are meta-commands — skip arbitration entirely
     if any(re.search(p, message, re.IGNORECASE) for p in planner_skill.RESUME_PATTERNS):

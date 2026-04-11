@@ -51,9 +51,11 @@
     - [ ] 記錄已知工作點、常用礦坑、危險區域、可重用設施
     - [ ] 支援 bot 主動在視窗分享觀察、建議與下一步提醒
 
-- [ ] **強化 self_task 自主規劃**（依賴 Spatial memory 完成後）
-  - [ ] 目標分解：收到「做鑽石套裝」類指令時，自動推算缺多少鑽石 → 規劃採礦鏈
-  - [ ] 資源導向規劃：缺某樣資源時，優先去 spatial memory 裡的已知位置，而非重新探索
+- [ ] **強化 self_task 自主規劃**（Spatial memory 已接入，下一步做 deterministic 強化）
+  - [x] 已把 exploration memory 接入 self_task prompt，LLM 已能看到已知礦點 / 森林 / 動物區
+  - [ ] 目標分解下沉：目前 planner 已支援部分裝備 / 工具需求的缺口推算；下一步是把這種推理擴展成更通用的系統層目標分解，而不只限於 equipment 類需求
+  - [ ] 資源導向規劃下沉：缺某樣資源時，優先查詢 spatial memory 的已知位置，再決定是否 explore
+  - [ ] 補 deterministic 選點策略：多個已知資源點時，定義最新 / 最近 / 最可信的選擇規則，而不是完全交給 LLM 自由發揮
 
 - [ ] **通用 craft / ensure retry 記憶體**
   - 目前 `woodcutting` 的 `ensureAxe` 已看出局部跳針：同一輪內重複補工具、材料剛變一點就整套重試
