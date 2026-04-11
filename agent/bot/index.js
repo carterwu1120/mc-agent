@@ -130,8 +130,15 @@ bot.once('health', () => {
     console.log(`[Bot] 血量：${bot.health}  飢餓：${bot.food}`)
 })
 
+// Usernames of other bots in the same server — ignore their chat to prevent feedback loops.
+// Bot-to-bot coordination happens via the Python coordinator layer, not Minecraft chat.
+const _BOT_USERNAMES = new Set(
+    (process.env.BOT_USERNAMES || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+)
+
 bot.on('chat', (username, message) => {
     if (username === bot.username) return
+    if (_BOT_USERNAMES.has(username.toLowerCase())) return  // ignore other bots
     console.log(`[Chat] ${username}: ${message}`)
 
     // Addressing: "@Agent0 mine iron 8"  → only Agent0 responds

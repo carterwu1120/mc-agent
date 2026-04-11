@@ -13,6 +13,7 @@ services:
       MC_AUTH:     ${MC_AUTH:-offline}
       BOT_WS_PORT: 3001
       BOT_DATA_DIR: /app/data/bot0
+      BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
     volumes:
       - ./agent/data:/app/data
       - ./agent/logs:/app/logs
@@ -51,6 +52,7 @@ services:
       MC_AUTH:     ${MC_AUTH:-offline}
       BOT_WS_PORT: 3003
       BOT_DATA_DIR: /app/data/bot1
+      BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
     volumes:
       - ./agent/data:/app/data
       - ./agent/logs:/app/logs
