@@ -2,18 +2,11 @@
 
 ## 進行中 / 近期
 
-- [ ] **修正 executor 接受 activity_stuck replan 時，舊步驟沒有被完整覆蓋**
-  - 目前 `activity_stuck` 已能產生較完整的 deterministic replan，但從 log 來看，
-    executor 在接受 replan 後，仍可能繼續執行舊的 pending steps，造成
-    `hunt/getfood/equip/mine diamond` 與新 replan 混在一起跑。
-  - 症狀：
-    - `hunting/no_animals` 後明明回了 `explore -> hunt -> getfood ...`
-      ，但 executor 仍直接往後執行舊的 `getfood`、`equip`、甚至 `mine diamond`
-    - 最後看起來像「附近沒食物就直接去挖鑽石」，其實是 replan 套用不完整
-  - 解法：
-    - `executor.replan(...)` 必須原子地覆蓋剩餘步驟
-    - replan 後不能再漏跑舊的 step index
-    - `equip` / `mine diamond` 不應在 `hunt/getfood` 未完成時提前執行
+- [x] **修正 executor 接受 activity_stuck replan 時，舊步驟沒有被完整覆蓋**
+  - 根本原因：LLM replan 沒有附上 pending_steps，導致舊步驟被丟棄
+  - 修正：`_enforce_pending_steps` 自動補上漏掉的 pending_steps
+  - 修正：`plan_context.pending_steps` 改用 `steps[idx+1:]` slice，包含 failed steps
+  - 修正：executor replan 分支加強 log 確認替換是否正確
 
 - [ ] **Post-action verification loop**
   - 目前 executor 送出指令後，收到 `action_done` 就直接進下一步，完全不驗證動作是否真的成功。
@@ -88,6 +81,13 @@
 - [ ] k8s 部署 n 個 bot container
 
 ## 已完成
+
+- [x] **修正 mining 無鎬時 push/pop smelting tight loop**
+  - 症狀：`[Mine] 無稿子 → [Craft] 有 raw_iron → push smelting → 找不到熔爐 → pop → resume → 無限重複`
+  - 根本原因：`_smeltIfNeeded` 有圓石就直接啟動 smelting，但沒有木材做工作台，熔爐無法放置，瞬間失敗又回到 mining
+  - 修正（`crafting.js`）：無現成熔爐時，提前檢查「有工作台（附近 4 格或背包）OR 有木材」，否則直接 return false 不啟動 smelting
+  - 修正（`crafting.js`）：smelting 結束後檢查 `consumeLastOutcome`，若 status=stuck 不回報成功
+  - 修正（`smelting.js`）：`找不到熔爐` 時補送 `bridge.sendState(activity_stuck)`，讓 Python 有機會規劃補木材等 recovery
 
 - [x] `activity_stuck.py` 重構成 `skills/stuck/` 分目錄
   - 已拆出 `smelting.py`、`mining.py`、`hunting.py`、`getfood.py`

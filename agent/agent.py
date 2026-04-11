@@ -502,7 +502,12 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     "current_step": idx,
                     "current_cmd": steps[idx]["cmd"] if idx < len(steps) else None,
                     "done_steps": [s["cmd"] for s in steps if s["status"] == "done"],
-                    "pending_steps": [s["cmd"] for s in steps if s["status"] == "pending"],
+                    # Use slice from idx+1 so order is guaranteed and failed steps
+                    # (previously skipped) are included — they must not be silently dropped.
+                    "pending_steps": [
+                        s["cmd"] for s in steps[idx + 1:]
+                        if s["status"] in ("pending", "failed")
+                    ],
                 }
                 print(f"[Agent] 注入 plan_context: 第 {idx+1}/{len(steps)} 步")
             else:

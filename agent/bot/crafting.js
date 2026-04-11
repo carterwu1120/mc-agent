@@ -464,17 +464,45 @@ async function _smeltIfNeeded(bot, toolSuffix) {
         console.log('[Craft] 無熔爐且圓石不足，跳過燒製')
         return false
     }
+    // To place a furnace we need a crafting table. Check up-front to avoid a
+    // tight push/pop smelting loop when cobble >= 8 but no way to make a table.
+    if (!hasFurnace) {
+        // Can we actually make/place a furnace?
+        // We need: a crafting table reachable within 4 blocks OR materials to place one.
+        const hasTableNearby = !!bot.findBlock({
+            matching: b => b.type === (bot.registry.blocksByName['crafting_table']?.id),
+            maxDistance: 4,
+        })
+        const hasTableInInventory = bot.inventory.items().some(i => i.name === 'crafting_table')
+        const planks = bot.inventory.items()
+            .filter(i => i.name.includes('_planks'))
+            .reduce((s, i) => s + i.count, 0)
+        const logs = bot.inventory.items()
+            .filter(i => i.name.endsWith('_log') || i.name.endsWith('_wood'))
+            .reduce((s, i) => s + i.count, 0)
+        const canMakeTable = hasTableNearby || hasTableInInventory || planks >= 4 || logs >= 1
+        if (!canMakeTable) {
+            console.log('[Craft] 有圓石但無工作檯且缺木材，無法合成熔爐，跳過燒製')
+            return false
+        }
+    }
 
     const needed = toolSuffix === '_shovel' ? 1 : 3
     const target = oreEntry.name.includes('iron') ? 'iron'
                  : oreEntry.name.includes('gold') ? 'gold' : 'copper'
 
     console.log(`[Craft] 有 ${oreEntry.name}，先燒製 ${needed} 個 ${neededIngot}...`)
-    const { startSmelting, isActive: isSmeltingActive } = require('./smelting')
+    const { startSmelting, isActive: isSmeltingActive, consumeLastOutcome } = require('./smelting')
     startSmelting(bot, { target, count: needed })  // 內部會停 mining，完成後由 activity stack 接回上一層
 
     while (isSmeltingActive()) {
         await _sleep(3000)
+    }
+    // If smelting ended due to stuck (e.g. furnace still unreachable), don't claim success
+    const smeltOutcome = consumeLastOutcome(5000)
+    if (smeltOutcome && smeltOutcome.status === 'stuck') {
+        console.log('[Craft] 燒製因故卡住，視為失敗')
+        return false
     }
     const ingotCount = bot.inventory.items()
         .filter(i => i.name === neededIngot)

@@ -225,7 +225,7 @@ class PlanExecutor:
                     if self._replan_commands is not None:
                         new_cmds = self._replan_commands
                         self._replan_commands = None
-                        print(f'[Executor] 接受重新規劃：{new_cmds}')
+                        print(f'[Executor] 接受重新規劃 step {i}: 舊剩餘={commands[i:]} → 新={new_cmds}')
                         if not preserve_task:
                             task_memory.mark_step_failed(i, "replanned")
                         self._step_results.append({"cmd": cmd_str, "status": "replanned", "error": "replanned"})
@@ -233,6 +233,7 @@ class PlanExecutor:
                             task_memory.replace_remaining_steps(i, new_cmds)
                         commands = commands[:i] + new_cmds
                         self._current_command = None
+                        print(f'[Executor] 替換後完整計畫: {commands}，從步驟 {i} 繼續')
                         continue  # don't increment i — commands[i] is now the first new step
 
                     # Single-step recovery completed — keep the current plan and

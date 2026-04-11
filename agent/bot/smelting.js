@@ -195,7 +195,18 @@ async function _loop(bot, goal = {}) {
         if (!furnaceBlock) {
             console.log('[Smelt] 找不到熔爐，停止')
             isSmelting = false
-            if (!_lastOutcome) _setOutcome('stuck', { reason: 'missing_dependency', goal })
+            if (!_lastOutcome) {
+                _setOutcome('stuck', { reason: 'missing_dependency', goal })
+                // Notify Python so it can plan a recovery (e.g. chop wood first).
+                // Without this, mining immediately resumes and re-triggers smelting → tight loop.
+                bridge.sendState(bot, 'activity_stuck', {
+                    activity: 'smelting',
+                    reason: 'missing_dependency',
+                    detail: '找不到或無法放置熔爐（可能缺木材合成工作檯）',
+                    smelt_item: goal.target,
+                    smelt_count: goal.count,
+                })
+            }
             break
         }
 
