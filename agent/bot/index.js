@@ -140,15 +140,6 @@ for (const name of Array.from(_BOT_USERNAMES)) {
     if (base && base !== name) _BOT_USERNAMES.add(base)
 }
 
-function _matchesAddress(target, username) {
-    const normalizedTarget = (target || '').trim().toLowerCase()
-    const normalizedUsername = (username || '').trim().toLowerCase()
-    if (!normalizedTarget || !normalizedUsername) return false
-    if (normalizedTarget === normalizedUsername) return true
-    const baseUsername = normalizedUsername.replace(/\d+$/, '')
-    return !!baseUsername && normalizedTarget === baseUsername
-}
-
 bot.on('chat', (username, message) => {
     if (username === bot.username) return
     if (_BOT_USERNAMES.has(username.toLowerCase())) return  // ignore other bots
@@ -161,7 +152,7 @@ bot.on('chat', (username, message) => {
     if (addressMatch) {
         const [, target, rest] = addressMatch
         if (target.toLowerCase() !== 'all' &&
-            !_matchesAddress(target, bot.username)) return
+            target.toLowerCase() !== bot.username.toLowerCase()) return
         message = rest.trim()
     }
 
