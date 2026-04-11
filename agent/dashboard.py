@@ -7,6 +7,10 @@ Endpoints:
   GET /state  — JSON snapshot of all agent state (multi-agent ready schema)
 
 Port: DASHBOARD_PORT env var (default 3002)
+
+Multi-agent: own bot's state comes from in-memory refs (live).
+Other bots' state is read from {DATA_ROOT}/{bot_id}/live_state.json written
+by each agent process on every WebSocket tick.
 """
 from __future__ import annotations
 
@@ -21,14 +25,15 @@ from aiohttp import web
 
 from agent import task_memory
 
-CHESTS_FILE = pathlib.Path(__file__).parent / "data" / "chests.json"
-HTML_FILE   = pathlib.Path(__file__).parent / "dashboard.html"
+DATA_ROOT = pathlib.Path(__file__).parent / "data"
+HTML_FILE = pathlib.Path(__file__).parent / "dashboard.html"
 
 _CORS = {"Access-Control-Allow-Origin": "*"}
 
 
 # ── Shared state references (set by agent.py via init() before start()) ───────
 
+_own_bot_id: str = "bot0"
 _latest_state: dict = {}
 _thinking: set = set()
 _queued_player_tasks: "collections.deque" = collections.deque()
@@ -40,26 +45,24 @@ def init(
     thinking: set,
     queued_tasks,
     stuck_events,
+    bot_id: str = "bot0",
 ) -> None:
     """Called by agent.py at startup to bind shared mutable containers."""
-    global _latest_state, _thinking, _queued_player_tasks, _recent_stuck_events
-    _latest_state      = state
-    _thinking          = thinking
+    global _own_bot_id, _latest_state, _thinking, _queued_player_tasks, _recent_stuck_events
+    _own_bot_id          = bot_id
+    _latest_state        = state
+    _thinking            = thinking
     _queued_player_tasks = queued_tasks
     _recent_stuck_events = stuck_events
 
 
-def _get_agent_globals() -> tuple:
-    return _latest_state, _thinking, _queued_player_tasks, _recent_stuck_events
-
-
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
-def _load_chests() -> list:
+def _load_json_file(path: pathlib.Path, default):
     try:
-        return json.loads(CHESTS_FILE.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return []
+        return default
 
 
 def _format_task(task: dict | None) -> dict | None:
@@ -112,19 +115,20 @@ def _format_chests(chests: list) -> list:
     return out
 
 
-def _build_state() -> dict:
-    import datetime
-    latest_state, thinking, queued_tasks, recent_stuck = _get_agent_globals()
-    task        = task_memory.load_any()
-    interrupted = task_memory.interrupted_tasks()[:3]
-    chests      = _load_chests()
+# ── Bot data builders ─────────────────────────────────────────────────────────
 
-    # Detect if we have real live data (health is always present in a real tick)
+def _build_own_bot_data() -> dict:
+    """Build bot data for the bot this process manages (live in-memory state)."""
+    import datetime
+    latest_state = _latest_state
     ws_connected = latest_state.get("health") is not None
 
-    bot_data = {
-        "id":   "bot0",
-        "name": "Agent",
+    data_dir = DATA_ROOT / _own_bot_id
+    chests = _load_json_file(data_dir / "chests.json", [])
+
+    return {
+        "id":   _own_bot_id,
+        "name": latest_state.get("name", _own_bot_id),
         "ws_connected": ws_connected,
         "state_updated_at": datetime.datetime.utcnow().isoformat() + "Z",
         "status": {
@@ -135,8 +139,8 @@ def _build_state() -> dict:
             "mode":     latest_state.get("mode"),
             "home":     latest_state.get("home"),
         },
-        "current_task":      _format_task(task),
-        "interrupted_tasks": [_format_task(t) for t in interrupted],
+        "current_task":      _format_task(task_memory.load_any()),
+        "interrupted_tasks": [_format_task(t) for t in task_memory.interrupted_tasks()[:3]],
         "equipment":         latest_state.get("equipment") or {},
         "inventory":         _top_items(latest_state.get("inventory") or [], n=12),
         "inventory_slots":   latest_state.get("inventory_slots") or {},
@@ -144,17 +148,76 @@ def _build_state() -> dict:
         "recent_events":     task_memory.recent_events()[:5],
         "recent_failures":   task_memory.recent_failures()[:5],
         "internal": {
-            "thinking":            sorted(thinking),
-            "queued_player_tasks": list(queued_tasks),
-            "recent_stuck_events": list(recent_stuck),
+            "thinking":            sorted(_thinking),
+            "queued_player_tasks": list(_queued_player_tasks),
+            "recent_stuck_events": list(_recent_stuck_events),
         },
     }
 
+
+def _build_remote_bot_data(bot_id: str, snapshot: dict) -> dict:
+    """Build bot data for a remote bot, read from its live_state.json snapshot."""
+    data_dir = DATA_ROOT / bot_id
+    task   = _load_json_file(data_dir / "task.json", None)
+    chests = _load_json_file(data_dir / "chests.json", [])
+
+    # Reconstruct interrupted_tasks list from task.json's interruptedTasks field
+    interrupted_raw = task.get("interruptedTasks", []) if task else []
+    interrupted = [_format_task(t) for t in interrupted_raw[:3]]
+
+    # Recent events / failures from task.json
+    recent_events   = (task.get("recentEvents",   []) if task else [])[:5]
+    recent_failures = (task.get("recentFailures", []) if task else [])[:5]
+
+    ws_connected = snapshot.get("ws_connected", False)
+    return {
+        "id":   bot_id,
+        "name": snapshot.get("name", bot_id),
+        "ws_connected": ws_connected,
+        "state_updated_at": snapshot.get("updated_at"),
+        "status": {
+            "activity": snapshot.get("activity") if ws_connected else None,
+            "position": snapshot.get("pos"),
+            "health":   snapshot.get("health"),
+            "food":     snapshot.get("food"),
+            "mode":     snapshot.get("mode"),
+            "home":     snapshot.get("home"),
+        },
+        "current_task":      _format_task(task),
+        "interrupted_tasks": interrupted,
+        "equipment":         snapshot.get("equipment") or {},
+        "inventory":         _top_items(snapshot.get("inventory") or [], n=12),
+        "inventory_slots":   snapshot.get("inventory_slots") or {},
+        "chests":            _format_chests(chests),
+        "recent_events":     recent_events,
+        "recent_failures":   recent_failures,
+        "internal":          None,  # internal state not exposed for remote bots
+    }
+
+
+def _collect_all_bots() -> list[dict]:
+    """Aggregate own bot (from memory) + all other bots (from live_state.json files)."""
+    bots = [_build_own_bot_data()]
+
+    for live_file in sorted(DATA_ROOT.glob("*/live_state.json")):
+        bot_id = live_file.parent.name
+        if bot_id == _own_bot_id:
+            continue  # own bot already included from memory
+        try:
+            snapshot = json.loads(live_file.read_text(encoding="utf-8"))
+            bots.append(_build_remote_bot_data(bot_id, snapshot))
+        except Exception:
+            pass
+
+    return bots
+
+
+def _build_state() -> dict:
     return {
         # Coordinator placeholder — null until multi-agent coordinator is implemented.
         # Future shape: { "assigned_tasks": [], "active_bots": [], "pending_decisions": [] }
         "coordinator": None,
-        "agents": [bot_data],
+        "agents": _collect_all_bots(),
     }
 
 

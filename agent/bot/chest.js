@@ -7,7 +7,7 @@ const { applyMovements } = require('./movement_prefs')
 
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
-const DATA_FILE = path.join(__dirname, '..', 'data', 'chests.json')
+const DATA_FILE = path.join(process.env.BOT_DATA_DIR || path.join(__dirname, '..', 'data'), 'chests.json')
 
 const LABEL_PATTERNS = {
     food:  ['cooked_', 'bread', 'apple', 'carrot', 'potato', 'raw_beef', 'raw_pork', 'raw_chicken', 'raw_mutton', 'raw_rabbit', 'raw_salmon', 'raw_cod'],

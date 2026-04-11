@@ -1,7 +1,7 @@
 const path = require('path')
 const fs = require('fs')
 
-const FILE = path.join(__dirname, '../data/mode.json')
+const FILE = path.join(process.env.BOT_DATA_DIR || path.join(__dirname, '../data'), 'mode.json')
 const VALID = ['companion', 'survival', 'workflow']
 
 let _mode = 'survival'

@@ -9,10 +9,12 @@ Spatial memory — 記錄 bot 在世界中找到資源的位置，供 self_task 
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import time
 
-_DATA_FILE = pathlib.Path(__file__).parent / 'data' / 'exploration_memory.json'
+_DATA_DIR = os.environ.get('BOT_DATA_DIR', str(pathlib.Path(__file__).parent / 'data'))
+_DATA_FILE = pathlib.Path(_DATA_DIR) / 'exploration_memory.json'
 
 _ORE_TTL_HOURS    = 7 * 24   # 礦不會消失，但採完就沒了，所以設 7 天後過期
 _FOREST_TTL_HOURS = 3 * 24   # 樹會重生

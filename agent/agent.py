@@ -27,7 +27,10 @@ load_dotenv()
 init_logger("brain")
 
 WS_URL = os.environ.get("BOT_WS_URL", "ws://localhost:3001")
-DEATH_FILE = pathlib.Path(__file__).parent / 'data' / 'death.json'
+BOT_ID = os.environ.get("BOT_ID", "bot0")
+BOT_DATA_DIR = pathlib.Path(os.environ.get("BOT_DATA_DIR", str(pathlib.Path(__file__).parent / "data")))
+DEATH_FILE = BOT_DATA_DIR / 'death.json'
+_LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 
 # ── 在這裡切換 LLM ────────────────────────────────────────
 llm: LLMClient = GeminiClient()
@@ -48,6 +51,23 @@ async def _on_verify_failed(state: dict, ws) -> None:
 
 
 executor._verify_failed_callback = _on_verify_failed
+
+
+def _write_live_state() -> None:
+    """Write current state snapshot to BOT_DATA_DIR/live_state.json for dashboard aggregation."""
+    import datetime
+    try:
+        snapshot = {
+            **_latest_state,
+            'bot_id': BOT_ID,
+            'ws_connected': _latest_state.get('health') is not None,
+            'updated_at': datetime.datetime.utcnow().isoformat() + 'Z',
+        }
+        _LIVE_STATE_FILE.write_text(
+            json.dumps(snapshot, default=str), encoding='utf-8'
+        )
+    except Exception:
+        pass
 
 
 def _record_to_exploration_memory(state: dict) -> None:
@@ -849,8 +869,10 @@ async def run():
         task_memory.interrupt("agent_restart")
         print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
 
-    _dashboard.init(_latest_state, _thinking, _queued_player_tasks, _recent_stuck_events)
-    asyncio.create_task(_dashboard.start())
+    if os.environ.get('DASHBOARD_PORT') or BOT_ID == 'bot0':
+        _dashboard.init(_latest_state, _thinking, _queued_player_tasks,
+                        _recent_stuck_events, bot_id=BOT_ID)
+        asyncio.create_task(_dashboard.start())
 
     while True:
         try:
@@ -861,6 +883,7 @@ async def run():
                     state = json.loads(raw)
                     _latest_state.clear()
                     _latest_state.update(state)
+                    _write_live_state()
                     executor.update_state(state)
                     _sync_task_context(state)
                     event_type = state.get("type")

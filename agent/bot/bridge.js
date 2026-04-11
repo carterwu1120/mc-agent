@@ -40,7 +40,8 @@ function _equipmentState(bot) {
     }
 }
 
-const wss = new WebSocketServer({ port: 3001 })
+const WS_PORT = parseInt(process.env.BOT_WS_PORT || '3001')
+const wss = new WebSocketServer({ port: WS_PORT })
 let agentSocket = null
 let _initialized = false
 
@@ -67,7 +68,7 @@ function init(bot, onAction) {
         })
     })
 
-    console.log('[WS] 等待 Agent 連線，port 3001')
+    console.log(`[WS] 等待 Agent 連線，port ${WS_PORT}`)
 }
 
 function sendState(bot, type, extra = {}) {

@@ -134,6 +134,17 @@ bot.on('chat', (username, message) => {
     if (username === bot.username) return
     console.log(`[Chat] ${username}: ${message}`)
 
+    // Addressing: "@Agent0 mine iron 8"  → only Agent0 responds
+    //             "@all sethome"          → all bots respond
+    //             (no prefix)             → all bots respond (backward-compatible)
+    const addressMatch = message.match(/^@(\S+)\s+([\s\S]*)$/)
+    if (addressMatch) {
+        const [, target, rest] = addressMatch
+        if (target.toLowerCase() !== 'all' &&
+            target.toLowerCase() !== bot.username.toLowerCase()) return
+        message = rest.trim()
+    }
+
     if (message.startsWith('!')) {
         const [cmd, ...args] = message.slice(1).split(' ')
         handle(bot, { command: cmd, text: args.join(' '), args })

@@ -4,7 +4,7 @@ const activityStack = require('./activity')
 const { noteTeleportLikeAction } = require('./crafting')
 const { applyMovements } = require('./movement_prefs')
 
-const DATA_FILE = path.join(__dirname, '..', 'data', 'home.json')
+const DATA_FILE = path.join(process.env.BOT_DATA_DIR || path.join(__dirname, '..', 'data'), 'home.json')
 
 function _load() {
     try {

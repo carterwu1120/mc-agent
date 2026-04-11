@@ -5,7 +5,9 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from agent.plan_utils import build_step_records, normalize_commands
 
-FILE = os.path.join(os.path.dirname(__file__), 'data', 'task.json')
+_DATA_DIR = os.environ.get('BOT_DATA_DIR', os.path.join(os.path.dirname(__file__), 'data'))
+os.makedirs(_DATA_DIR, exist_ok=True)
+FILE = os.path.join(_DATA_DIR, 'task.json')
 
 MAX_INTERRUPTED_TASKS = 3
 MAX_RECENT_TRANSITIONS = 10

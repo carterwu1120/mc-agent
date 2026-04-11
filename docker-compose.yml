@@ -1,30 +1,75 @@
 services:
-  bot:
+
+  # ── Bot 0 ────────────────────────────────────────────────────────────────────
+  bot0:
     build:
       context: .
       dockerfile: Dockerfile.bot
     environment:
-      MC_HOST: ${MC_HOST:-localhost}
-      MC_PORT: ${MC_PORT:-25565}
-      MC_USERNAME: ${MC_USERNAME:-Agent}
-      MC_VERSION: ${MC_VERSION:-1.20.1}
-      MC_AUTH: ${MC_AUTH:-offline}
+      MC_HOST:     ${MC_HOST:-localhost}
+      MC_PORT:     ${MC_PORT:-25565}
+      MC_USERNAME: ${MC_USERNAME_0:-Agent0}
+      MC_VERSION:  ${MC_VERSION:-1.20.1}
+      MC_AUTH:     ${MC_AUTH:-offline}
+      BOT_WS_PORT: 3001
+      BOT_DATA_DIR: /app/data/bot0
     volumes:
       - ./agent/data:/app/data
       - ./agent/logs:/app/logs
     restart: unless-stopped
 
-  agent:
+  agent0:
     build:
       context: .
       dockerfile: Dockerfile.agent
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}
-      BOT_WS_URL: ws://bot:3001
+      GOOGLE_API_KEY:    ${GOOGLE_API_KEY}
+      OLLAMA_BASE_URL:   ${OLLAMA_BASE_URL:-http://localhost:11434}
+      BOT_WS_URL:        ws://bot0:3001
+      BOT_ID:            bot0
+      BOT_DATA_DIR:      /app/agent/data/bot0
+      DASHBOARD_PORT:    3002
     volumes:
       - ./agent/data:/app/agent/data
       - ./agent/logs:/app/agent/logs
     depends_on:
-      - bot
+      - bot0
+    ports:
+      - "3002:3002"
+    restart: unless-stopped
+
+  # ── Bot 1 ────────────────────────────────────────────────────────────────────
+  bot1:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    environment:
+      MC_HOST:     ${MC_HOST:-localhost}
+      MC_PORT:     ${MC_PORT:-25565}
+      MC_USERNAME: ${MC_USERNAME_1:-Agent1}
+      MC_VERSION:  ${MC_VERSION:-1.20.1}
+      MC_AUTH:     ${MC_AUTH:-offline}
+      BOT_WS_PORT: 3003
+      BOT_DATA_DIR: /app/data/bot1
+    volumes:
+      - ./agent/data:/app/data
+      - ./agent/logs:/app/logs
+    restart: unless-stopped
+
+  agent1:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      GOOGLE_API_KEY:  ${GOOGLE_API_KEY}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}
+      BOT_WS_URL:      ws://bot1:3003
+      BOT_ID:          bot1
+      BOT_DATA_DIR:    /app/agent/data/bot1
+      # No DASHBOARD_PORT — agent1 does not run the dashboard
+    volumes:
+      - ./agent/data:/app/agent/data
+      - ./agent/logs:/app/agent/logs
+    depends_on:
+      - bot1
     restart: unless-stopped
