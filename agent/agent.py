@@ -318,6 +318,25 @@ def _save_current_task_to_memory(state: dict) -> None:
     goal_str = f"{activity} {goal}"
     task_memory.interrupt("player_interrupt")
     task_memory.save(goal_str, [resume_cmd])
+    current_pos = _clean_pos(state.get("pos"))
+    work_pos = _clean_pos(top.get("startPos")) or current_pos
+    task_memory.update_context({
+        "expectedActivity": activity,
+        "activeActivity": activity,
+        "activeCommand": resume_cmd,
+        "activityStack": _stack_activity_names(state),
+        "workPos": work_pos,
+        "currentPos": current_pos,
+    })
+    task_memory.update_step_context(0, {
+        "currentStepCmd": resume_cmd,
+        "expectedActivity": activity,
+        "stackActivity": activity,
+        "workPos": work_pos,
+        "currentPos": current_pos,
+        "goal": goal,
+        "progress": progress,
+    })
     task_memory.interrupt("player_interrupt")  # save 會重設 status，再標記一次
     print(f"[TaskMem] 儲存任務: {goal_str} → [{resume_cmd}]")
 

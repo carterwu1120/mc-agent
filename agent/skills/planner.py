@@ -466,6 +466,56 @@ def _stop_command_for_activity(activity: str) -> str | None:
     return stop_map.get(activity)
 
 
+def _distance_sq(a: dict | None, b: dict | None) -> float:
+    ax = float((a or {}).get("x", 0.0))
+    ay = float((a or {}).get("y", 0.0))
+    az = float((a or {}).get("z", 0.0))
+    bx = float((b or {}).get("x", 0.0))
+    by = float((b or {}).get("y", 0.0))
+    bz = float((b or {}).get("z", 0.0))
+    return (ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2
+
+
+def _maybe_plan_resume(message: str, state: dict) -> dict | None:
+    if not any(re.search(p, message, re.IGNORECASE) for p in RESUME_PATTERNS):
+        return None
+
+    task = task_memory.load()
+    if not task or task.get("status") != "interrupted":
+        return {"command": "chat", "text": "目前沒有可恢復的中斷任務。"}
+
+    steps = task.get("steps", [])
+    current_step = task.get("currentStep", 0)
+    remaining = [
+        s["cmd"] for s in steps[current_step:]
+        if s.get("status") not in ("done", "failed")
+    ] or task.get("commands", [])[current_step:]
+
+    if not remaining:
+        return {"command": "chat", "text": "目前沒有可恢復的步驟。"}
+
+    task_context = task.get("context") or {}
+    work_pos = task_context.get("workPos") or task_context.get("currentPos")
+    if not work_pos:
+        for step in reversed(steps):
+            sc = step.get("context") or {}
+            work_pos = sc.get("workPos") or sc.get("currentPos")
+            if work_pos:
+                break
+
+    commands = list(remaining)
+    current_pos = state.get("pos") or {}
+    if work_pos and _distance_sq(current_pos, work_pos) > 100 ** 2:
+        commands = [f"tp {round(work_pos['x'])} {round(work_pos['y'])} {round(work_pos['z'])}"] + commands
+
+    return {
+        "action": "plan",
+        "goal": task.get("goal", "恢復中斷任務"),
+        "commands": commands,
+        "resume_task": True,
+    }
+
+
 def _maybe_plan_come(message: str, activity: str, player_name: str | None) -> dict | None:
     lowered = message.lower()
     if not any(re.search(pattern, lowered if pattern.startswith(r"\b") else message) for pattern in COME_PATTERNS):
@@ -607,6 +657,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     try:
         print(f"[Planner] 玩家: {message}")
 
+        shortcut = _maybe_plan_resume(message, state)
+        if shortcut:
+            if shortcut.get("action") == "plan":
+                print(f"[Planner] 恢復任務快捷規劃: {shortcut.get('commands')}")
+            return shortcut
         shortcut = _maybe_plan_come(message, activity, player_name)
         if shortcut:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
