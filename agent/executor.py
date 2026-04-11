@@ -149,6 +149,12 @@ class PlanExecutor:
                 interrupted = task_memory.load()
                 if not interrupted or interrupted.get('status') != 'interrupted':
                     print('[Executor] resumetask 失敗：找不到中斷中的任務')
+                    task_memory.record_event(
+                        'resumetask',
+                        reason='missing_interrupted_task',
+                        command='resumetask',
+                        step=i,
+                    )
                     break
                 commands = interrupted.get('commands', [])
                 i = interrupted.get('currentStep', 0)
@@ -228,6 +234,13 @@ class PlanExecutor:
                         print(f'[Executor] 步驟 {i} 被跳過: {cmd_str}')
                         if not preserve_task:
                             task_memory.mark_step_failed(i, "skipped")
+                            task_memory.record_event(
+                                'skip',
+                                reason='activity_stuck_skip',
+                                command=cmd_str,
+                                step=i,
+                                details={'source': 'activity_stuck'},
+                            )
                         self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "skipped"})
                         i += 1
                         self._current_command = None
@@ -239,6 +252,13 @@ class PlanExecutor:
                         print(f'[Executor] 接受重新規劃 step {i}: 舊剩餘={commands[i:]} → 新={new_cmds}')
                         if not preserve_task:
                             task_memory.mark_step_failed(i, "replanned")
+                            task_memory.record_event(
+                                'replan',
+                                reason='activity_stuck_replan',
+                                command=cmd_str,
+                                step=i,
+                                details={'new_commands': list(new_cmds)},
+                            )
                         self._step_results.append({"cmd": cmd_str, "status": "replanned", "error": "replanned"})
                         if not preserve_task:
                             task_memory.replace_remaining_steps(i, new_cmds)
@@ -552,3 +572,4 @@ def _parse(cmd_str: str) -> dict:
     """Parse "mine diamond 41" → {"command": "mine", "args": ["diamond", "41"]}"""
     parts = cmd_str.split()
     return {'command': parts[0], 'args': parts[1:] if len(parts) > 1 else []}
+

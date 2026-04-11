@@ -149,10 +149,41 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     mem_summary = exploration_memory.summary_for_prompt()
     mem_section = f"\n【已知資源位置（探索記憶）】\n{mem_summary}\n" if mem_summary else ""
 
+    recent_failures = task_memory.recent_failures()
+    failure_lines = []
+    for item in recent_failures[:6]:
+        failure_lines.append(
+            f"- goal={item.get('goal') or '（無）'}"
+            f" cmd={item.get('command') or '（無）'}"
+            f" activity={item.get('activity') or '（無）'}"
+            f" reason={item.get('reason') or '（無）'}"
+            f" at={item.get('at')}"
+        )
+    failure_section = (
+        "\n【最近失敗模式】\n" + "\n".join(failure_lines) + "\n"
+        if failure_lines else ""
+    )
+
+    recent_events = task_memory.recent_events()
+    event_lines = []
+    for item in recent_events[:6]:
+        event_lines.append(
+            f"- {item.get('type')} goal={item.get('goal') or '（無）'}"
+            f" cmd={item.get('command') or '（無）'}"
+            f" reason={item.get('reason') or '（無）'}"
+            f" at={item.get('at')}"
+        )
+    event_section = (
+        "\n【最近任務事件】\n" + "\n".join(event_lines) + "\n"
+        if event_lines else ""
+    )
+
     prompt = (
         "請根據以下機器人狀態摘要，決定下一個自主任務。\n\n"
         f"{summary_json(state)}"
         f"{mem_section}"
+        f"{event_section}"
+        f"{failure_section}"
     )
 
     response = None

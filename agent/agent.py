@@ -738,6 +738,16 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 cmds = a.get("commands", [])
                 if executor.is_running():
                     print(f"[Agent] activity_stuck replan: {cmds}")
+                    task_memory.record_event(
+                        "replan",
+                        reason=state.get("reason") or "activity_stuck",
+                        command=(state.get("plan_context") or {}).get("current_cmd"),
+                        step=(state.get("plan_context") or {}).get("current_step"),
+                        details={
+                            "detail": state.get("detail"),
+                            "new_commands": list(cmds),
+                        },
+                    )
                     executor.replan(cmds)
                 elif cmds:
                     print(f"[Agent] replan 但 executor 未執行，改為新計畫: {cmds}")
@@ -746,6 +756,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if isinstance(a, dict) and a.get("action") == "skip":
                 if executor.is_running():
                     print(f"[Agent] activity_stuck skip 當前步驟")
+                    task_memory.record_event(
+                        "skip",
+                        reason=state.get("reason") or "activity_stuck",
+                        command=(state.get("plan_context") or {}).get("current_cmd"),
+                        step=(state.get("plan_context") or {}).get("current_step"),
+                        details={"detail": state.get("detail")},
+                    )
                     executor.skip_step()
                 else:
                     print("[Agent] 收到 skip 但 executor 未執行，忽略")

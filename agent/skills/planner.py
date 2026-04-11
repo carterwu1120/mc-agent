@@ -84,6 +84,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
   - 背包無生食 → 先 hunt count <food_target>，再 getfood count <food_target>
     （不要假設每隻動物會掉 2 個原料；hunt count 與熟食目標先採 1:1 的保守估計）
   - 不要使用 fish 作為前置步驟，除非玩家明確要求釣魚
+- 若玩家是在「回去 / 恢復 / 繼續」先前的挖礦或挖鑽石任務，且背包熟食已至少 16 份，優先直接接回挖礦鏈；不要重新加入 hunt / getfood，除非玩家明確要求先補食物
 
 工具鏈：
 - 挖鑽石 → 需要鐵鎬（iron_pickaxe）→ 需要鐵錠 → 若背包無鐵錠：先補足做鐵鎬所需的鐵（通常 3 個 iron_ingot），再 mine diamond
@@ -138,6 +139,8 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 
 - 不要重複已完成的步驟，直接從待執行的第一步開始
 - tp 指令格式：tp <x> <y> <z>（使用整數座標，不要加小數點）
+- 若玩家明確說「從這邊開始」、「在這裡開始」、「不要回去，直接在這挖」，
+  代表要以目前位置重新開始，不要回上次工作位置；此時應視為 fresh task，而不是 resume
 """
 
 RESUME_PATTERNS = [
@@ -151,6 +154,42 @@ RESUME_PATTERNS = [
     r"繼續.{0,6}中斷",
     r"接.{0,4}上次",
     r"接.{0,4}回來",
+]
+
+RESTART_FROM_HERE_PATTERNS = [
+    r"從這邊開始",
+    r"從這裡開始",
+    r"在這邊開始",
+    r"在這裡開始",
+    r"就在這裡",
+    r"就在這邊",
+    r"不要回去",
+    r"別回去",
+    r"直接在這",
+    r"直接在這裡",
+    r"直接在這邊",
+]
+
+MINING_INTENT_PATTERNS = [
+    r"挖礦",
+    r"挖鐵",
+    r"挖金",
+    r"挖煤",
+    r"挖鑽石",
+    r"\bmine\b",
+]
+
+RETURN_TO_MINING_PATTERNS = [
+    r"回去.*挖",
+    r"回去.*mine",
+    r"恢復.*挖",
+    r"恢復.*mine",
+    r"繼續.*挖",
+    r"繼續.*mine",
+    r"接著.*挖",
+    r"接著.*mine",
+    r"回來.*挖",
+    r"回來.*mine",
 ]
 
 COME_PATTERNS = [
@@ -519,6 +558,152 @@ def _maybe_plan_resume(message: str, state: dict) -> dict | None:
     }
 
 
+def _is_resume_message(message: str) -> bool:
+    return any(re.search(p, message, re.IGNORECASE) for p in RESUME_PATTERNS)
+
+
+def _is_restart_from_here_message(message: str) -> bool:
+    return any(re.search(p, message, re.IGNORECASE) for p in RESTART_FROM_HERE_PATTERNS)
+
+
+def _is_mining_intent_message(message: str) -> bool:
+    lowered = message.lower()
+    return any(re.search(p, lowered if p.startswith(r"\b") else message, re.IGNORECASE) for p in MINING_INTENT_PATTERNS)
+
+
+def _is_return_to_recent_mining_message(message: str) -> bool:
+    if _is_restart_from_here_message(message):
+        return False
+    if not _is_mining_intent_message(message):
+        return False
+    return any(re.search(p, message, re.IGNORECASE) for p in RETURN_TO_MINING_PATTERNS)
+
+
+def _food_summary(state: dict) -> dict:
+    summary = json.loads(summary_json(state))
+    return ((summary.get("resources") or {}).get("food") or {})
+
+
+def _has_sufficient_food_for_resume(state: dict, threshold: int = 16) -> bool:
+    food = _food_summary(state)
+    cooked_total = int(food.get("cooked_total", 0) or 0)
+    return cooked_total >= threshold
+
+
+def _strip_food_prep_prefix(commands: list[str], keep_stop_prefix: bool = True) -> list[str]:
+    if not commands:
+        return []
+
+    kept: list[str] = []
+    index = 0
+    if keep_stop_prefix:
+        while index < len(commands):
+            head = (commands[index] or "").strip()
+            if not head.startswith("stop"):
+                break
+            kept.append(head)
+            index += 1
+
+    while index < len(commands):
+        cmd = (commands[index] or "").strip()
+        if not cmd:
+            index += 1
+            continue
+        if cmd.startswith("hunt ") or cmd.startswith("getfood ") or cmd.startswith("fish "):
+            index += 1
+            continue
+        break
+
+    return kept + [cmd for cmd in commands[index:] if cmd]
+
+
+def _task_remaining_commands(task: dict | None) -> list[str]:
+    if not task:
+        return []
+    steps = task.get("steps", [])
+    current_step = int(task.get("currentStep", 0) or 0)
+    remaining = [
+        s["cmd"] for s in steps[current_step:]
+        if s.get("status") not in ("done", "failed")
+    ] or task.get("commands", [])[current_step:]
+    return list(remaining)
+
+
+def _find_recent_mining_task() -> dict | None:
+    current = task_memory.load_any()
+    candidates: list[dict] = []
+    if current:
+        candidates.append(current)
+    candidates.extend(task_memory.interrupted_tasks())
+    for task in candidates:
+        remaining = _task_remaining_commands(task)
+        if any((cmd or "").split()[:1] == ["mine"] for cmd in remaining):
+            return task
+    return None
+
+
+def _maybe_plan_restart_from_here(message: str, state: dict) -> dict | None:
+    if not _is_restart_from_here_message(message):
+        return None
+    if not _is_mining_intent_message(message):
+        return None
+
+    task = _find_recent_mining_task()
+    if not task:
+        return None
+
+    commands = _task_remaining_commands(task)
+    if not commands:
+        return None
+
+    commands = [cmd for cmd in commands if not cmd.startswith("tp ")]
+    if not commands:
+        return None
+
+    activity = state.get("activity", "idle")
+    stop_cmd = _stop_command_for_activity(activity)
+    if activity not in (None, "idle") and stop_cmd:
+        commands = [stop_cmd] + commands
+
+    return {
+        "action": "plan",
+        "goal": task.get("goal", "從目前位置重新開始任務"),
+        "commands": normalize_commands(commands),
+        "resume_task": False,
+    }
+
+
+def _maybe_plan_return_to_recent_mining(message: str, state: dict) -> dict | None:
+    if not _is_return_to_recent_mining_message(message):
+        return None
+
+    task = _find_recent_mining_task()
+    if not task:
+        return None
+
+    commands = _task_remaining_commands(task)
+    if not commands:
+        return None
+
+    if _has_sufficient_food_for_resume(state, threshold=16):
+        commands = _strip_food_prep_prefix(commands)
+
+    if not commands:
+        return None
+
+    activity = state.get("activity", "idle")
+    stop_cmd = _stop_command_for_activity(activity)
+    if activity not in (None, "idle") and stop_cmd and commands[0] != stop_cmd:
+        commands = [stop_cmd] + commands
+
+    return {
+        "action": "plan",
+        "goal": task.get("goal", "恢復近期挖礦任務"),
+        "commands": normalize_commands(commands),
+        "resume_task": False,
+    }
+
+
 def _maybe_plan_come(message: str, activity: str, player_name: str | None) -> dict | None:
     lowered = message.lower()
     if not any(re.search(pattern, lowered if pattern.startswith(r"\b") else message) for pattern in COME_PATTERNS):
@@ -640,6 +825,35 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             + work_pos_str
         )
 
+    recent_events = task_memory.recent_events()
+    event_lines = []
+    for item in recent_events[:6]:
+        event_lines.append(
+            f"- {item.get('type')} goal={item.get('goal') or '（無）'}"
+            f" cmd={item.get('command') or '（無）'}"
+            f" reason={item.get('reason') or '（無）'}"
+            f" at={item.get('at')}"
+        )
+    recent_events_section = (
+        "\n【最近任務事件】\n" + "\n".join(event_lines) + "\n"
+        if event_lines else ""
+    )
+
+    recent_failures = task_memory.recent_failures()
+    failure_lines = []
+    for item in recent_failures[:6]:
+        failure_lines.append(
+            f"- goal={item.get('goal') or '（無）'}"
+            f" cmd={item.get('command') or '（無）'}"
+            f" activity={item.get('activity') or '（無）'}"
+            f" reason={item.get('reason') or '（無）'}"
+            f" at={item.get('at')}"
+        )
+    recent_failures_section = (
+        "\n【最近失敗模式】\n" + "\n".join(failure_lines) + "\n"
+        if failure_lines else ""
+    )
+
     chests_summary = "\n".join(
         f"- id={c['id']} label={c.get('label','未分類')} freeSlots={c.get('freeSlots','?')} contents={[i['name'] for i in c.get('contents', [])]}"
         for c in chests
@@ -652,6 +866,8 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}{task_ctx}\n\n"
         f"已登記箱子：\n{chests_summary}\n\n"
+        f"{recent_events_section}"
+        f"{recent_failures_section}"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請根據玩家的話決定要做什麼。"
     )
@@ -660,6 +876,14 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     try:
         print(f"[Planner] 玩家: {message}")
 
+        shortcut = _maybe_plan_restart_from_here(message, state)
+        if shortcut:
+            print(f"[Planner] 就地重開任務快捷規劃: {shortcut.get('commands')}")
+            return shortcut
+        shortcut = _maybe_plan_return_to_recent_mining(message, state)
+        if shortcut:
+            print(f"[Planner] 回去挖礦快捷規劃: {shortcut.get('commands')}")
+            return shortcut
         shortcut = _maybe_plan_resume(message, state)
         if shortcut:
             if shortcut.get("action") == "plan":

@@ -9,7 +9,11 @@ FILE = os.path.join(os.path.dirname(__file__), 'data', 'task.json')
 
 MAX_INTERRUPTED_TASKS = 3
 MAX_RECENT_TRANSITIONS = 10
+MAX_RECENT_EVENTS = 20
+MAX_RECENT_FAILURES = 8
 INTERRUPTED_TTL = timedelta(hours=6)
+EVENT_TTL = timedelta(hours=6)
+FAILURE_TTL = timedelta(hours=6)
 
 _TASK_KEYS = {
     "id", "goal", "final_goal", "commands", "steps", "currentStep",
@@ -36,6 +40,8 @@ def save(goal: str, commands: list, final_goal: str | None = None) -> dict:
         "createdAt": _now_iso(),
         "interruptedTasks": list((prev or {}).get("interruptedTasks") or []),
         "recentTransitions": list((prev or {}).get("recentTransitions") or []),
+        "recentEvents": list((prev or {}).get("recentEvents") or []),
+        "recentFailures": list((prev or {}).get("recentFailures") or []),
     }
     if prev and prev.get("status") in ("running", "interrupted") and prev.get("goal") != goal:
         _append_transition(
@@ -79,6 +85,16 @@ def mark_step_failed(step: int, error: str | None = None) -> None:
     if t and "steps" in t and step < len(t["steps"]):
         t["steps"][step]["status"] = "failed"
         t["steps"][step]["error"] = error
+        cmd = (t["steps"][step] or {}).get("cmd")
+        expected_activity = _command_to_activity(cmd)
+        _append_failure(
+            t,
+            goal=t.get("goal"),
+            cmd=cmd,
+            step=step,
+            reason=error or "failed",
+            activity=expected_activity,
+        )
         _write(t)
 
 
@@ -225,7 +241,24 @@ def update_latest_interrupted_step_context(step: int, patch: dict) -> None:
 
 
 def interrupt(reason: str) -> None:
-    _patch({"status": "interrupted", "interruptedBy": reason})
+    t = _load_raw()
+    if t is None:
+        return
+    t["status"] = "interrupted"
+    t["interruptedBy"] = reason
+    steps = t.get("steps") or []
+    current_step = int(t.get("currentStep", 0) or 0)
+    command = steps[current_step].get("cmd") if 0 <= current_step < len(steps) else None
+    _append_event(
+        t,
+        event_type=_event_type_for_interrupt_reason(reason),
+        reason=reason,
+        from_task=t,
+        to_goal=t.get("goal"),
+        command=command,
+        step=current_step,
+    )
+    _write(t)
 
 
 def done() -> None:
@@ -253,8 +286,74 @@ def resume_interrupted(new_commands: list | None = None, goal: str | None = None
         t["goal"] = goal
     t["status"] = "running"
     t["interruptedBy"] = None
+    _append_event(
+        t,
+        event_type="resumetask",
+        reason="resume_interrupted",
+        from_task=t,
+        to_goal=t.get("goal"),
+        command=(t.get("steps") or [{}])[current_step].get("cmd") if (t.get("steps") or []) and current_step < len(t.get("steps") or []) else None,
+        step=current_step,
+    )
     _write(t)
     return t
+
+
+def record_event(
+    event_type: str,
+    *,
+    reason: str | None = None,
+    details: dict | None = None,
+    to_goal: str | None = None,
+    command: str | None = None,
+    step: int | None = None,
+) -> None:
+    t = _load_raw() or _normalize_root({})
+    _append_event(
+        t,
+        event_type=event_type,
+        reason=reason,
+        details=details,
+        from_task=t if t.get("goal") else None,
+        to_goal=to_goal,
+        command=command,
+        step=step,
+    )
+    _write(t)
+
+
+def recent_events() -> list[dict]:
+    t = _load_raw()
+    if not t:
+        return []
+    return list(t.get("recentEvents") or [])
+
+
+def record_failure(
+    *,
+    reason: str,
+    cmd: str | None = None,
+    step: int | None = None,
+    goal: str | None = None,
+    activity: str | None = None,
+) -> None:
+    t = _load_raw() or _normalize_root({})
+    _append_failure(
+        t,
+        goal=goal or t.get("goal"),
+        cmd=cmd,
+        step=step,
+        reason=reason,
+        activity=activity or _command_to_activity(cmd),
+    )
+    _write(t)
+
+
+def recent_failures() -> list[dict]:
+    t = _load_raw()
+    if not t:
+        return []
+    return list(t.get("recentFailures") or [])
 
 
 def load() -> dict | None:
@@ -309,6 +408,8 @@ def _normalize_root(data: dict) -> dict:
     root = dict(data or {})
     root.setdefault("interruptedTasks", [])
     root.setdefault("recentTransitions", [])
+    root.setdefault("recentEvents", [])
+    root.setdefault("recentFailures", [])
     root.setdefault("context", {})
     root.setdefault("runtime", {})
     root.setdefault("commands", [])
@@ -332,6 +433,20 @@ def _prune(root: dict) -> None:
         if normalized:
             transitions.append(normalized)
     root["recentTransitions"] = transitions[:MAX_RECENT_TRANSITIONS]
+
+    events = []
+    for item in root.get("recentEvents") or []:
+        normalized = _normalize_event(item)
+        if normalized:
+            events.append(normalized)
+    root["recentEvents"] = events[:MAX_RECENT_EVENTS]
+
+    failures = []
+    for item in root.get("recentFailures") or []:
+        normalized = _normalize_failure(item)
+        if normalized:
+            failures.append(normalized)
+    root["recentFailures"] = failures[:MAX_RECENT_FAILURES]
 
 
 def _normalize_archived_task(task: dict | None) -> dict | None:
@@ -387,6 +502,122 @@ def _append_transition(root: dict, *, from_task: dict | None, to_goal: str | Non
     recent = list(root.get("recentTransitions") or [])
     recent.insert(0, transition)
     root["recentTransitions"] = recent
+
+
+def _append_event(
+    root: dict,
+    *,
+    event_type: str,
+    reason: str | None = None,
+    details: dict | None = None,
+    from_task: dict | None = None,
+    to_goal: str | None = None,
+    command: str | None = None,
+    step: int | None = None,
+) -> None:
+    event = {
+        "type": event_type,
+        "goal": (from_task or {}).get("goal"),
+        "toGoal": to_goal,
+        "reason": reason,
+        "command": command,
+        "step": step,
+        "details": dict(details or {}),
+        "at": _now_iso(),
+    }
+    recent = list(root.get("recentEvents") or [])
+    recent.insert(0, event)
+    root["recentEvents"] = recent
+
+
+def _append_failure(
+    root: dict,
+    *,
+    goal: str | None,
+    cmd: str | None,
+    step: int | None,
+    reason: str,
+    activity: str | None,
+) -> None:
+    failure = {
+        "goal": goal,
+        "command": cmd,
+        "step": step,
+        "reason": reason,
+        "activity": activity,
+        "at": _now_iso(),
+    }
+    recent = list(root.get("recentFailures") or [])
+    recent.insert(0, failure)
+    root["recentFailures"] = recent
+
+
+def _normalize_event(item: dict | None) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    at = _parse_iso(item.get("at"))
+    if at and datetime.utcnow() - at > EVENT_TTL:
+        return None
+    event_type = item.get("type")
+    if not event_type:
+        return None
+    return {
+        "type": event_type,
+        "goal": item.get("goal"),
+        "toGoal": item.get("toGoal"),
+        "reason": item.get("reason"),
+        "command": item.get("command"),
+        "step": item.get("step"),
+        "details": dict(item.get("details") or {}),
+        "at": item.get("at") or _now_iso(),
+    }
+
+
+def _normalize_failure(item: dict | None) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    at = _parse_iso(item.get("at"))
+    if at and datetime.utcnow() - at > FAILURE_TTL:
+        return None
+    if not item.get("reason"):
+        return None
+    return {
+        "goal": item.get("goal"),
+        "command": item.get("command"),
+        "step": item.get("step"),
+        "reason": item.get("reason"),
+        "activity": item.get("activity"),
+        "at": item.get("at") or _now_iso(),
+    }
+
+
+def _command_to_activity(cmd: str | None) -> str | None:
+    verb = (cmd or "").split()[0] if cmd else ""
+    return {
+        "mine": "mining",
+        "chop": "chopping",
+        "fish": "fishing",
+        "smelt": "smelting",
+        "hunt": "hunting",
+        "getfood": "getfood",
+        "equip": "equip",
+        "deposit": "deposit",
+        "explore": "explore",
+        "surface": "surface",
+    }.get(verb, verb or None)
+
+
+def _event_type_for_interrupt_reason(reason: str | None) -> str:
+    lowered = (reason or "").lower()
+    if "abort" in lowered:
+        return "abort"
+    if "resume" in lowered:
+        return "resumetask"
+    if "interrupt" in lowered:
+        return "interrupt"
+    if "skip" in lowered:
+        return "skip"
+    return "interrupt"
 
 
 def _now_iso() -> str:

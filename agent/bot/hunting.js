@@ -83,11 +83,13 @@ function _resumeHunting(bot, originalGoal) {
     _loop(bot, originalGoal)
 }
 
-function stopHunting(_bot) {
-    if (!isHunting) return
+function stopHunting(bot) {
+    if (!isHunting && !activityStack.has('hunting')) return
     isHunting = false
     _isPaused = false
     _loopGen++
+    activityStack.remove(bot, 'hunting', { resumePrevious: false })
+    console.log('[Hunt] 停止狩獵')
 }
 
 async function _loop(bot, goal) {
@@ -203,6 +205,11 @@ async function _reportNoWeaponStuck(bot, goal = {}, expectedGen = null) {
     const remaining = Math.max(1, (goal.count ?? 3) - _killCount)
     console.log(`[Hunt] 沒有可用武器且無法合成，改由上層重新規劃（剩餘 ${remaining}）`)
     isHunting = false
+    _isPaused = false
+    _loopGen++
+    if (activityStack.has('hunting')) {
+        activityStack.remove(bot, 'hunting', { resumePrevious: false })
+    }
     bridge.sendState(bot, 'activity_stuck', {
         activity: 'hunting',
         reason: 'no_weapon',

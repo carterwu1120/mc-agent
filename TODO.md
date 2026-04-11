@@ -2,6 +2,21 @@
 
 ## 進行中 / 近期
 
+- [ ] **Task memory 補強**（agent working memory）
+  - 目標：補齊短期任務記憶，讓 bot 在重啟、compact、replan 多次之後，仍能知道「之前做到哪、為什麼停下來、這次變更過哪些步驟」。
+  - [ ] 若之後需要完整歷史，再另外補 `task_history.jsonl` 或 SQLite；`task.json` 仍維持短期工作記憶
+
+- [ ] **Python 側 context 清理機制**
+  - 長時間運作後，每次 LLM call 會夾帶大量舊 state，導致 context 品質劣化、成本上升。
+    需要定期清理 / 壓縮不再需要的歷史事件，讓主線 context 保持精簡。
+    （概念類似 Claude Code 的 subagent context firewall：只把結論傳回主線，不讓過程污染主 context。）
+  - 依賴：優先利用 task / interaction / reflection memory 的摘要，而不是直接把原始歷史塞進 prompt
+
+- [ ] **Dashboard**（agent observability）
+  - Python 側加輕量 HTTP server，expose `/state` endpoint；
+    簡單 HTML 頁面顯示：activity / progress / 背包 / 裝備 / 最近 LLM 決策。
+  - 建議資料模型從一開始就保留 multi-agent 擴充空間，例如 `agents[]` 而不是只綁單一 bot
+
 - [ ] **Manual override / interrupt 機制**
   - 目標：當 bot 正在執行 task、等待 stuck recovery、或卡在某個 activity 時，玩家可以可靠地打斷它，讓它優先執行新的要求
   - 需要同時支援兩種入口：
@@ -9,7 +24,14 @@
     - 自然語言：例如「你先去砍樹」、「先別挖了，回地表」、「先來找我」、「先停一下」
   - 系統層需要明確區分：新任務 / 插隊任務 / 取消當前任務 / 恢復原任務，而不是只把這些話當成普通 chat 丟給 planner
   - executor / activity_stack / stuck recovery 需要能接受人工覆蓋訊號，避免舊流程仍在背景等待，和新任務互相打架
+  - 下一步聚焦：補自然語言 interrupt / resume 分類，不只靠前綴判斷
   - 後續可延伸成 dashboard 上的手動控制入口，並作為 multi-agent coordinator 介入單一 bot 的基礎能力
+
+- [ ] **強化 self_task 自主規劃**（Spatial memory 已接入，下一步做 deterministic 強化）
+  - [x] 已把 exploration memory 接入 self_task prompt，LLM 已能看到已知礦點 / 森林 / 動物區
+  - [ ] 目標分解下沉：目前 planner 已支援部分裝備 / 工具需求的缺口推算；下一步是把這種推理擴展成更通用的系統層目標分解，而不只限於 equipment 類需求
+  - [ ] 資源導向規劃下沉：缺某樣資源時，優先查詢 spatial memory 的已知位置，再決定是否 explore
+  - [ ] 補 deterministic 選點策略：多個已知資源點時，定義最新 / 最近 / 最可信的選擇規則，而不是完全交給 LLM 自由發揮
 
 - [ ] **Next: 通用 tool acquisition policy（工具取得/重試策略下沉）**
   - 目標：不要讓 `woodcutting` / `mining` / `combat` 各自發明一套 `ensureAxe` / `ensurePickaxe` / `ensureSword` 重試流程
@@ -29,18 +51,10 @@
     - [x] self_task 讀取記憶，優先去已知資源位置規劃任務
     - [ ] 補上 biome / explored_chunks / 已探索區域密度，讓 explore 類任務不只記資源點，也記地圖覆蓋狀態
     - [ ] 記錄已知工作點（礦坑入口 / 熔爐 / 工作檯 / 常用補給點），讓 self_task 能規劃更穩定的往返路線
-  - [ ] **Task memory 補強**（task.json / task history）
-    - 目前已經有 task.json、steps、currentStep、interrupt / done / resume、step context 與 resumetask，
-      但還缺更完整的歷史與回顧能力。目標是讓 bot 在重啟、compact、replan 多次之後，
-      仍能知道「之前做到哪、為什麼停下來、這次變更過哪些步驟」。
-    - [x] 保留當前 task、steps、currentStep、step status、step context
-    - [x] 支援 interrupted / resumed / done 的基本任務生命週期
-    - [x] planner / executor / self_task 可讀取目前 task 脈絡
-    - [x] `task.json` 整合短期 interrupted memory（`interruptedTasks`）與 recent transitions（`recentTransitions`）
-    - [x] 寫入 `task.json` 時自動做 normalize / prune，維持短期工作記憶而不是無限累積
+  - [ ] **Task history / long-term task recall**
+    - 在 working memory 之外，另外補完整 task history（例如 `task_history.jsonl` / SQLite），支援時間線回顧與長期分析。
     - [ ] 記錄完整 task history（不只覆蓋目前 task.json）
-    - [ ] 記錄 recent replans、skip、abort、resumetask 的歷史原因與時間線
-    - [ ] 讓 planner / self_task 可讀取「最近失敗模式」而不只讀當前 task 狀態
+    - [ ] 規劃與 `Dashboard` / multi-agent coordinator 的歷史查詢接口
   - [ ] **Interaction memory**（interaction_memory.json）
     - 讓 bot 不只記得任務，也記得玩家偏好、近期重要對話、長期目標與尚未結束的主題，
       讓互動更像持續合作，而不是每次都從零開始。
@@ -53,26 +67,11 @@
     - [ ] 記錄已知工作點、常用礦坑、危險區域、可重用設施
     - [ ] 支援 bot 主動在視窗分享觀察、建議與下一步提醒
 
-- [ ] **強化 self_task 自主規劃**（Spatial memory 已接入，下一步做 deterministic 強化）
-  - [x] 已把 exploration memory 接入 self_task prompt，LLM 已能看到已知礦點 / 森林 / 動物區
-  - [ ] 目標分解下沉：目前 planner 已支援部分裝備 / 工具需求的缺口推算；下一步是把這種推理擴展成更通用的系統層目標分解，而不只限於 equipment 類需求
-  - [ ] 資源導向規劃下沉：缺某樣資源時，優先查詢 spatial memory 的已知位置，再決定是否 explore
-  - [ ] 補 deterministic 選點策略：多個已知資源點時，定義最新 / 最近 / 最可信的選擇規則，而不是完全交給 LLM 自由發揮
-
 - [ ] **通用 craft / ensure retry 記憶體**
   - 目前 `woodcutting` 的 `ensureAxe` 已看出局部跳針：同一輪內重複補工具、材料剛變一點就整套重試
   - 不先做每個 skill 的局部修補；之後應抽成共享機制，讓所有 `ensureTool` 類流程共用
   - 方向：記錄最近一次 craft/ensure 嘗試的資源 fingerprint、成功/失敗結果、cooldown、以及「inventory 哪些變化才值得重試」
   - 先列為架構型技術債，避免現在為 `woodcutting` 單點加太多特例
-
-- [ ] **Python 側 context 清理機制**
-  - 長時間運作後，每次 LLM call 會夾帶大量舊 state，導致 context 品質劣化、成本上升。
-    需要定期清理 / 壓縮不再需要的歷史事件，讓主線 context 保持精簡。
-    （概念類似 Claude Code 的 subagent context firewall：只把結論傳回主線，不讓過程污染主 context。）
-
-- [ ] **Dashboard**（單 bot 即時監控）
-  - Python 側加輕量 HTTP server，expose `/state` endpoint；
-    簡單 HTML 頁面顯示：activity / progress / 背包 / 裝備 / 最近 LLM 決策。
 
 - [ ] **Docker 化單 bot**（確認 container 能正常啟動）
 
@@ -159,3 +158,16 @@
 - [x] tp 指令加入 planner（恢復任務時可傳送到上次工作位置）
 - [x] 強化 planner 前置條件推理（模糊指令 → 自動展開完整 plan）
 - [x] executor 錯誤處理（step 失敗時不卡住，能 skip 或 abort）
+- [x] **Task memory 基礎版**
+  - 保留當前 task、steps、currentStep、step status、step context
+  - 支援 interrupted / resumed / done 的基本任務生命週期
+  - planner / executor / self_task 可讀取目前 task 脈絡
+  - `task.json` 整合短期 interrupted memory（`interruptedTasks`）與 recent transitions（`recentTransitions`）
+  - 寫入 `task.json` 時自動做 normalize / prune，維持短期工作記憶而不是無限累積
+- [x] **Task memory 事件 / 失敗模式補強**
+  - 記錄 recent replans、skip、abort、resumetask 的歷史原因與時間線
+  - planner / self_task 可讀取 `recentFailures`，不只讀當前 task 狀態
+- [x] **恢復挖礦 / 食物鏈 deterministic 補強**
+  - `回去 / 恢復 / 繼續挖礦` 類語句優先走 deterministic 恢復最近 mining task，而不是完全交給 LLM 重規劃
+  - 恢復 mining / diamond 任務時，若熟食已足夠（目前先用 `cooked_total >= 16`），不再重建 `hunt / getfood` 前置鏈
+  - `hunting -> mine` 的 no-weapon shortcut 改成真正終止 hunting activity，而不是把 hunting 殘留在 stack 裡
