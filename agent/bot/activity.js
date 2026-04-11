@@ -94,6 +94,10 @@ function forget(name) {
     markStopped(name, 'forgotten')
 }
 
+function has(name) {
+    return _stack.some(frame => frame.activity === name)
+}
+
 // ── Registration ─────────────────────────────────────────────────────────────
 
 function register(name, pauseFn, options = {}) {
@@ -163,6 +167,23 @@ function updateProgress(data) {
     }
 }
 
+function remove(bot, name, options = {}) {
+    const { resumePrevious = false } = options
+    const index = _stack.map(frame => frame.activity).lastIndexOf(name)
+    if (index === -1) return
+
+    const wasTop = index === _stack.length - 1
+    const [removed] = _stack.splice(index, 1)
+    markStopped(removed.activity, 'remove')
+    console.log(`[Activity] remove ${removed.activity} -> ${_stackLabel()}`)
+
+    if (resumePrevious && wasTop && _stack.length > 0) {
+        const prev = _stack[_stack.length - 1]
+        console.log(`[Activity] resume ${prev.activity}`)
+        if (prev.resumeFn) prev.resumeFn(bot)
+    }
+}
+
 // Update the top frame's goal and reset its progress (used by _resumeX internals).
 function updateTopGoal(goal) {
     const top = _stack[_stack.length - 1]
@@ -198,9 +219,10 @@ function getStack() {
 }
 
 module.exports = {
-    register, push, pop, pause, resumeCurrent,
+    register, push, pop, remove, pause, resumeCurrent,
     updateProgress, updateTopGoal, updateTopFrame, getTopFrame,
     getActivity, getStack,
     markStarted, markPaused, markStopped, touch,
+    has,
     getRuntimeState, isTopActivity, isStale, forget, getActivityOptions,
 }

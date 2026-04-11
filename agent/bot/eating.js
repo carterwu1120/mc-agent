@@ -34,9 +34,14 @@ let _isEating = false
 let _lastEatTime = 0
 let _lastFoodLowTime = 0
 const EAT_COOLDOWN = 4000  // 吃完後 4 秒內不再觸發
+let _monitorTimer = null
 
 function _sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function _foodLevel(bot) {
+    return Number.isFinite(bot.food) ? bot.food : null
 }
 
 function _waitForFoodIncrease(bot, beforeFood, timeoutMs = 2000) {
@@ -59,14 +64,16 @@ function _waitForFoodIncrease(bot, beforeFood, timeoutMs = 2000) {
 }
 
 async function _tryEat(bot) {
+    const foodLevel = _foodLevel(bot)
+    if (foodLevel === null) return
     if (_isEating) return
     if (Date.now() - _lastEatTime < EAT_COOLDOWN) return
-    if (bot.food >= 20) return
+    if (foodLevel >= 20) return
 
     const activity = getActivity()
     // 在戰鬥、狩獵、挖礦等高度依賴 path goal 的活動中，非緊急先不要插隊吃，
     // 否則 setGoal(null) 會一直打斷主行為。
-    if (activity !== 'idle' && EAT_DEFER_ACTIVITIES.has(activity) && bot.food > FOOD_LOW_THRESHOLD) {
+    if (activity !== 'idle' && EAT_DEFER_ACTIVITIES.has(activity) && foodLevel > FOOD_LOW_THRESHOLD) {
         return
     }
 
@@ -78,7 +85,7 @@ async function _tryEat(bot) {
 
     _isEating = true
     const prevItem = bot.heldItem
-    const beforeFood = bot.food
+    const beforeFood = foodLevel
     try {
         // 移動或挖掘會中斷 Mineflayer 的進食，先停下來再吃。
         bot.pathfinder?.setGoal(null)
@@ -107,19 +114,23 @@ async function _tryEat(bot) {
 }
 
 function _checkFoodLow(bot) {
-    if (bot.food >= FOOD_LOW_THRESHOLD) return
+    const foodLevel = _foodLevel(bot)
+    if (foodLevel === null) return
+    if (foodLevel >= FOOD_LOW_THRESHOLD) return
     if (getActivity() !== 'idle') return
     if (Date.now() - _lastFoodLowTime < FOOD_LOW_COOLDOWN) return
     const hasFood = bot.inventory.items().some(i => FOOD_ITEMS.has(i.name))
     if (hasFood) return
     _lastFoodLowTime = Date.now()
-    console.log(`[Eat] 食物不足（${bot.food}/20），背包無食物 → food_low`)
+    console.log(`[Eat] 食物不足（${foodLevel}/20），背包無食物 → food_low`)
     bridge.sendState(bot, 'food_low')
 }
 
 function startMonitor(bot) {
     const check = () => {
-        if (bot.food < FOOD_THRESHOLD) {
+        const foodLevel = _foodLevel(bot)
+        if (foodLevel === null) return
+        if (foodLevel < FOOD_THRESHOLD) {
             _tryEat(bot).catch(e => console.log(`[Eat] 自動進食失敗: ${e.message}`))
         }
         _checkFoodLow(bot)
@@ -129,6 +140,15 @@ function startMonitor(bot) {
     // 撿到物品時也檢查（玩家丟食物給 bot）
     bot.on('playerCollect', (collector) => {
         if (collector.username === bot.username) check()
+    })
+
+    if (_monitorTimer) clearInterval(_monitorTimer)
+    _monitorTimer = setInterval(check, 3000)
+    bot.once('end', () => {
+        if (_monitorTimer) {
+            clearInterval(_monitorTimer)
+            _monitorTimer = null
+        }
     })
 
     // 上線時立即檢查一次

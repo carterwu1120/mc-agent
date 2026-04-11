@@ -336,7 +336,7 @@ function _resumeMining(bot, originalGoal) {
 }
 
 function stopMining(bot) {
-    if (!isMining) return
+    if (!isMining && !activityStack.has('mining')) return
     isMining = false
     _isPaused = false
     _loopGen++  // invalidate current loop so it skips its own pop
@@ -352,7 +352,7 @@ function stopMining(bot) {
     } catch (_) {}
     activityStack.markStopped('mining', 'stop')
     console.log('[Mine] 停止挖礦')
-    activityStack.pop(bot)
+    activityStack.remove(bot, 'mining', { resumePrevious: false })
 }
 
 async function _loop(bot, goal = {}, resumePos = null) {

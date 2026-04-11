@@ -288,7 +288,7 @@ _NATURAL_INTERRUPT_PATTERNS = (
 
 
 def _save_current_task_to_memory(state: dict) -> None:
-    """把目前 activity stack 的頂層任務存進 task_memory，供之後 resume。"""
+    """把目前 activity stack 的頂層任務壓成短期 interrupted 記憶。"""
     stack = state.get("stack", [])
     if not stack:
         return
@@ -316,19 +316,26 @@ def _save_current_task_to_memory(state: dict) -> None:
         return
 
     goal_str = f"{activity} {goal}"
-    task_memory.interrupt("player_interrupt")
-    task_memory.save(goal_str, [resume_cmd])
     current_pos = _clean_pos(state.get("pos"))
     work_pos = _clean_pos(top.get("startPos")) or current_pos
-    task_memory.update_context({
+    context = {
         "expectedActivity": activity,
         "activeActivity": activity,
         "activeCommand": resume_cmd,
         "activityStack": _stack_activity_names(state),
         "workPos": work_pos,
         "currentPos": current_pos,
-    })
-    task_memory.update_step_context(0, {
+    }
+    runtime = {
+        "activeActivity": activity,
+        "activeCommand": resume_cmd,
+        "activityStack": _stack_activity_names(state),
+        "activeGoal": goal,
+        "activeProgress": progress,
+        "activeWorkPos": work_pos,
+        "currentPos": current_pos,
+    }
+    step_context = {
         "currentStepCmd": resume_cmd,
         "expectedActivity": activity,
         "stackActivity": activity,
@@ -336,8 +343,15 @@ def _save_current_task_to_memory(state: dict) -> None:
         "currentPos": current_pos,
         "goal": goal,
         "progress": progress,
-    })
-    task_memory.interrupt("player_interrupt")  # save 會重設 status，再標記一次
+    }
+    task_memory.remember_interrupted(
+        goal_str,
+        [resume_cmd],
+        context=context,
+        runtime=runtime,
+        reason="player_interrupt",
+    )
+    task_memory.update_latest_interrupted_step_context(0, step_context)
     print(f"[TaskMem] 儲存任務: {goal_str} → [{resume_cmd}]")
 
 

@@ -36,6 +36,8 @@
     - [x] 保留當前 task、steps、currentStep、step status、step context
     - [x] 支援 interrupted / resumed / done 的基本任務生命週期
     - [x] planner / executor / self_task 可讀取目前 task 脈絡
+    - [x] `task.json` 整合短期 interrupted memory（`interruptedTasks`）與 recent transitions（`recentTransitions`）
+    - [x] 寫入 `task.json` 時自動做 normalize / prune，維持短期工作記憶而不是無限累積
     - [ ] 記錄完整 task history（不只覆蓋目前 task.json）
     - [ ] 記錄 recent replans、skip、abort、resumetask 的歷史原因與時間線
     - [ ] 讓 planner / self_task 可讀取「最近失敗模式」而不只讀當前 task 狀態

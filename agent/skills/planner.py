@@ -481,7 +481,10 @@ def _maybe_plan_resume(message: str, state: dict) -> dict | None:
         return None
 
     task = task_memory.load()
-    if not task or task.get("status") != "interrupted":
+    resume_current = bool(task and task.get("status") == "interrupted")
+    if not resume_current:
+        task = task_memory.latest_interrupted()
+    if not task:
         return {"command": "chat", "text": "目前沒有可恢復的中斷任務。"}
 
     steps = task.get("steps", [])
@@ -512,7 +515,7 @@ def _maybe_plan_resume(message: str, state: dict) -> dict | None:
         "action": "plan",
         "goal": task.get("goal", "恢復中斷任務"),
         "commands": commands,
-        "resume_task": True,
+        "resume_task": resume_current,
     }
 
 

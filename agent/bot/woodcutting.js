@@ -122,12 +122,19 @@ function _resumeChopping(bot, originalGoal) {
     _loop(bot, originalGoal)
 }
 
-function stopChopping(_bot) {
-    if (!isChopping) return
+function stopChopping(bot) {
+    if (!isChopping && !activityStack.has('chopping')) return
     isChopping = false
     _isPaused = false
     _loopGen++
+    try {
+        bot.pathfinder?.setGoal(null)
+    } catch (_) {}
+    try {
+        bot.clearControlStates?.()
+    } catch (_) {}
     activityStack.markStopped('chopping', 'stop')
+    activityStack.remove(bot, 'chopping', { resumePrevious: false })
     console.log('[Wood] 停止砍樹')
 }
 
