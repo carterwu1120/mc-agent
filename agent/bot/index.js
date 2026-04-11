@@ -135,6 +135,19 @@ bot.once('health', () => {
 const _BOT_USERNAMES = new Set(
     (process.env.BOT_USERNAMES || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
 )
+for (const name of Array.from(_BOT_USERNAMES)) {
+    const base = name.replace(/\d+$/, '')
+    if (base && base !== name) _BOT_USERNAMES.add(base)
+}
+
+function _matchesAddress(target, username) {
+    const normalizedTarget = (target || '').trim().toLowerCase()
+    const normalizedUsername = (username || '').trim().toLowerCase()
+    if (!normalizedTarget || !normalizedUsername) return false
+    if (normalizedTarget === normalizedUsername) return true
+    const baseUsername = normalizedUsername.replace(/\d+$/, '')
+    return !!baseUsername && normalizedTarget === baseUsername
+}
 
 bot.on('chat', (username, message) => {
     if (username === bot.username) return
@@ -148,7 +161,7 @@ bot.on('chat', (username, message) => {
     if (addressMatch) {
         const [, target, rest] = addressMatch
         if (target.toLowerCase() !== 'all' &&
-            target.toLowerCase() !== bot.username.toLowerCase()) return
+            !_matchesAddress(target, bot.username)) return
         message = rest.trim()
     }
 

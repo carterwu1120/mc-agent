@@ -530,17 +530,17 @@ async function _findOrPlaceFurnace(bot) {
 
     // 背包沒有熔爐 → 嘗試合成
     if (!bot.inventory.items().some(i => i.name === 'furnace')) {
-        const cobble = _countItem(bot, 'cobblestone')
-        if (cobble < 8) {
-            const needed = 8 - cobble
-            console.log(`[Smelt] 沒有熔爐且 cobblestone 不足，交由 activity_stuck 決定下一步（還差 ${needed}）`)
+        const furnaceStone = _countItem(bot, 'cobblestone') + _countItem(bot, 'cobbled_deepslate')
+        if (furnaceStone < 8) {
+            const needed = 8 - furnaceStone
+            console.log(`[Smelt] 沒有熔爐且爐材不足，交由 activity_stuck 決定下一步（還差 ${needed}）`)
             _reportStuck(bot, {
                 reason: 'missing_dependency',
-                missing: ['cobblestone'],
+                missing: ['furnace_stone'],
                 needed_for: 'furnace',
                 missing_count: needed,
                 suggested_actions: ['mine', 'home', 'withdraw'],
-                detail: `缺少 ${needed} 個 cobblestone，無法合成熔爐`,
+                detail: `缺少 ${needed} 個可做熔爐的石材（cobblestone / cobbled_deepslate），無法合成熔爐`,
             })
             return null
         }

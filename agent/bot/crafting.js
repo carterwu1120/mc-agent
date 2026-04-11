@@ -289,6 +289,9 @@ async function ensureCraftingTable(bot) {
 
     if (!bot.inventory.items().some(i => i.name === 'crafting_table')) {
         if (_countPlanks(bot) < 4) {
+            await convertLogsToPlanks(bot, 2)
+        }
+        if (_countPlanks(bot) < 4) {
             console.log('[Craft] 木板不夠，無法製作工作檯')
             return null
         }
