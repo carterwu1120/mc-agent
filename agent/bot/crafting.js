@@ -75,6 +75,26 @@ const TOOL_PRIORITY = {
     _sword:   ['diamond_sword',   'iron_sword',     'stone_sword',   'golden_sword',  'wooden_sword'],
 }
 
+function _countLogs(bot) {
+    return bot.inventory.items()
+        .filter(i => i.name && i.name.endsWith('_log'))
+        .reduce((sum, i) => sum + i.count, 0)
+}
+
+function _countSticks(bot) {
+    return bot.inventory.items()
+        .filter(i => i.name === 'stick')
+        .reduce((sum, i) => sum + i.count, 0)
+}
+
+function _canStartBasicToolChain(bot) {
+    const logs = _countLogs(bot)
+    const planks = _countPlanks(bot)
+    const sticks = _countSticks(bot)
+    const hasTable = bot.inventory.items().some(i => i.name === 'crafting_table')
+    return logs > 0 || planks > 0 || sticks > 0 || hasTable
+}
+
 // 通用工具合成：確保背包有指定類型且達到最低等級的工具
 // minTier: e.g. 'iron_pickaxe'（需要鐵稿以上），null 代表任何等級都可以
 async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false, allowCraft = true) {
@@ -94,6 +114,10 @@ async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false, 
     }
 
     const toolName = minTier ?? toolSuffix.slice(1)
+    if (!_canStartBasicToolChain(bot)) {
+        console.log(`[Craft] 尚未有木材鏈，暫不嘗試合成 ${toolName}`)
+        return false
+    }
     console.log(`[Craft] 需要 ${toolName}，開始合成...`)
 
     await convertLogsToPlanks(bot, 3)
