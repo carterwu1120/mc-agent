@@ -849,6 +849,7 @@ async def run():
         task_memory.interrupt("agent_restart")
         print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
 
+    _dashboard.init(_latest_state, _thinking, _queued_player_tasks, _recent_stuck_events)
     asyncio.create_task(_dashboard.start())
 
     while True:

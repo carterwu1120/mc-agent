@@ -11,6 +11,7 @@ Port: DASHBOARD_PORT env var (default 3002)
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
 import pathlib
@@ -26,16 +27,30 @@ HTML_FILE   = pathlib.Path(__file__).parent / "dashboard.html"
 _CORS = {"Access-Control-Allow-Origin": "*"}
 
 
-# ── Lazy import of agent globals to avoid circular import at module load ──────
+# ── Shared state references (set by agent.py via init() before start()) ───────
+
+_latest_state: dict = {}
+_thinking: set = set()
+_queued_player_tasks: "collections.deque" = collections.deque()
+_recent_stuck_events: "collections.deque" = collections.deque()
+
+
+def init(
+    state: dict,
+    thinking: set,
+    queued_tasks,
+    stuck_events,
+) -> None:
+    """Called by agent.py at startup to bind shared mutable containers."""
+    global _latest_state, _thinking, _queued_player_tasks, _recent_stuck_events
+    _latest_state      = state
+    _thinking          = thinking
+    _queued_player_tasks = queued_tasks
+    _recent_stuck_events = stuck_events
+
 
 def _get_agent_globals() -> tuple:
-    import agent.agent as _ag
-    return (
-        _ag._latest_state,
-        _ag._thinking,
-        _ag._queued_player_tasks,
-        _ag._recent_stuck_events,
-    )
+    return _latest_state, _thinking, _queued_player_tasks, _recent_stuck_events
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -98,16 +113,22 @@ def _format_chests(chests: list) -> list:
 
 
 def _build_state() -> dict:
+    import datetime
     latest_state, thinking, queued_tasks, recent_stuck = _get_agent_globals()
     task        = task_memory.load_any()
     interrupted = task_memory.interrupted_tasks()[:3]
     chests      = _load_chests()
 
+    # Detect if we have real live data (health is always present in a real tick)
+    ws_connected = latest_state.get("health") is not None
+
     bot_data = {
         "id":   "bot0",
         "name": "Agent",
+        "ws_connected": ws_connected,
+        "state_updated_at": datetime.datetime.utcnow().isoformat() + "Z",
         "status": {
-            "activity": latest_state.get("activity", "idle"),
+            "activity": latest_state.get("activity") if ws_connected else None,
             "position": latest_state.get("pos"),
             "health":   latest_state.get("health"),
             "food":     latest_state.get("food"),
@@ -168,17 +189,17 @@ async def handle_index(request: web.Request) -> web.Response:
 
 async def start(port: int | None = None) -> None:
     port = port or int(os.environ.get("DASHBOARD_PORT", 3002))
-    app = web.Application()
-    app.router.add_get("/", handle_index)
-    app.router.add_get("/state", handle_state)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
     try:
+        app = web.Application()
+        app.router.add_get("/", handle_index)
+        app.router.add_get("/state", handle_state)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
         print(f"[Dashboard] http://localhost:{port}")
-    except OSError as e:
-        print(f"[Dashboard] 無法啟動 port {port}: {e}")
+    except Exception as e:
+        print(f"[Dashboard] 啟動失敗: {type(e).__name__}: {e}")
         return
     while True:
         await asyncio.sleep(3600)

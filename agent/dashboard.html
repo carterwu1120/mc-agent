@@ -229,12 +229,16 @@ function renderAgent(agent) {
   // Bot Status card
   const pos = s.position ? `${Math.round(s.position.x)}, ${Math.round(s.position.y)}, ${Math.round(s.position.z)}` : '—';
   const homeStr = s.home ? `${Math.round(s.home.x)}, ${Math.round(s.home.y)}, ${Math.round(s.home.z)}` : '未設定';
+  const disconnectedBanner = !agent.ws_connected
+    ? `<div style="background:#3a1a1a;border:1px solid var(--red);border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12px;color:var(--red)">⚠ JS Bot 尚未連線 — 等待 WebSocket tick...</div>`
+    : '';
   const statusCard = `
     <div class="card">
       <div class="card-title">Bot 狀態</div>
+      ${disconnectedBanner}
       ${barHtml('❤ 血量', s.health, 20, healthColor(s.health))}
       ${barHtml('🍗 飢餓', s.food, 20, '#d29922')}
-      <div class="stat-row"><span class="stat-key">活動</span><span class="stat-val">${s.activity || 'idle'}</span></div>
+      <div class="stat-row"><span class="stat-key">活動</span><span class="stat-val">${s.activity || (agent.ws_connected ? 'idle' : '—')}</span></div>
       <div class="stat-row"><span class="stat-key">位置</span><span class="stat-val">${pos}</span></div>
       <div class="stat-row"><span class="stat-key">基地</span><span class="stat-val">${homeStr}</span></div>
     </div>`;
