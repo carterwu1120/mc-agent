@@ -18,10 +18,12 @@
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
   - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget、進一步降低 raw state 直接進 prompt 的比例
 
-- [ ] **Dashboard**（agent observability）
-  - Python 側加輕量 HTTP server，expose `/state` endpoint；
-    簡單 HTML 頁面顯示：activity / progress / 背包 / 裝備 / 最近 LLM 決策。
-  - 建議資料模型從一開始就保留 multi-agent 擴充空間，例如 `agents[]` 而不是只綁單一 bot
+- [x] **Dashboard**（agent observability）
+  - `agent/dashboard.py`：aiohttp HTTP server，port 3002（`DASHBOARD_PORT` env var 可改）
+  - `agent/dashboard.html`：暗色主題單檔 UI，每 2 秒 polling `/state`
+  - 顯示：activity / health / food / 當前任務進度 / 裝備 / 背包 / 箱子 / recent events+failures / 中斷任務 / internal state
+  - Multi-agent ready：`{ coordinator: null, agents: [{...}] }` schema，前端 JS 迴圈 `agents`
+  - Coordinator placeholder hidden when null，有值時顯示（未來 multi-bot 用）
 
 - [ ] **Manual override / interrupt 機制**
   - 目標：當 bot 正在執行 task、等待 stuck recovery、或卡在某個 activity 時，玩家可以可靠地打斷它，讓它優先執行新的要求

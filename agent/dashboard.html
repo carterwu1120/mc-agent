@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MC Agent Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d;
+    --blue: #58a6ff; --green: #3fb950; --red: #f85149;
+    --amber: #d29922; --text: #e6edf3; --muted: #8b949e;
+    --food-green: #1a3a2a; --ore-blue: #1a2540; --wood-brown: #2a1e10; --stone-grey: #1e2030;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, monospace; font-size: 13px; }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+    border-bottom: 1px solid var(--border); background: var(--card);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; font-weight: 600; color: var(--text); }
+  .badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge-blue { background: #1c3250; color: var(--blue); }
+  .badge-green { background: #1a3a2a; color: var(--green); }
+  .badge-red { background: #3a1a1a; color: var(--red); }
+  .badge-amber { background: #3a2a10; color: var(--amber); }
+  .badge-grey { background: #21262d; color: var(--muted); }
+  #live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-left: auto; }
+  #live-dot.offline { background: var(--muted); animation: none; }
+  #live-dot { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  #live-label { font-size: 11px; color: var(--muted); }
+  #last-update { font-size: 11px; color: var(--muted); margin-left: 4px; }
+
+  main { padding: 16px 20px; display: grid; gap: 12px; }
+  .row { display: grid; gap: 12px; }
+  .row-2 { grid-template-columns: 1fr 2fr; }
+  .row-half { grid-template-columns: 1fr 1fr; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px;
+  }
+  .card-title {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px;
+  }
+
+  /* bars */
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .bar-label { width: 52px; color: var(--muted); font-size: 11px; }
+  .bar-track { flex: 1; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width .4s; }
+  .bar-val { width: 36px; text-align: right; font-size: 11px; color: var(--muted); }
+
+  /* stat rows */
+  .stat-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #21262d; }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-key { color: var(--muted); }
+  .stat-val { color: var(--text); font-weight: 500; }
+
+  /* task */
+  .progress-track { height: 4px; background: #21262d; border-radius: 2px; overflow: hidden; margin: 8px 0; }
+  .progress-fill { height: 100%; background: var(--blue); border-radius: 2px; transition: width .4s; }
+  .step-list { list-style: none; margin-top: 8px; }
+  .step-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; color: var(--muted); }
+  .step-list li.done { color: var(--green); }
+  .step-list li.running { color: var(--blue); }
+  .step-list li.failed { color: var(--red); }
+  .step-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .step-dot.done { background: var(--green); }
+  .step-dot.running { background: var(--blue); animation: pulse 1s infinite; }
+  .step-dot.failed { background: var(--red); }
+  .step-dot.pending { background: var(--muted); }
+
+  /* equipment */
+  .equip-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .equip-slot { background: #21262d; border-radius: 6px; padding: 6px 8px; }
+  .equip-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+  .equip-name { font-size: 12px; color: var(--text); }
+  .equip-empty { color: var(--muted); font-style: italic; }
+  .dura-bar { height: 3px; background: #30363d; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+  .dura-fill { height: 100%; border-radius: 2px; }
+
+  /* inventory pills */
+  .inv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .inv-pill {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #21262d; border-radius: 4px; padding: 4px 8px; font-size: 12px;
+  }
+  .inv-name { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px; }
+  .inv-count { color: var(--muted); margin-left: 6px; flex-shrink: 0; }
+  .slots-bar { margin-bottom: 8px; }
+
+  /* chests */
+  .chests-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+  .chest-card {
+    flex-shrink: 0; width: 160px; border-radius: 6px; padding: 10px;
+    border: 1px solid var(--border);
+  }
+  .chest-card.food  { background: var(--food-green); }
+  .chest-card.ore   { background: var(--ore-blue); }
+  .chest-card.wood  { background: var(--wood-brown); }
+  .chest-card.stone { background: var(--stone-grey); }
+  .chest-card.misc  { background: #1a1a2a; }
+  .chest-label { font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; }
+  .chest-slots { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .chest-fill-bar { height: 3px; background: #30363d; border-radius: 2px; margin-bottom: 8px; overflow: hidden; }
+  .chest-fill { height: 100%; background: var(--blue); border-radius: 2px; }
+  .chest-items { font-size: 11px; }
+  .chest-item { display: flex; justify-content: space-between; padding: 1px 0; color: var(--muted); }
+  .chest-item span:first-child { color: var(--text); }
+
+  /* events */
+  .event-list { list-style: none; }
+  .event-list li { padding: 4px 0; border-bottom: 1px solid #21262d; font-size: 12px; display: flex; gap: 6px; }
+  .event-list li:last-child { border-bottom: none; }
+  .event-type { color: var(--blue); font-weight: 600; min-width: 80px; }
+  .event-detail { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .event-time { color: var(--muted); flex-shrink: 0; font-size: 11px; }
+  .fail-type { color: var(--red); font-weight: 600; min-width: 80px; }
+
+  /* interrupted tasks */
+  .itask { margin-bottom: 8px; }
+  .itask:last-child { margin-bottom: 0; }
+  .itask-header { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; }
+  .itask-goal { flex: 1; color: var(--text); font-size: 12px; }
+  .itask-by { font-size: 11px; color: var(--muted); }
+
+  /* internal */
+  .thinking-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .thinking-badge { background: #1c3250; color: var(--blue); padding: 2px 8px; border-radius: 10px; font-size: 11px; animation: pulse 1s infinite; }
+  .queue-list { list-style: none; }
+  .queue-list li { padding: 3px 0; color: var(--muted); font-size: 12px; border-bottom: 1px solid #21262d; }
+  .queue-list li:last-child { border-bottom: none; }
+
+  /* coordinator (hidden when null) */
+  #coordinator-section { display: none; }
+
+  /* empty state */
+  .empty { color: var(--muted); font-style: italic; font-size: 12px; }
+
+  @media (max-width: 700px) {
+    .row-2, .row-half { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MC Agent Dashboard</h1>
+  <span id="mode-badge" class="badge badge-grey">—</span>
+  <div id="live-dot" class="offline"></div>
+  <span id="live-label">OFFLINE</span>
+  <span id="last-update"></span>
+</header>
+
+<!-- Coordinator section (hidden when null) -->
+<div id="coordinator-section" style="padding:8px 20px; background:#1a2030; border-bottom:1px solid var(--border);">
+  <span class="card-title">Coordinator</span>
+  <span id="coordinator-info" style="margin-left:8px; color:var(--muted); font-size:12px;"></span>
+</div>
+
+<main id="agent-container">
+  <!-- Rendered per-agent by JS -->
+</main>
+
+<script>
+const POLL_MS = 2000;
+
+function relTime(iso) {
+  if (!iso) return '';
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 5) return 'just now';
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  return `${Math.floor(diff/3600)}h ago`;
+}
+
+function durColor(pct) {
+  if (pct == null) return '#58a6ff';
+  if (pct > 50) return '#3fb950';
+  if (pct > 20) return '#d29922';
+  return '#f85149';
+}
+
+function healthColor(h) {
+  const ratio = (h || 0) / 20;
+  const hue = Math.round(ratio * 120);
+  return `hsl(${hue}, 70%, 45%)`;
+}
+
+function barHtml(label, val, max, color) {
+  const pct = Math.min(100, Math.round((val || 0) / max * 100));
+  return `
+    <div class="bar-row">
+      <span class="bar-label">${label}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+      <span class="bar-val">${val ?? '?'}/${max}</span>
+    </div>`;
+}
+
+function equipSlot(label, item) {
+  if (!item) return `<div class="equip-slot"><div class="equip-label">${label}</div><div class="equip-name equip-empty">—</div></div>`;
+  const name = item.name || '—';
+  const pct = item.durability_pct;
+  const duraHtml = pct != null
+    ? `<div class="dura-bar"><div class="dura-fill" style="width:${pct}%;background:${durColor(pct)}"></div></div>`
+    : '';
+  return `<div class="equip-slot"><div class="equip-label">${label}</div><div class="equip-name">${name}${pct != null ? ` <span style="color:${durColor(pct)};font-size:10px">${pct}%</span>` : ''}</div>${duraHtml}</div>`;
+}
+
+function chestLabelColor(label) {
+  return { food:'#3fb950', ore:'#58a6ff', wood:'#c8944a', stone:'#8b949e', misc:'#8b949e' }[label] || '#8b949e';
+}
+
+function renderAgent(agent) {
+  const s = agent.status || {};
+  const task = agent.current_task;
+  const eq = agent.equipment || {};
+  const armor = eq.armor || {};
+  const inv = agent.inventory || [];
+  const slots = agent.inventory_slots || {};
+  const chests = agent.chests || [];
+  const events = agent.recent_events || [];
+  const failures = agent.recent_failures || [];
+  const interrupted = agent.interrupted_tasks || [];
+  const internal = agent.internal || {};
+
+  // Bot Status card
+  const pos = s.position ? `${Math.round(s.position.x)}, ${Math.round(s.position.y)}, ${Math.round(s.position.z)}` : '—';
+  const homeStr = s.home ? `${Math.round(s.home.x)}, ${Math.round(s.home.y)}, ${Math.round(s.home.z)}` : '未設定';
+  const statusCard = `
+    <div class="card">
+      <div class="card-title">Bot 狀態</div>
+      ${barHtml('❤ 血量', s.health, 20, healthColor(s.health))}
+      ${barHtml('🍗 飢餓', s.food, 20, '#d29922')}
+      <div class="stat-row"><span class="stat-key">活動</span><span class="stat-val">${s.activity || 'idle'}</span></div>
+      <div class="stat-row"><span class="stat-key">位置</span><span class="stat-val">${pos}</span></div>
+      <div class="stat-row"><span class="stat-key">基地</span><span class="stat-val">${homeStr}</span></div>
+    </div>`;
+
+  // Current Task card
+  let taskCard = `<div class="card"><div class="card-title">當前任務</div>`;
+  if (!task) {
+    taskCard += `<span class="empty">無進行中任務</span>`;
+  } else {
+    const statusBadge = {
+      running:'badge-blue', interrupted:'badge-amber', done:'badge-green', failed:'badge-red'
+    }[task.status] || 'badge-grey';
+    taskCard += `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span class="badge ${statusBadge}">${task.status}</span>
+        ${task.interruptedBy ? `<span style="color:var(--muted);font-size:11px">by ${task.interruptedBy}</span>` : ''}
+        <span style="color:var(--muted);font-size:11px;margin-left:auto">${relTime(task.createdAt)}</span>
+      </div>
+      <div style="color:var(--text);font-weight:600;margin-bottom:2px">${task.goal || '—'}</div>
+      ${task.final_goal ? `<div style="color:var(--muted);font-size:11px;margin-bottom:6px">最終目標: ${task.final_goal}</div>` : ''}
+      <div class="progress-track"><div class="progress-fill" style="width:${task.progress_pct||0}%"></div></div>
+      <div style="text-align:right;font-size:11px;color:var(--muted);margin-bottom:6px">${task.currentStep+1}/${task.totalSteps} 步 (${task.progress_pct||0}%)</div>`;
+
+    // Step list
+    const allSteps = [];
+    if (task.currentCmd) {
+      allSteps.push({ cmd: task.currentCmd, cls: 'running' });
+    }
+    (task.pendingSteps || []).forEach(c => allSteps.push({ cmd: c, cls: 'pending' }));
+    if (allSteps.length) {
+      taskCard += `<ul class="step-list">`;
+      allSteps.forEach(st => {
+        taskCard += `<li class="${st.cls}"><span class="step-dot ${st.cls}"></span>${st.cmd}</li>`;
+      });
+      taskCard += `</ul>`;
+    }
+  }
+  taskCard += `</div>`;
+
+  // Equipment card
+  const equipCard = `
+    <div class="card">
+      <div class="card-title">裝備</div>
+      <div class="equip-grid">
+        ${equipSlot('主手', eq.main_hand)}
+        ${equipSlot('副手', eq.off_hand)}
+        ${equipSlot('頭盔', armor.head)}
+        ${equipSlot('胸甲', armor.torso)}
+        ${equipSlot('護腿', armor.legs)}
+        ${equipSlot('靴子', armor.feet)}
+      </div>
+    </div>`;
+
+  // Inventory card
+  const slotsUsed = slots.used || 0;
+  const slotsTotal = slots.total || 36;
+  const slotsPct = Math.round(slotsUsed / slotsTotal * 100);
+  const slotColor = slotsPct > 80 ? '#f85149' : slotsPct > 60 ? '#d29922' : '#3fb950';
+  let invCard = `
+    <div class="card">
+      <div class="card-title">背包</div>
+      <div class="slots-bar">
+        ${barHtml('格位', slotsUsed, slotsTotal, slotColor)}
+      </div>
+      <div class="inv-grid">`;
+  if (!inv.length) {
+    invCard += `<span class="empty" style="grid-column:1/-1">空背包</span>`;
+  } else {
+    inv.forEach(item => {
+      invCard += `<div class="inv-pill"><span class="inv-name">${item.name}</span><span class="inv-count">×${item.count}</span></div>`;
+    });
+  }
+  invCard += `</div></div>`;
+
+  // Chests
+  let chestsHtml = `<div class="card"><div class="card-title">箱子 (${chests.length})</div><div class="chests-scroll">`;
+  if (!chests.length) {
+    chestsHtml += `<span class="empty">無已登記箱子</span>`;
+  } else {
+    chests.forEach(c => {
+      const used = c.usedSlots || 0;
+      const total = c.totalSlots || 54;
+      const fillPct = Math.round(used / total * 100);
+      const lcolor = chestLabelColor(c.label);
+      chestsHtml += `
+        <div class="chest-card ${c.label || 'misc'}">
+          <div class="chest-label" style="color:${lcolor}">${c.label || 'misc'} #${c.id}</div>
+          <div class="chest-slots">${c.freeSlots} 空 / ${total} 格</div>
+          <div class="chest-fill-bar"><div class="chest-fill" style="width:${fillPct}%;background:${lcolor}"></div></div>
+          <div class="chest-items">
+            ${(c.contents || []).map(item =>
+              `<div class="chest-item"><span>${item.name}</span><span>×${item.count}</span></div>`
+            ).join('')}
+          </div>
+        </div>`;
+    });
+  }
+  chestsHtml += `</div></div>`;
+
+  // Events + Failures
+  let eventsHtml = `<div class="card"><div class="card-title">最近事件</div><ul class="event-list">`;
+  if (!events.length) eventsHtml += `<li><span class="empty">無</span></li>`;
+  events.forEach(e => {
+    eventsHtml += `<li>
+      <span class="event-type">${e.type || '?'}</span>
+      <span class="event-detail">${e.reason || ''} ${e.command ? '→'+e.command : ''}</span>
+      <span class="event-time">${relTime(e.at)}</span>
+    </li>`;
+  });
+  eventsHtml += `</ul></div>`;
+
+  let failuresHtml = `<div class="card"><div class="card-title">最近失敗</div><ul class="event-list">`;
+  if (!failures.length) failuresHtml += `<li><span class="empty">無</span></li>`;
+  failures.forEach(f => {
+    failuresHtml += `<li>
+      <span class="fail-type">${f.activity || '?'}</span>
+      <span class="event-detail">${f.reason || ''} ${f.cmd ? '→'+f.cmd : ''}</span>
+      <span class="event-time">${relTime(f.at)}</span>
+    </li>`;
+  });
+  failuresHtml += `</ul></div>`;
+
+  // Interrupted tasks
+  let interruptedHtml = `<div class="card"><div class="card-title">中斷的任務 (${interrupted.length})</div>`;
+  if (!interrupted.length) {
+    interruptedHtml += `<span class="empty">無</span>`;
+  } else {
+    interrupted.forEach(t => {
+      if (!t) return;
+      const st = {running:'badge-blue',interrupted:'badge-amber',done:'badge-green',failed:'badge-red'}[t.status] || 'badge-grey';
+      interruptedHtml += `
+        <div class="itask">
+          <div class="itask-header">
+            <span class="badge ${st}" style="font-size:10px">${t.status}</span>
+            <span class="itask-goal">${t.goal || '—'}</span>
+            <span class="itask-by">${t.interruptedBy ? 'by '+t.interruptedBy : ''}</span>
+            <span style="color:var(--muted);font-size:11px">${relTime(t.createdAt)}</span>
+          </div>
+          ${t.currentCmd ? `<div style="color:var(--muted);font-size:11px;padding-left:4px">at: ${t.currentCmd}</div>` : ''}
+        </div>`;
+    });
+  }
+  interruptedHtml += `</div>`;
+
+  // Internal state
+  const thinkingBadges = (internal.thinking || []).map(t =>
+    `<span class="thinking-badge">${t}</span>`
+  ).join('') || '<span class="empty">idle</span>';
+
+  const queuedHtml = (internal.queued_player_tasks || []).length
+    ? `<ul class="queue-list">${(internal.queued_player_tasks||[]).map(t=>`<li>${t}</li>`).join('')}</ul>`
+    : '<span class="empty">無排隊任務</span>';
+
+  const internalHtml = `
+    <div class="card">
+      <div class="card-title">內部狀態</div>
+      <div style="margin-bottom:8px">
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px">LLM 處理中</div>
+        <div class="thinking-badges">${thinkingBadges}</div>
+      </div>
+      <div>
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px">排隊中的玩家指令</div>
+        ${queuedHtml}
+      </div>
+    </div>`;
+
+  return `
+    <div style="margin-bottom:4px;padding:4px 0;font-size:12px;color:var(--muted)">
+      ${agent.name} <span style="color:var(--muted)">(${agent.id})</span>
+    </div>
+    <div class="row row-2">${statusCard}${taskCard}</div>
+    <div class="row row-half">${equipCard}${invCard}</div>
+    ${chestsHtml}
+    <div class="row row-half">${eventsHtml}${failuresHtml}</div>
+    ${interruptedHtml}
+    ${internalHtml}`;
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/state');
+    if (!r.ok) throw new Error(r.status);
+    const data = await r.json();
+
+    // Live indicator
+    document.getElementById('live-dot').className = '';
+    document.getElementById('live-label').textContent = 'LIVE';
+    document.getElementById('last-update').textContent = `· ${new Date().toLocaleTimeString()}`;
+
+    // Mode badge from first agent
+    const firstAgent = (data.agents || [])[0];
+    const mode = firstAgent?.status?.mode || '—';
+    const modeBadge = document.getElementById('mode-badge');
+    modeBadge.textContent = mode;
+    modeBadge.className = 'badge ' + ({workflow:'badge-green',survival:'badge-amber',companion:'badge-blue'}[mode] || 'badge-grey');
+
+    // Coordinator
+    const coordSec = document.getElementById('coordinator-section');
+    if (data.coordinator) {
+      coordSec.style.display = 'block';
+      document.getElementById('coordinator-info').textContent = JSON.stringify(data.coordinator);
+    } else {
+      coordSec.style.display = 'none';
+    }
+
+    // Render agents
+    const container = document.getElementById('agent-container');
+    container.innerHTML = (data.agents || []).map(renderAgent).join('<hr style="border-color:var(--border);margin:16px 0">');
+  } catch (e) {
+    document.getElementById('live-dot').className = 'offline';
+    document.getElementById('live-label').textContent = 'OFFLINE';
+    document.getElementById('last-update').textContent = '';
+  }
+}
+
+setInterval(poll, POLL_MS);
+poll();
+</script>
+</body>
+</html>

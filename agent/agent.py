@@ -21,6 +21,7 @@ from agent.skills import tool_durability as tool_durability_skill
 from agent.executor import PlanExecutor
 from agent import task_memory
 from agent import exploration_memory
+from agent import dashboard as _dashboard
 
 load_dotenv()
 init_logger("brain")
@@ -847,6 +848,8 @@ async def run():
     if _startup_task and _startup_task.get("status") == "running":
         task_memory.interrupt("agent_restart")
         print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
+
+    asyncio.create_task(_dashboard.start())
 
     while True:
         try:
