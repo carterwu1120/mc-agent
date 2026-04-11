@@ -23,8 +23,15 @@ _PLANNER_COMMANDS = command_list(_PLANNER_ALLOWED_KEYS)
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 玩家用自然語言下達指令，你要轉換成機器人可執行的指令序列。
 只能回覆以下其中一種 JSON（不含其他文字）：
-{{"action": "plan", "goal": "簡短描述玩家目標", "commands": ["chop logs 20", "mine iron 10"]}}
+{{"action": "plan", "goal": "簡短描述此次任務目標", "final_goal": "玩家的最終目標（若不明確或與前次相同可省略）", "commands": ["chop logs 20", "mine iron 10"]}}
 {{"action": "chat", "text": "我聽不懂你的意思"}}
+
+【final_goal 說明】
+- final_goal 是玩家本次對話的最終意圖（例如「建鑽石裝備」「建一棟房子」），跨多個子任務持續有效
+- 若玩家明確提到最終目標（例如「我想要鑽石裝備」），設定 final_goal
+- 若此次請求是前次 final_goal 的延續，可省略 final_goal（系統會自動繼承）
+- 若玩家顯然換了目標，更新 final_goal
+- 若玩家只是閒聊或問問題，省略 final_goal
 
 【可用指令與格式】
 {_PLANNER_COMMANDS}
@@ -57,11 +64,15 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
   - 「補食物」不是只有生食，還要 getfood / smelt 成熟食
 - 若某步驟本身就會觸發內建合成（例如 equip 可能會把可製作的缺失裝備做出並穿上、makechest 會合成並放置箱子、getfood 會處理生食），可用該步驟作為收尾；不要把 plan 停在原料階段
 
-裝備類：
-- 若目標需要挖掘或戰鬥，先確認工具；若缺對應工具 → 先 equip
-  ⚠️ equip 是裝備現有工具，不是「去打架」。combat 不是前置步驟，絕對不要把 combat 加進 commands 作為準備步驟
-  ⚠️ 不要把 equip 當成通用銜接步驟；只有在「前一步剛產生可裝備的新工具/武器/盔甲」或「明確看到目前裝備不足」時才加入
-  ⚠️ 若 plan 中已經有一個 equip，而且中間沒有會新增裝備的步驟，不要再重複插入 equip
+裝備類（equip 使用規則）：
+- equip（無參數）= 從背包自動換上最好的武器和護甲。挖礦活動**不需要** equip，因為採礦模組會自動切換到最佳鎬子。
+- equip 只在以下情況才加入 plan：
+  1. 玩家**明確要求**穿裝備（例如「穿上鑽石盔甲」「換好武器」）
+  2. **前一步剛合成/冶煉出新的裝備/武器**，需要實際穿上（例如 smelt iron → craft iron_sword → equip）
+  3. 要去打架（hunt/combat）且背包有**比目前手持更好的武器或護甲**
+- ⚠️ 不要在 mine / chop / fish / smelt 前盲目加 equip：這些活動自己會處理所需工具
+- ⚠️ 不要在缺乏對應裝備的情況下加 equip（例如背包沒有 diamond_pickaxe 就不要加 equip diamond_pickaxe）
+- ⚠️ combat 不是前置步驟，絕對不要把 combat 加進 commands 作為準備動作
 - 若食物不足（cooked_total < 5）：
   根據主目標決定目標熟食數量（food_target）：
   - 短暫任務（砍樹、存物品、來回跑腿）→ food_target = 8
@@ -80,7 +91,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - 製作箱子 → 需要木材 → 若木材不足：先 chop → 再 makechest
 - 若只是為了補工具鏈，數量要保守精算：
   - 補 stone_pickaxe：mine stone 3（或略多一點 buffer）
-  - 補 iron_pickaxe：mine iron 3 → smelt raw_iron 3 → equip
+  - 補 iron_pickaxe：mine iron 3 → smelt raw_iron 3（crafting.js 會自動用鐵錠合成鎬並裝備，不需加 equip）
   - 不要產生 chop → equip → smelt、或 equip → equip 這類沒有實際意義的序列
   - 不要在缺口明確時一律回 mine iron 16 / smelt raw_iron 16
 
@@ -217,42 +228,137 @@ def _planner_failure_chat() -> dict:
     return {"command": "chat", "text": "我這次規劃失敗了，請再說一次。"}
 
 
-def _armor_goal_shortcut(message: str, state: dict, activity: str) -> dict | None:
-    lowered = message.lower()
+EQUIPMENT_ITEM_COSTS = {
+    "helmet": 5,
+    "chestplate": 8,
+    "leggings": 7,
+    "boots": 4,
+    "sword": 2,
+    "pickaxe": 3,
+    "axe": 3,
+    "shovel": 1,
+    "hoe": 2,
+}
+
+EQUIPMENT_ALIASES = {
+    "diamond": ("鑽石", "diamond"),
+    "iron": ("鐵", "iron"),
+    "stone": ("石", "stone"),
+}
+
+ARMOR_SET_ITEMS = ("helmet", "chestplate", "leggings", "boots")
+TOOL_SET_ITEMS = ("pickaxe", "axe", "shovel", "hoe")
+
+
+def _inventory_counts(state: dict) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in (state.get("inventory") or []):
+        name = item.get("name")
+        if not name:
+            continue
+        counts[name] = counts.get(name, 0) + int(item.get("count", 0) or 0)
+    return counts
+
+
+def _matches_phrase(message: str, lowered: str, phrase: str) -> bool:
+    if re.fullmatch(r"[a-z ]+", phrase):
+        return re.search(rf"\b{re.escape(phrase)}\b", lowered) is not None
+    return phrase in message or phrase in lowered
+
+
+def _owned_equipment_items(state: dict, material: str) -> set[str]:
+    owned: set[str] = set()
+    inventory_counts = _inventory_counts(state)
+    for name, count in inventory_counts.items():
+        if count <= 0 or not name.startswith(f"{material}_"):
+            continue
+        for suffix in EQUIPMENT_ITEM_COSTS:
+            if name.endswith(f"_{suffix}"):
+                owned.add(suffix)
+                break
+
+    equipment = state.get("equipment") or {}
+    main_hand = equipment.get("main_hand")
+    if isinstance(main_hand, dict):
+        name = main_hand.get("name")
+        if name and name.startswith(f"{material}_"):
+            for suffix in EQUIPMENT_ITEM_COSTS:
+                if name.endswith(f"_{suffix}"):
+                    owned.add(suffix)
+                    break
+
+    for piece in ((equipment.get("armor") or {}).values()):
+        if not isinstance(piece, dict):
+            continue
+        name = piece.get("name")
+        if name and name.startswith(f"{material}_"):
+            for suffix in EQUIPMENT_ITEM_COSTS:
+                if name.endswith(f"_{suffix}"):
+                    owned.add(suffix)
+                    break
+    return owned
+
+
+def _requested_equipment_items(message: str, lowered: str) -> list[str]:
+    requested: list[str] = []
+
     armor_patterns = (
-        "鑽石裝",
-        "鑽石裝備",
-        "鑽石盔甲",
-        "一套鑽石裝",
-        "diamond armor",
-        "diamond armour",
-        "diamond armor set",
+        "鑽石裝", "鑽石裝備", "鑽石盔甲", "一套鑽石裝",
+        "鐵裝", "鐵裝備", "鐵盔甲", "一套鐵裝",
+        "diamond armor", "diamond armour", "diamond armor set",
+        "iron armor", "iron armour", "iron armor set",
     )
-    if not any(p in lowered or p in message for p in armor_patterns):
+    if any(_matches_phrase(message, lowered, p) for p in armor_patterns):
+        requested.extend(ARMOR_SET_ITEMS)
+
+    tool_set_patterns = (
+        "工具組", "工具套", "全套工具", "一套工具",
+        "diamond tools", "iron tools", "stone tools", "tool set",
+    )
+    if any(_matches_phrase(message, lowered, p) for p in tool_set_patterns):
+        requested.extend(TOOL_SET_ITEMS)
+
+    item_patterns = (
+        ("sword", ("劍", "sword")),
+        ("pickaxe", ("稿", "鎬", "稿子", "pickaxe")),
+        ("axe", ("斧", "axe")),
+        ("shovel", ("鏟", "shovel")),
+        ("hoe", ("鋤", "hoe")),
+    )
+    for item, patterns in item_patterns:
+        if any(_matches_phrase(message, lowered, p) for p in patterns):
+            requested.append(item)
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in requested:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
+
+
+def _equipment_goal_shortcut(message: str, state: dict, activity: str) -> dict | None:
+    lowered = message.lower()
+    material = next(
+        (name for name, patterns in EQUIPMENT_ALIASES.items() if any(_matches_phrase(message, lowered, p) for p in patterns)),
+        None,
+    )
+    if not material:
+        return None
+
+    requested_items = _requested_equipment_items(message, lowered)
+    if not requested_items:
+        return None
+    if material == "stone" and any(item in ARMOR_SET_ITEMS for item in requested_items):
         return None
 
     summary = json.loads(summary_json(state))
-    shortfall = int((((summary.get("armor_progress") or {}).get("diamond_shortfall_for_full_set")) or 0))
     cooked_total = int(((((summary.get("resources") or {}).get("food") or {}).get("cooked_total")) or 0))
-
-    extra_diamond_cost = 0
-    extra_goal_parts: list[str] = ["一套鑽石裝備"]
-
-    sword_patterns = ("鑽石劍", "diamond sword")
-    pickaxe_patterns = ("鑽石稿", "鑽石鎬", "鑽石稿子", "diamond pickaxe")
-    axe_patterns = ("鑽石斧", "diamond axe")
-
-    if any(p in lowered or p in message for p in sword_patterns):
-        extra_diamond_cost += 2
-        extra_goal_parts.append("鑽石劍")
-    if any(p in lowered or p in message for p in pickaxe_patterns):
-        extra_diamond_cost += 3
-        extra_goal_parts.append("鑽石稿")
-    if any(p in lowered or p in message for p in axe_patterns):
-        extra_diamond_cost += 3
-        extra_goal_parts.append("鑽石斧")
-
-    total_shortfall = shortfall + extra_diamond_cost
+    materials = ((summary.get("resources") or {}).get("materials") or {})
+    owned_items = _owned_equipment_items(state, material)
+    missing_items = [item for item in requested_items if item not in owned_items]
+    needed_units = sum(EQUIPMENT_ITEM_COSTS[item] for item in missing_items)
 
     commands: list[str] = []
     stop_cmd = _stop_command_for_activity(activity)
@@ -265,14 +371,50 @@ def _armor_goal_shortcut(message: str, state: dict, activity: str) -> dict | Non
     if cooked_total < 5:
         commands.append("getfood count 32")
 
-    if total_shortfall > 0:
-        commands.append(f"mine diamond {total_shortfall}")
+    if material == "diamond":
+        have_units = int(materials.get("diamond", 0) or 0)
+        shortfall = max(0, needed_units - have_units)
+        if shortfall > 0:
+            commands.append(f"mine diamond {shortfall}")
+    elif material == "iron":
+        iron_ingot = int(materials.get("iron_ingot", 0) or 0)
+        raw_iron = int(materials.get("raw_iron", 0) or 0)
+        total_iron_units = iron_ingot + raw_iron
+        shortfall = max(0, needed_units - total_iron_units)
+        if shortfall > 0:
+            commands.append(f"mine iron {shortfall}")
+        smelt_count = max(0, needed_units - iron_ingot)
+        if smelt_count > 0:
+            commands.append(f"smelt raw_iron {smelt_count}")
+    elif material == "stone":
+        cobblestone = int(materials.get("cobblestone", 0) or 0)
+        shortfall = max(0, needed_units - cobblestone)
+        if shortfall > 0:
+            commands.append(f"mine stone {shortfall}")
 
     commands.append("equip")
 
+    goal_material = {
+        "diamond": "鑽石",
+        "iron": "鐵",
+        "stone": "石",
+    }[material]
+    goal_labels = {
+        "helmet": "頭盔",
+        "chestplate": "胸甲",
+        "leggings": "護腿",
+        "boots": "靴子",
+        "sword": "劍",
+        "pickaxe": "稿",
+        "axe": "斧",
+        "shovel": "鏟",
+        "hoe": "鋤",
+    }
+    goal_text = f"製作{goal_material}" + "、".join(goal_labels[item] for item in requested_items)
+
     return {
         "action": "plan",
-        "goal": "、".join(extra_goal_parts),
+        "goal": goal_text,
         "commands": normalize_commands(commands),
     }
 
@@ -403,17 +545,19 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     progress = top.get("progress", {})
     goal_str = f"目標：{goal}，進度：{progress}" if goal else "（無目標）"
 
-    interrupted_task = task_memory.load()
+    prev_task = task_memory.load_any()
     task_ctx = ""
     remaining_cmds_for_resume = []
-    if interrupted_task:
-        steps = interrupted_task.get("steps", [])
+    if prev_task:
+        task_status = prev_task.get("status", "unknown")
+        steps = prev_task.get("steps", [])
         done_steps = [s["cmd"] for s in steps if s["status"] == "done"]
-        remaining_cmds_for_resume = [s["cmd"] for s in steps if s["status"] not in ("done",)]
+        remaining_cmds_for_resume = [s["cmd"] for s in steps if s["status"] not in ("done", "failed")] \
+            if task_status in ("running", "interrupted") else []
+
         # Extract last known work position from task context
-        task_context = interrupted_task.get("context") or {}
+        task_context = prev_task.get("context") or {}
         work_pos = task_context.get("workPos") or task_context.get("currentPos")
-        # Also check per-step context for the last running/failed step
         if not work_pos:
             for s in reversed(steps):
                 sc = s.get("context") or {}
@@ -423,11 +567,23 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         work_pos_str = ""
         if work_pos:
             work_pos_str = f"\n上次工作位置：({work_pos.get('x', 0):.0f}, {work_pos.get('y', 0):.0f}, {work_pos.get('z', 0):.0f})"
+
+        final_goal = prev_task.get("final_goal")
+        final_goal_str = f"\n最終目標：{final_goal}" if final_goal else ""
+
+        _STATUS_LABEL = {
+            "running":     "【執行中任務】",
+            "interrupted": "【未完成任務】",
+            "done":        "【前次完成任務】",
+            "failed":      "【前次失敗任務】",
+        }
+        label = _STATUS_LABEL.get(task_status, f"【任務({task_status})】")
+
         task_ctx = (
-            f"\n\n【未完成任務】目標：{interrupted_task['goal']}\n"
-            f"已完成：{done_steps or '（無）'}\n"
-            f"待執行：{remaining_cmds_for_resume}"
-            f"{work_pos_str}"
+            f"\n\n{label}目標：{prev_task['goal']}{final_goal_str}\n"
+            f"已完成步驟：{done_steps or '（無）'}\n"
+            + (f"待執行步驟：{remaining_cmds_for_resume}\n" if remaining_cmds_for_resume else "")
+            + work_pos_str
         )
 
     chests_summary = "\n".join(
@@ -454,7 +610,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         if shortcut:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
             return shortcut
-        shortcut = _armor_goal_shortcut(message, state, activity)
+        shortcut = _equipment_goal_shortcut(message, state, activity)
         if shortcut:
             print(f"[Planner] 裝備目標快捷規劃: {shortcut.get('commands')}")
             return shortcut

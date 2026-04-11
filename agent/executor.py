@@ -17,11 +17,19 @@ def _inventory_counts(inventory: list) -> dict[str, int]:
     return counts
 
 
+def _cmd_to_activity(cmd_str: str) -> str:
+    verb = cmd_str.split()[0] if cmd_str else ""
+    return {
+        'mine': 'mining', 'chop': 'chopping', 'fish': 'fishing',
+        'smelt': 'smelting', 'hunt': 'hunting', 'getfood': 'getfood',
+        'explore': 'explore', 'equip': 'equip', 'deposit': 'deposit',
+    }.get(verb, verb)
+
+
 def _verify_step(cmd_str: str, before: dict | None, after: dict | None) -> str | None:
     """
     Compare before/after state for a completed command.
     Returns a warning string if something looks wrong, else None.
-    Soft-check only — never blocks execution.
     """
     if not before or not after:
         return None
@@ -98,6 +106,9 @@ class PlanExecutor:
         self._latest_state: dict = {}   # updated every tick from agent.py
         self._before_state: dict = {}   # snapshot before each command
         self._after_state: dict = {}    # snapshot from action_done / activity_done
+        # Optional callback set by agent.py: async (state, ws) → None
+        # When set, verification failures trigger LLM intervention instead of just logging.
+        self._verify_failed_callback = None
 
     def heartbeat(self) -> None:
         """Called on every tick event to confirm JS is still alive."""
@@ -107,7 +118,7 @@ class PlanExecutor:
         """Called from agent.py on every state update so executor has current world state."""
         self._latest_state = state
 
-    async def execute(self, commands: list, ws, goal: str = "", resume_task: bool = False, preserve_task: bool = False) -> None:
+    async def execute(self, commands: list, ws, goal: str = "", final_goal: str | None = None, resume_task: bool = False, preserve_task: bool = False) -> None:
         self._run_id += 1
         my_run_id = self._run_id
         self._running = True
@@ -119,7 +130,7 @@ class PlanExecutor:
         if resume_task:
             task_memory.resume_interrupted(commands if commands else None, goal=goal or None)
         elif goal and not preserve_task:
-            task_memory.save(goal, commands)
+            task_memory.save(goal, commands, final_goal=final_goal)
 
         print(f'[Executor] 開始執行計畫：{commands}')
 
@@ -236,22 +247,46 @@ class PlanExecutor:
                         print(f'[Executor] 替換後完整計畫: {commands}，從步驟 {i} 繼續')
                         continue  # don't increment i — commands[i] is now the first new step
 
-                    # Single-step recovery completed — keep the current plan and
-                    # mark this step done only after the recovery explicitly
-                    # resumed it.
+                    # Single-step recovery completed — verify before marking done.
+                    warning = _verify_step(cmd_str, self._before_state, self._after_state)
+                    if warning and self._verify_failed_callback and not preserve_task:
+                        result = await self._handle_verify_failure(i, cmd_str, warning, commands, my_run_id, preserve_task)
+                        if result == 'abort':
+                            return
+                        if result == 'skip':
+                            i += 1
+                            self._current_command = None
+                            continue
+                        if isinstance(result, list):
+                            commands = commands[:i] + result
+                            self._current_command = None
+                            continue
+                        # None → LLM accepted, fall through to mark done
+                    elif warning:
+                        print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
                     if not preserve_task:
                         task_memory.mark_step_done(i)
-                    warning = _verify_step(cmd_str, self._before_state, self._after_state)
-                    if warning:
-                        print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
                     self._step_results.append({"cmd": cmd_str, "status": "done", "warning": warning})
                 else:
-                    # Normal completion
+                    # Normal completion — verify before marking done.
+                    warning = _verify_step(cmd_str, self._before_state, self._after_state)
+                    if warning and self._verify_failed_callback and not preserve_task:
+                        result = await self._handle_verify_failure(i, cmd_str, warning, commands, my_run_id, preserve_task)
+                        if result == 'abort':
+                            return
+                        if result == 'skip':
+                            i += 1
+                            self._current_command = None
+                            continue
+                        if isinstance(result, list):
+                            commands = commands[:i] + result
+                            self._current_command = None
+                            continue
+                        # None → LLM accepted, fall through to mark done
+                    elif warning:
+                        print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
                     if not preserve_task:
                         task_memory.mark_step_done(i)
-                    warning = _verify_step(cmd_str, self._before_state, self._after_state)
-                    if warning:
-                        print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
                     self._step_results.append({"cmd": cmd_str, "status": "done", "warning": warning})
 
             except asyncio.CancelledError:
@@ -378,6 +413,90 @@ class PlanExecutor:
 
     def is_in_stuck_recovery(self) -> bool:
         return self._in_stuck_recovery
+
+    async def _handle_verify_failure(
+        self,
+        i: int,
+        cmd_str: str,
+        warning: str,
+        commands: list,
+        my_run_id: int,
+        preserve_task: bool,
+    ) -> str | list | None:
+        """
+        Re-enter stuck recovery when post-action verification fails.
+        Calls _verify_failed_callback (set by agent.py) with a synthetic activity_stuck state,
+        then waits for LLM to decide replan / skip / accept.
+
+        Returns:
+            "abort"    — run was superseded, caller must return
+            "skip"     — skip this step, caller increments i
+            list       — new command list for replan, caller should splice into commands[:i]
+            None       — LLM accepted step as done, caller marks it done normally
+        """
+        print(f'[Executor] ⚠ 驗證失敗 step {i} ({cmd_str}): {warning}，觸發 LLM 介入')
+
+        # Re-enter stuck recovery so agent.py routes responses correctly
+        self._in_stuck_recovery = True
+        self._stuck_event.set()
+        self._done.clear()
+        self._skip_event.clear()
+        self._replan_commands = None
+
+        # Build synthetic activity_stuck state from latest after-state
+        synthetic_state = {
+            **self._after_state,
+            'type': 'activity_stuck',
+            'activity': _cmd_to_activity(cmd_str),
+            'reason': 'verification_failed',
+            'detail': warning,
+            'verification_warning': warning,
+        }
+        # Inject plan_context (mirrors what agent.py does for real activity_stuck)
+        task = task_memory.load()
+        if task and task.get('steps'):
+            idx = task.get('currentStep', 0)
+            steps = task['steps']
+            synthetic_state['plan_context'] = {
+                'goal': task.get('goal'),
+                'total_steps': len(steps),
+                'current_step': idx,
+                'current_cmd': steps[idx]['cmd'] if idx < len(steps) else None,
+                'done_steps': [s['cmd'] for s in steps if s['status'] == 'done'],
+                'pending_steps': [
+                    s['cmd'] for s in steps[idx + 1:]
+                    if s['status'] in ('pending', 'failed')
+                ],
+            }
+
+        asyncio.create_task(self._verify_failed_callback(synthetic_state, self._ws))
+
+        # Wait for LLM decision (replan / skip / resume)
+        await self._done.wait()
+        self._in_stuck_recovery = False
+
+        if self._run_id != my_run_id:
+            return 'abort'
+
+        if self._skip_event.is_set():
+            if not preserve_task:
+                task_memory.mark_step_failed(i, 'verify_failed_skipped')
+            self._step_results.append({'cmd': cmd_str, 'status': 'failed', 'error': 'verify_failed_skipped'})
+            return 'skip'
+
+        if self._replan_commands is not None:
+            new_cmds = self._replan_commands
+            self._replan_commands = None
+            print(f'[Executor] 驗證失敗後重新規劃 step {i}: 舊剩餘={commands[i:]} → 新={new_cmds}')
+            if not preserve_task:
+                task_memory.mark_step_failed(i, 'verify_replanned')
+                task_memory.replace_remaining_steps(i, new_cmds)
+            self._step_results.append({'cmd': cmd_str, 'status': 'replanned', 'error': 'verify_replanned'})
+            return new_cmds
+
+        # LLM chose resume → accept step as done
+        print(f'[Executor] LLM 接受驗證警告，步驟 {i} 視為完成')
+        return None
 
     def abort(self, preserve_task: bool = False, reason: str = "aborted") -> None:
         if self._running:

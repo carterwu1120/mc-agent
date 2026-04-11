@@ -34,6 +34,21 @@ llm: LLMClient = GeminiClient()
 
 executor = PlanExecutor()
 
+
+async def _on_verify_failed(state: dict, ws) -> None:
+    """Callback for executor post-action verification failures.
+    Routes a synthetic activity_stuck state through the normal LLM pipeline.
+    If LLM only chats (no replan/skip/resume), auto-resume so executor doesn't hang."""
+    await _handle_and_send(state, activity_stuck_skill.handle, ws)
+    # If executor is still waiting (LLM sent chat but didn't replan/skip/resume), unblock it
+    if executor.is_in_stuck_recovery():
+        print('[Agent] 驗證失敗後 LLM 未明確回 replan/skip，自動接受步驟繼續')
+        executor.resume_after_stuck()
+
+
+executor._verify_failed_callback = _on_verify_failed
+
+
 def _record_to_exploration_memory(state: dict) -> None:
     """activity_done 時把位置記錄到 spatial memory。"""
     if state.get('type') != 'activity_done':
@@ -199,6 +214,19 @@ async def _on_player_respawned(state: dict, llm: LLMClient):
     return await respawn_skill.handle(respawn_state, llm)
 
 
+async def _on_test_plan(state: dict, _llm: LLMClient):
+    """Direct plan injection for testing — bypasses LLM/planner entirely.
+    JS sends: { type: 'test_plan', commands: ['equip diamond_pickaxe', 'mine iron 8'], goal: '...' }
+    """
+    commands = state.get('commands', [])
+    goal = state.get('goal', 'test')
+    if not commands:
+        print('[TestPlan] 沒有 commands，忽略')
+        return None
+    print(f'[TestPlan] 直接注入計畫: {commands}')
+    return {'action': 'plan', 'commands': commands, 'goal': goal}
+
+
 # ── 各事件對應的 skill handler ────────────────────────────
 HANDLERS = {
     "inventory_full": inventory_skill.handle,
@@ -210,6 +238,7 @@ HANDLERS = {
     "activity_done":  _on_done,
     "task_started":   _on_task_started,
     "task_stopped":   _on_task_stopped,
+    "test_plan":      _on_test_plan,
     "player_died":        _on_player_died,
     "player_respawned":   _on_player_respawned,
     "tool_low_durability": tool_durability_skill.handle,
@@ -545,6 +574,9 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         if isinstance(result, dict) and result.get('action') == 'plan':
             commands = result.get('commands', [])
             goal = result.get('goal', '')
+            final_goal = result.get('final_goal')
+            if final_goal:
+                task_memory.set_final_goal(final_goal)
             resume_task = bool(result.get('resume_task'))
             preserve_task = bool(result.get('preserve_task'))
             commands, preserve_task = _normalize_temporary_inventory_plan(commands, preserve_task)
@@ -556,7 +588,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     else:
                         print('[Agent] 計畫執行中，中止舊計畫')
                         executor.abort()
-                asyncio.create_task(executor.execute(commands, ws, goal=goal, resume_task=resume_task, preserve_task=preserve_task))
+                asyncio.create_task(executor.execute(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task))
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
@@ -579,6 +611,9 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if isinstance(a, dict) and a.get("action") == "plan":
                 commands = a.get("commands", [])
                 goal = a.get("goal", "")
+                final_goal = a.get("final_goal")
+                if final_goal:
+                    task_memory.set_final_goal(final_goal)
                 resume_task = bool(a.get("resume_task"))
                 preserve_task = bool(a.get("preserve_task"))
                 commands, preserve_task = _normalize_temporary_inventory_plan(commands, preserve_task)
@@ -590,7 +625,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         else:
                             print('[Agent] 計畫執行中，中止舊計畫')
                             executor.abort()
-                    asyncio.create_task(executor.execute(commands, ws, goal=goal, resume_task=resume_task, preserve_task=preserve_task))
+                    asyncio.create_task(executor.execute(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task))
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
                 cmds = a.get("commands", [])

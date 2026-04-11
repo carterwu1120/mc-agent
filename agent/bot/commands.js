@@ -324,6 +324,7 @@ function handle(bot, msg) {
                 if (target) {
                     const equipped = await equipSpecific(bot, target)
                     console.log(`[Equip] 單件裝備結果：${equipped ?? '無'}`)
+                    bridge.sendState(bot, 'action_done')  // always signal done, even if item not found
                     return
                 }
 
@@ -493,9 +494,27 @@ async function _runTestScenario(bot, scenario) {
             break
         }
 
+        // 情境 D：post-action verification failure
+        // 策略：背包完全清空後直接注入 ['equip diamond_pickaxe', 'mine iron 8'] 計畫（繞過 planner）
+        //       bot 沒有鑽石鎬 → equip 仍送 action_done 但裝備狀態不變
+        //       → _verify_step 偵測到 → _handle_verify_failure 觸發 → LLM 介入
+        // 預期 log：[Executor] ⚠ 驗證失敗 step 0 (equip diamond_pickaxe): equip 後裝備狀態未改變...
+        //           [Agent] 呼叫 LLM 處理 activity_stuck...（reason=verification_failed）
+        case 'verify_failure': {
+            await _clearInventory(bot)
+            await new Promise(r => setTimeout(r, 500))
+            console.log('[Test] 情境 D：背包清空，直接注入 equip diamond_pickaxe 計畫（繞過 planner）')
+            console.log('[Test] 預期：equip action_done → 裝備未變 → 驗證失敗 → LLM 決策')
+            bridge.sendState(bot, 'test_plan', {
+                commands: ['equip diamond_pickaxe', 'mine iron 8'],
+                goal: 'test: verify_failure',
+            })
+            break
+        }
+
         default:
             bot.chat(`未知情境: ${scenario}`)
-            console.log('[Test] 可用情境: planner_nodiamond, planner_ready, executor_skip')
+            console.log('[Test] 可用情境: planner_nodiamond, planner_ready, executor_skip, verify_failure')
     }
     console.log(`[Test] 情境 ${scenario} 已設定完成`)
 }

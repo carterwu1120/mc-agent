@@ -8,20 +8,38 @@
   - 修正：`plan_context.pending_steps` 改用 `steps[idx+1:]` slice，包含 failed steps
   - 修正：executor replan 分支加強 log 確認替換是否正確
 
-- [ ] **Post-action verification loop**
-  - 目前 executor 送出指令後，收到 `action_done` 就直接進下一步，完全不驗證動作是否真的成功。
-    例如 `equip` 完裝備狀態沒變、`smelt iron 3` 但 iron_ingot 只多了 1 個、
-    `mine diamond 10` 但實際只挖到 7 個——executor 都不知道。
-  - 解法：在關鍵指令（equip / smelt / mine）完成後，比對 before/after state，
-    若有落差則當作 stuck 處理（附具體原因），而非假設成功。
-  - 對 game bot 尤其重要，因為 Minecraft 世界隨時會變（掉落物消失、被打死、方塊被別人挖）。
+- [x] **Post-action verification loop**（強制 LLM 介入已實作）
+  - `executor.py` 實作 `_verify_step()`，在 equip/smelt/mine/deposit 完成後比對 before/after state
+  - `_handle_verify_failure()`：驗證失敗時重新進入 stuck recovery，觸發 LLM 決策（replan / skip / accept）
+  - `agent.py` 設定 `executor._verify_failed_callback = _on_verify_failed`，路由到 `activity_stuck_skill`
+  - LLM 不回 replan/skip 時自動 resume（避免 executor 永遠等待）
 
-- [ ] **Deterministic rules 下沉到系統層（不只靠 prompt）**
-  - 目前很多「每次都必須成立」的規則只存在 system prompt 裡，LLM 偶爾會忘記或在長 context 下失效。
-    例如「replan 必須附加 pending_steps」、「smelting stuck 且上層是 mining 不能直接 skip」。
-  - 解法：在 Python 層加硬性驗證函數，LLM 回傳後立即檢查，不符合就 reprompt 或
-    fallback，而非期待 prompt 每次都引導正確。
-  - 原則：Prompt 描述意圖，系統層保證規則一定執行。
+- [x] **Deterministic rules 下沉到系統層（不只靠 prompt）**
+  - `activity_stuck.py` 實作完整 pipeline：
+    - `_enforce_pending_steps` — replan 缺少 pending_steps 時自動補上
+    - `_filter_done_steps_from_replan` — 移除 replan 開頭重複的已完成步驟
+    - `_deduplicate_adjacent_cmds` — 移除連續重複指令
+    - `_block_invalid_skip` — 由 `_CRITICAL_DEPENDENCY_PAIRS` table 驅動，攔截非法 skip
+    - `_compute_is_critical_subtask` — Pre-LLM 注入 `is_critical_subtask` 到 prompt
+
+- [x] **Planner task context 強化**
+  - `task_memory.load_any()` — 不過濾 status，讓 planner 看到所有任務（running / interrupted / done）
+  - `task_memory.save()` 加 `final_goal` 欄位，自動繼承前次任務的最終目標
+  - `task_memory.set_final_goal()` — LLM 可更新跨任務的最終目標
+  - Planner prompt 依 status 顯示不同標籤，並帶入 `final_goal` 上下文
+  - LLM 可在 plan response 輸出 `final_goal`，agent.py 自動儲存
+
+- [x] **修正 equip 指令 action_done 遺漏**
+  - `equip <specific_item>` 在物品不在背包時，原本不送 `action_done` → executor 永遠等待
+  - 修正：無論是否裝備成功，always 送 `action_done`
+
+- [x] **修正 planner 對 equip 的濫用**
+  - 採礦/砍樹前不再盲目加 equip（mining.js 自動換鎬）
+  - Planner prompt 明確規範 equip 使用時機：玩家明確要求、剛合成新裝備、或有更好武器/護甲需穿上
+
+- [x] **新增 `!test verify_failure` 情境 + `test_plan` bridge event**
+  - `test_plan` 事件讓測試直接注入 commands 給 executor，繞過 planner
+  - `verify_failure` 情境：清空背包 → 注入 `equip diamond_pickaxe` → 驗證失敗 → LLM 介入
 
 ## 中期
 

@@ -7,11 +7,17 @@ from agent.plan_utils import build_step_records, normalize_commands
 FILE = os.path.join(os.path.dirname(__file__), 'data', 'task.json')
 
 
-def save(goal: str, commands: list) -> dict:
+def save(goal: str, commands: list, final_goal: str | None = None) -> dict:
     commands = normalize_commands(commands)
+    # Inherit final_goal from previous task if not explicitly set
+    if final_goal is None:
+        prev = _load_raw()
+        if prev:
+            final_goal = prev.get("final_goal")
     task = {
         "id": uuid.uuid4().hex[:8],
         "goal": goal,
+        "final_goal": final_goal,
         "commands": commands,
         "steps": build_step_records(commands),
         "currentStep": 0,
@@ -23,6 +29,17 @@ def save(goal: str, commands: list) -> dict:
     }
     _write(task)
     return task
+
+
+def set_final_goal(final_goal: str) -> None:
+    """Update the overarching player intent without touching other fields."""
+    _patch({"final_goal": final_goal})
+
+
+def load_any() -> dict | None:
+    """Load task.json regardless of status — for planner context.
+    Returns None only if file doesn't exist."""
+    return _load_raw()
 
 
 def update_step(step: int) -> None:
