@@ -25,14 +25,17 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
 
 選 plan 的時機與格式：
 
-① 有已分類箱子且有空間（freeSlots > 0）：
+① 有已分類箱子且有空間（freeSlots > 0）且有設定基地（home 已設定）：
 {"action": "plan", "commands": ["stop指令", "home", "deposit <id>", "back", "resume指令"]}
 commands 裡的 chest id 從下方提供的箱子資訊取得。
 
-② 沒有已分類箱子，但背包有足夠木材可做箱子（wood_as_planks ≥ 16，logs 或 planks 皆可）：
+② 沒有已分類箱子，但背包有足夠木材可做箱子（wood_as_planks ≥ 16）且有設定基地（home 已設定）：
 {"action": "plan", "commands": ["stop指令", "home", "makechest", "labelchest {new_chest_id} <label>", "deposit {new_chest_id}", "back", "resume指令"]}
 {new_chest_id} 是佔位符，makechest 完成後會自動填入實際 id，不要替換成數字。
 label 根據背包最多的材料類型選擇：wood / ore / stone / misc。
+
+⚠ 若沒有設定基地（home 未設定），絕對不能在 plan 裡加入 home 指令，也不要嘗試 makechest + deposit 流程。
+  這種情況下應優先選 drop（丟棄低價值物品），若沒有可丟的才選 continue。
 
 resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
 
@@ -149,7 +152,8 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     if not labeled_chests:
         chests_summary += f"\n（背包中有木材：{logs_count} logs + {planks_count} planks = {wood_as_planks} planks 等效，{'足夠' if can_make_chest else '不足'}製作箱子（需要 16 planks））"
 
-    if not labeled_chests and can_make_chest and _should_make_misc_chest(inventory):
+    has_home = bool(state.get("home"))
+    if not labeled_chests and can_make_chest and has_home and _should_make_misc_chest(inventory):
         return {
             "action": "plan",
             "commands": [
@@ -172,8 +176,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     slots_used = slots.get("used", len(inventory))
     slots_free = slots.get("free", 36 - len(inventory))
 
+    home_str = "已設定" if has_home else "未設定（不能使用 home 指令）"
     prompt = (
         f"背包狀態：{slots_used}/36 格已用，剩餘 {slots_free} 格。機器人目前的活動：{activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20。\n"
+        f"基地（home）：{home_str}\n"
         f"當前任務：{goal_str}\n\n"
         f"目前裝備欄（耐久度）：\n{equip_summary}\n\n"
         f"背包內容：\n{inv_summary}\n\n"

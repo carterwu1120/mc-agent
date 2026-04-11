@@ -10,6 +10,12 @@ from agent.skills.command_validation import (
 from agent.skills.state_summary import summary_json
 from agent.skills.commands_ref import command_list
 from agent import task_memory
+from agent.context_builder import (
+    build_chests_summary,
+    build_interrupted_tasks_section,
+    build_recent_events_section,
+    build_recent_failures_section,
+)
 from agent.plan_utils import normalize_commands
 
 _PLANNER_ALLOWED_KEYS = [
@@ -825,39 +831,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             + work_pos_str
         )
 
-    recent_events = task_memory.recent_events()
-    event_lines = []
-    for item in recent_events[:6]:
-        event_lines.append(
-            f"- {item.get('type')} goal={item.get('goal') or '（無）'}"
-            f" cmd={item.get('command') or '（無）'}"
-            f" reason={item.get('reason') or '（無）'}"
-            f" at={item.get('at')}"
-        )
-    recent_events_section = (
-        "\n【最近任務事件】\n" + "\n".join(event_lines) + "\n"
-        if event_lines else ""
-    )
-
-    recent_failures = task_memory.recent_failures()
-    failure_lines = []
-    for item in recent_failures[:6]:
-        failure_lines.append(
-            f"- goal={item.get('goal') or '（無）'}"
-            f" cmd={item.get('command') or '（無）'}"
-            f" activity={item.get('activity') or '（無）'}"
-            f" reason={item.get('reason') or '（無）'}"
-            f" at={item.get('at')}"
-        )
-    recent_failures_section = (
-        "\n【最近失敗模式】\n" + "\n".join(failure_lines) + "\n"
-        if failure_lines else ""
-    )
-
-    chests_summary = "\n".join(
-        f"- id={c['id']} label={c.get('label','未分類')} freeSlots={c.get('freeSlots','?')} contents={[i['name'] for i in c.get('contents', [])]}"
-        for c in chests
-    ) or "（無已登記箱子）"
+    recent_events_section = build_recent_events_section(task_memory.recent_events(), limit=6)
+    recent_failures_section = build_recent_failures_section(task_memory.recent_failures(), limit=4)
+    interrupted_tasks_section = build_interrupted_tasks_section(task_memory.interrupted_tasks(), limit=2)
+    chests_summary = build_chests_summary(chests, max_chests=4, max_items=4)
 
     prompt = (
         f"玩家說：「{message}」\n\n"
@@ -866,6 +843,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}{task_ctx}\n\n"
         f"已登記箱子：\n{chests_summary}\n\n"
+        f"{interrupted_tasks_section}"
         f"{recent_events_section}"
         f"{recent_failures_section}"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"

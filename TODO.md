@@ -2,15 +2,21 @@
 
 ## 進行中 / 近期
 
-- [ ] **Task memory 補強**（agent working memory）
-  - 目標：補齊短期任務記憶，讓 bot 在重啟、compact、replan 多次之後，仍能知道「之前做到哪、為什麼停下來、這次變更過哪些步驟」。
-  - [ ] 若之後需要完整歷史，再另外補 `task_history.jsonl` 或 SQLite；`task.json` 仍維持短期工作記憶
+- [x] **Task memory 補強**（agent working memory）
+  - `task.json` 整合 `interruptedTasks`、`recentEvents`、`recentFailures`、`recentTransitions`，附 TTL/cap prune
+  - executor 在 skip / replan / resumetask 時呼叫 `task_memory.record_event()`，追蹤完整事件時間線
+  - `task_memory.interrupted_tasks()` / `recent_events()` / `recent_failures()` 供 skill 讀取
+  - 若之後需要完整歷史，再另外補 `task_history.jsonl` 或 SQLite；`task.json` 仍維持短期工作記憶
 
 - [ ] **Python 側 context 清理機制**
   - 長時間運作後，每次 LLM call 會夾帶大量舊 state，導致 context 品質劣化、成本上升。
     需要定期清理 / 壓縮不再需要的歷史事件，讓主線 context 保持精簡。
     （概念類似 Claude Code 的 subagent context firewall：只把結論傳回主線，不讓過程污染主 context。）
   - 依賴：優先利用 task / interaction / reflection memory 的摘要，而不是直接把原始歷史塞進 prompt
+  - [x] v1：抽出 Python 側 `context_builder`，對 recent events / failures / interrupted tasks / chests 做 deterministic 截斷與摘要
+  - [x] v1：planner / self_task 改走共用 builder，而不是各自手工拼接長 prompt
+  - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
+  - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget、進一步降低 raw state 直接進 prompt 的比例
 
 - [ ] **Dashboard**（agent observability）
   - Python 側加輕量 HTTP server，expose `/state` endpoint；
