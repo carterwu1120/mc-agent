@@ -35,8 +35,9 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 
 【可用指令與格式】
 {_PLANNER_COMMANDS}
-- come [player]  走向玩家；若玩家叫你「過來 / come here / 來我這」，優先用這個
+- come [player]  走向玩家；只在需要用走路接近時使用
 - tp <x> <y> <z>  傳送到指定座標；恢復任務時，若上次工作位置距離現在很遠，可用此指令先傳送回去
+- tp <player>  傳送到指定玩家；若玩家叫你「過來 / come here / 來我這 / 來找我」，優先用這個
 
 【規則】
 - 只能使用「可用指令」清單中的指令，嚴禁發明清單以外的指令
@@ -44,7 +45,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - 多個活動依序排入 commands 陣列，長度不限，根據實際需求決定
 - 若當前有活動進行中（activity != idle），先加入對應 stop 指令再排新活動
 - 若玩家只是在說停止、停下、先停、stop，優先規劃停止當前活動；若目前沒有活動就回 chat
-- 若玩家明確要求你靠近他、過去找他、跟上他，規劃 come 指令；若知道玩家名稱就用 come <player>
+- 若玩家明確要求你靠近他、過去找他、跟上他，優先規劃 tp <player>；只有在不適合傳送或玩家明確要求走過去時，才用 come
 - 若玩家要求你回到地面、地表、陸地、上去，優先規劃 surface
 - 玩家沒說數量時才用合理預設值（木頭 32，釣魚 20）；若是前置條件修復（例如缺工具、缺材料），請優先根據「缺多少補多少」來決定數量，不要一律固定用 16
 - smelt 指令必須帶數量，不可省略，否則會把所有原料全部放入熔爐
@@ -487,7 +488,7 @@ def _maybe_plan_come(message: str, activity: str, player_name: str | None) -> di
         commands.append(stop_cmd)
 
     if player_name:
-        commands.append(f"come {player_name}")
+        commands.append(f"tp {player_name}")
     else:
         commands.append("come")
 
