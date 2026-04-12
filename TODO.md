@@ -2,193 +2,112 @@
 
 ## 進行中 / 近期
 
-- [x] **Task memory 補強**（agent working memory）
-  - `task.json` 整合 `interruptedTasks`、`recentEvents`、`recentFailures`、`recentTransitions`，附 TTL/cap prune
-  - executor 在 skip / replan / resumetask 時呼叫 `task_memory.record_event()`，追蹤完整事件時間線
-  - `task_memory.interrupted_tasks()` / `recent_events()` / `recent_failures()` 供 skill 讀取
-  - 若之後需要完整歷史，再另外補 `task_history.jsonl` 或 SQLite；`task.json` 仍維持短期工作記憶
+- [ ] **Stuck recovery context 強化**
+  - 目前 stuck 時 LLM 收到的環境資訊不夠精確，導致恢復策略不適當
+  - [ ] stuck prompt 明確利用 `nearby.trees` / `nearby.stone` — `trees=false` 時 deterministic 轉 explore，不讓 LLM 猜
+  - [ ] Y 座標規則下沉：Y < 40 = 地底，stuck 時不建議 explore animals / chop trees
+  - [ ] 傳入 `startPos` vs `currentPos` 距離差，讓 LLM 判斷是否真的在移動
 
-- [ ] **Python 側 context 清理機制**
-  - 長時間運作後，每次 LLM call 會夾帶大量舊 state，導致 context 品質劣化、成本上升。
-    需要定期清理 / 壓縮不再需要的歷史事件，讓主線 context 保持精簡。
-    （概念類似 Claude Code 的 subagent context firewall：只把結論傳回主線，不讓過程污染主 context。）
-  - 依賴：優先利用 task / interaction / reflection memory 的摘要，而不是直接把原始歷史塞進 prompt
-  - [x] v1：抽出 Python 側 `context_builder`，對 recent events / failures / interrupted tasks / chests 做 deterministic 截斷與摘要
-  - [x] v1：planner / self_task 改走共用 builder，而不是各自手工拼接長 prompt
+- [ ] **Python 側 context 清理機制 v2**
+  - [x] v1：`context_builder` 對 recent events / failures / interrupted tasks / chests 做截斷與摘要
+  - [x] v1：planner / self_task 改走共用 builder
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
-  - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget、進一步降低 raw state 直接進 prompt 的比例
+  - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
 
-- [x] **Dashboard**（agent observability）
-  - `agent/dashboard.py`：aiohttp HTTP server，port 3002（`DASHBOARD_PORT` env var 可改）
-  - `agent/dashboard.html`：暗色主題單檔 UI，每 2 秒 polling `/state`
-  - 顯示：activity / health / food / 當前任務進度 / 裝備 / 背包 / 箱子 / recent events+failures / 中斷任務 / internal state
-  - Multi-agent ready：`{ coordinator: null, agents: [{...}] }` schema，前端 JS 迴圈 `agents`
-  - Coordinator placeholder hidden when null，有值時顯示（未來 multi-bot 用）
+- [ ] **Multi-agent routing 收尾**
+  - [x] `@BotName` / `@all` chat addressing
+  - [x] bot 側忽略其他 bot 的聊天（`BOT_USERNAMES`）
+  - [x] 每個 bot 獨立 data dir（`BOT_DATA_DIR`）、獨立 WebSocket port（`BOT_WS_PORT`）
+  - [x] dashboard 聚合所有 bot 狀態（`live_state.json` polling）
+  - [x] docker-compose 支援 bot0 + bot1 雙服務
+  - [ ] 啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`，方便確認生效設定
+  - [ ] 統一 system chat / server announcement 過濾，避免 `Teleported ...` 被送進 planner
+
+- [ ] **Coordinator agent（基本版）**
+  - 目標：兩個 bot 不重複搶同一資源（e.g. 同時決定去釣魚）
+  - [ ] Python coordinator class（不需要 LangGraph，一個有狀態的 dict + 一個 LLM call）
+  - [ ] Shared resource registry：`{ "fishing": "bot0", "mining": "bot1" }`
+  - [ ] Bot 規劃前先查詢 registry，已被 claimed 的 activity 不重複分配
+  - [ ] Bot-to-bot messaging via Python queue（不走 Minecraft chat）
 
 - [ ] **Manual override / interrupt 機制**
-  - 目標：當 bot 正在執行 task、等待 stuck recovery、或卡在某個 activity 時，玩家可以可靠地打斷它，讓它優先執行新的要求
-  - 需要同時支援兩種入口：
-    - 顯式指令：例如 `!interrupt chop logs 4`、`!abort`、`!resume`
-    - 自然語言：例如「你先去砍樹」、「先別挖了，回地表」、「先來找我」、「先停一下」
-  - 系統層需要明確區分：新任務 / 插隊任務 / 取消當前任務 / 恢復原任務，而不是只把這些話當成普通 chat 丟給 planner
-  - executor / activity_stack / stuck recovery 需要能接受人工覆蓋訊號，避免舊流程仍在背景等待，和新任務互相打架
-  - 下一步聚焦：補自然語言 interrupt / resume 分類，不只靠前綴判斷
-  - 後續可延伸成 dashboard 上的手動控制入口，並作為 multi-agent coordinator 介入單一 bot 的基礎能力
+  - [ ] 自然語言 interrupt / resume 分類（不只靠前綴）
+  - [ ] executor / stuck recovery 能接受人工覆蓋，避免舊流程在背景等待
 
-- [ ] **Multi-agent chat / routing isolation**
-  - 目標：多 bot 同場時，只有被明確點名的 bot 會把聊天送進 LLM；其他 bot 不應因聊天欄回聲、系統訊息、或其他 bot 的回覆而被觸發
-  - [x] bot / brain log 檔名可帶 `bot0` / `bot1` 標籤，方便分辨多 agent 執行紀錄
-  - [x] bot 側支援 strict chat addressing：預設只有 `@Agent0 ...` / `@Agent1 ...` / `@all ...` 會進 LLM
-  - [x] bot 側忽略其他 bot 的聊天內容，不再把 bot-to-bot 回覆直接送進 LLM
-  - [ ] 在啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`，方便確認實際生效設定
-  - [ ] 統一 system chat / player chat / bot chat 的分類，避免 `Teleported ...`、伺服器公告、bot 自己的回覆被誤送進 planner
-  - [ ] 規劃 coordinator 層專用的 bot-to-bot channel，不再依賴 Minecraft 公共聊天欄做協調
-
-- [ ] **強化 self_task 自主規劃**（Spatial memory 已接入，下一步做 deterministic 強化）
-  - [x] 已把 exploration memory 接入 self_task prompt，LLM 已能看到已知礦點 / 森林 / 動物區
-  - [ ] 目標分解下沉：目前 planner 已支援部分裝備 / 工具需求的缺口推算；下一步是把這種推理擴展成更通用的系統層目標分解，而不只限於 equipment 類需求
-  - [ ] 資源導向規劃下沉：缺某樣資源時，優先查詢 spatial memory 的已知位置，再決定是否 explore
-  - [ ] 補 deterministic 選點策略：多個已知資源點時，定義最新 / 最近 / 最可信的選擇規則，而不是完全交給 LLM 自由發揮
-
-- [ ] **Next: 通用 tool acquisition policy（工具取得/重試策略下沉）**
-  - 目標：不要讓 `woodcutting` / `mining` / `combat` 各自發明一套 `ensureAxe` / `ensurePickaxe` / `ensureSword` 重試流程
-  - 抽出共享策略：最近一次工具合成是否失敗、當時資源摘要、什麼條件變化後才允許再試
-  - 統一 fallback 規則：可徒手繼續的活動先繼續；不可徒手的活動才升級成 recovery / replan
-  - 預期收益：減少「局部跳針」、降低 activity_stuck 噪音、讓後續新增技能時不用重複補 debounce 邏輯
+- [ ] **通用 tool acquisition policy**
+  - 目標：`mining` / `woodcutting` / `combat` 不各自實作 `ensurePickaxe` / `ensureAxe` / `ensureSword`
+  - [ ] 共享 retry cooldown：上次 craft 失敗的 resource fingerprint，inventory 有哪些變化才允許重試
+  - [ ] 統一 fallback：可徒手繼續的先繼續；不可徒手才升級成 replan
 
 ## 中期
 
+- [ ] **Pydantic AI 引入（pilot on planner.py）**
+  - 目標：消滅 `re.sub + json.loads` 脆弱解析，改用 typed structured output
+  - 先只包 `planner.py`，驗證 DX 改善後再推廣到其他 skill
+
 - [ ] **Memory roadmap**
-  - 目標不是只做 spatial memory，而是逐步建立完整的 agent memory system，讓 bot 不只記得資源位置，也能延續任務、互動與建議。
-  - [ ] **Spatial memory**（exploration_memory.json）
-    - Bot 目前對世界的認識在重啟後歸零。需要把「去過哪、在哪找到什麼」寫到外部檔案，
-      讓 self_task 下次能優先去已知有礦/有樹/有動物的位置，而非每次隨機 explore。
-    - [x] JS 側：挖到礦 / 看到動物 / 砍到樹時附位置資訊到 activity_done
-    - [x] Python 側：記錄 ore_finds / forest_finds / animal_areas 到 exploration_memory.json
-    - [x] self_task 讀取記憶，優先去已知資源位置規劃任務
-    - [ ] 補上 biome / explored_chunks / 已探索區域密度，讓 explore 類任務不只記資源點，也記地圖覆蓋狀態
-    - [ ] 記錄已知工作點（礦坑入口 / 熔爐 / 工作檯 / 常用補給點），讓 self_task 能規劃更穩定的往返路線
-  - [ ] **Task history / long-term task recall**
-    - 在 working memory 之外，另外補完整 task history（例如 `task_history.jsonl` / SQLite），支援時間線回顧與長期分析。
-    - [ ] 記錄完整 task history（不只覆蓋目前 task.json）
-    - [ ] 規劃與 `Dashboard` / multi-agent coordinator 的歷史查詢接口
-  - [ ] **Interaction memory**（interaction_memory.json）
-    - 讓 bot 不只記得任務，也記得玩家偏好、近期重要對話、長期目標與尚未結束的主題，
-      讓互動更像持續合作，而不是每次都從零開始。
-    - [ ] 保存玩家偏好（例如少問問題、偏好 deterministic 行為）
-    - [ ] 保存長期目標與最近重要對話摘要
-    - [ ] 保存 open threads（聊到一半但還沒完成的主題）
-  - [ ] **Reflection / suggestion memory**（reflection_memory.json）
-    - 讓 bot 能累積對世界與自己行為的觀察，例如哪裡常卡住、哪些資源策略有效、最近值得提醒玩家的事。
-    - [ ] 記錄常見 failure patterns 與改善建議
-    - [ ] 記錄已知工作點、常用礦坑、危險區域、可重用設施
-    - [ ] 支援 bot 主動在視窗分享觀察、建議與下一步提醒
+  - [ ] **Spatial memory 強化**（`exploration_memory.json` 已有基礎）
+    - [x] 記錄 ore_finds / forest_finds / animal_areas
+    - [x] self_task 讀取記憶優先去已知位置
+    - [ ] 補 explored_chunks / 區域密度，讓 explore 不只記點，也記地圖覆蓋狀態
+    - [ ] 記錄已知工作點（礦坑入口 / 熔爐位置 / 常用補給點）
+  - [ ] **Task history**（`task_history.jsonl` / SQLite）
+    - `task.json` 只維持短期工作記憶；長期完整歷史另存
+  - [ ] **Interaction memory**（玩家偏好、長期目標、open threads）
+  - [ ] **Reflection memory**（failure patterns、有效策略、bot 主動建議）
 
-- [ ] **通用 craft / ensure retry 記憶體**
-  - 目前 `woodcutting` 的 `ensureAxe` 已看出局部跳針：同一輪內重複補工具、材料剛變一點就整套重試
-  - 不先做每個 skill 的局部修補；之後應抽成共享機制，讓所有 `ensureTool` 類流程共用
-  - 方向：記錄最近一次 craft/ensure 嘗試的資源 fingerprint、成功/失敗結果、cooldown、以及「inventory 哪些變化才值得重試」
-  - 先列為架構型技術債，避免現在為 `woodcutting` 單點加太多特例
-
-- [ ] **Docker 化單 bot**（確認 container 能正常啟動）
-
-## Multi-Agent
-
-- [ ] **設計 Coordinator agent**（任務分配、跨 bot 狀態共享）
-  - 考慮用 LangGraph 做 Coordinator 的決策圖（哪個 bot 去挖礦、哪個砍樹）；
-    個別 bot 的內部邏輯仍保持現有架構。
-- [ ] 加入 bot 間溝通機制（遊戲內 chat + Python message queue）
-- [ ] k8s 部署 n 個 bot container
+- [ ] **強化 self_task 自主規劃**
+  - [ ] 目標分解下沉：把 equipment/tool 缺口推算擴展成通用系統層目標分解
+  - [ ] 資源導向規劃：缺資源時先查 spatial memory，再決定是否 explore
+  - [ ] deterministic 選點策略：多個已知資源點時定義最近 / 最新 / 最可信的選擇規則
 
 ## 已完成
 
-- [x] **修正 executor 接受 activity_stuck replan 時，舊步驟沒有被完整覆蓋**
-  - 根本原因：LLM replan 沒有附上 pending_steps，導致舊步驟被丟棄
-  - 修正：`_enforce_pending_steps` 自動補上漏掉的 pending_steps
-  - 修正：`plan_context.pending_steps` 改用 `steps[idx+1:]` slice，包含 failed steps
-  - 修正：executor replan 分支加強 log 確認替換是否正確
+- [x] **Multi-agent 基礎建設**
+  - per-bot data isolation（`BOT_DATA_DIR` env var）
+  - per-bot WebSocket port（`BOT_WS_PORT` env var）
+  - `@BotName` / `@all` chat addressing（只有被點名的 bot 回應）
+  - bot-to-bot feedback loop 封鎖（`BOT_USERNAMES` 忽略清單）
+  - dashboard 多 bot 聚合（`live_state.json` 機制）
+  - docker-compose bot0 + agent0 + bot1 + agent1 四服務
 
-- [x] **Post-action verification loop**（強制 LLM 介入已實作）
-  - `executor.py` 實作 `_verify_step()`，在 equip/smelt/mine/deposit 完成後比對 before/after state
-  - `_handle_verify_failure()`：驗證失敗時重新進入 stuck recovery，觸發 LLM 決策（replan / skip / accept）
-  - `agent.py` 設定 `executor._verify_failed_callback = _on_verify_failed`，路由到 `activity_stuck_skill`
-  - LLM 不回 replan/skip 時自動 resume（避免 executor 永遠等待）
+- [x] **Dashboard**（agent observability）
+  - `agent/dashboard.py`：aiohttp HTTP server，port 3002
+  - `agent/dashboard.html`：暗色主題單檔 UI，每 2 秒 polling `/state`
+  - Multi-agent ready schema：`{ coordinator: null, agents: [{...}] }`
 
-- [x] **Deterministic rules 下沉到系統層（不只靠 prompt）**
-  - `activity_stuck.py` 實作完整 pipeline：
-    - `_enforce_pending_steps` — replan 缺少 pending_steps 時自動補上
-    - `_filter_done_steps_from_replan` — 移除 replan 開頭重複的已完成步驟
-    - `_deduplicate_adjacent_cmds` — 移除連續重複指令
-    - `_block_invalid_skip` — 由 `_CRITICAL_DEPENDENCY_PAIRS` table 驅動，攔截非法 skip
-    - `_compute_is_critical_subtask` — Pre-LLM 注入 `is_critical_subtask` 到 prompt
+- [x] **Post-action verification loop**
+  - `executor.py` 實作 `_verify_step()`，equip/smelt/mine/deposit 完成後比對 before/after state
+  - 驗證失敗 → `_handle_verify_failure()` → 觸發 LLM 決策（replan / skip / accept）
+  - LLM 不回 replan/skip 時自動 resume
 
-- [x] **Planner task context 強化**
-  - `task_memory.load_any()` — 不過濾 status，讓 planner 看到所有任務（running / interrupted / done）
-  - `task_memory.save()` 加 `final_goal` 欄位，自動繼承前次任務的最終目標
-  - `task_memory.set_final_goal()` — LLM 可更新跨任務的最終目標
-  - Planner prompt 依 status 顯示不同標籤，並帶入 `final_goal` 上下文
-  - LLM 可在 plan response 輸出 `final_goal`，agent.py 自動儲存
+- [x] **Deterministic rules 下沉到系統層**
+  - `_enforce_pending_steps` — replan 缺 pending_steps 時自動補上
+  - `_filter_done_steps_from_replan` — 移除 replan 開頭已完成的步驟
+  - `_deduplicate_adjacent_cmds` — 移除連續重複指令
+  - `_block_invalid_skip` — `_CRITICAL_DEPENDENCY_PAIRS` table 驅動的非法 skip 攔截
 
-- [x] **修正 equip 指令 action_done 遺漏**
-  - `equip <specific_item>` 在物品不在背包時，原本不送 `action_done` → executor 永遠等待
-  - 修正：無論是否裝備成功，always 送 `action_done`
+- [x] **Task memory 補強**
+  - `interruptedTasks`、`recentEvents`、`recentFailures`、`recentTransitions`，附 TTL/cap prune
+  - `final_goal` 欄位跨任務繼承最終目標
+  - `load_any()` 讓 planner 看到所有狀態的任務
 
-- [x] **修正 planner 對 equip 的濫用**
-  - 採礦/砍樹前不再盲目加 equip（mining.js 自動換鎬）
-  - Planner prompt 明確規範 equip 使用時機：玩家明確要求、剛合成新裝備、或有更好武器/護甲需穿上
+- [x] **context_builder v1**
+  - 抽出共用 `context_builder.py`，planner / self_task 改走共用 builder
 
-- [x] **新增 `!test verify_failure` 情境 + `test_plan` bridge event**
-  - `test_plan` 事件讓測試直接注入 commands 給 executor，繞過 planner
-  - `verify_failure` 情境：清空背包 → 注入 `equip diamond_pickaxe` → 驗證失敗 → LLM 介入
+- [x] **activity_stuck.py 重構成 `skills/stuck/` 分目錄**
+  - 拆出 smelting / mining / hunting / getfood 子模組
+  - decision 驗證、LLM utils、prompt builder 各自獨立
 
 - [x] **修正 mining 無鎬時 push/pop smelting tight loop**
-  - 症狀：`[Mine] 無稿子 → [Craft] 有 raw_iron → push smelting → 找不到熔爐 → pop → resume → 無限重複`
-  - 根本原因：`_smeltIfNeeded` 有圓石就直接啟動 smelting，但沒有木材做工作台，熔爐無法放置，瞬間失敗又回到 mining
-  - 修正（`crafting.js`）：無現成熔爐時，提前檢查「有工作台（附近 4 格或背包）OR 有木材」，否則直接 return false 不啟動 smelting
-  - 修正（`crafting.js`）：smelting 結束後檢查 `consumeLastOutcome`，若 status=stuck 不回報成功
-  - 修正（`smelting.js`）：`找不到熔爐` 時補送 `bridge.sendState(activity_stuck)`，讓 Python 有機會規劃補木材等 recovery
-
-- [x] `activity_stuck.py` 重構成 `skills/stuck/` 分目錄
-  - 已拆出 `smelting.py`、`mining.py`、`hunting.py`、`getfood.py`
-  - 通用 decision 驗證拆到 `skills/stuck/decision.py`
-  - LLM JSON 修補 / reprompt 拆到 `skills/stuck/llm_utils.py`
-  - prompt 常數拆到 `skills/stuck/prompts.py`
-  - prompt 組裝拆到 `skills/stuck/prompt_builder.py`
-  - 主 `activity_stuck.py` 現在以派發與 orchestration 為主
+- [x] **修正 equip 指令 action_done 遺漏**
+- [x] **修正 planner 對 equip 的濫用**
+- [x] **`!test verify_failure` + `test_plan` bridge event**
 - [x] Activity stack LIFO 架構
-- [x] PlanExecutor + task_memory
+- [x] PlanExecutor + task_memory 基礎版
 - [x] 背包整理（inventory_full LLM 決策）
-- [x] 箱子自動化（makechest + labelchest + deposit，含 {new_chest_id} placeholder）
-- [x] 裝備耐久監控（durability_pct，equipment slots）
-- [x] 背包滿時攔截所有活動（commands.js checkFull）
-- [x] 忽略 / 開頭的 Minecraft 指令
-- [x] Planner 禁止 LLM 使用清單外指令
-- [x] CLAUDE.md 分層（agent / bot / skills）
-- [x] Planner prompt 加入箱子詳情（label, freeSlots, contents）
-- [x] 復活後檢查 task.json steps，判斷是否繼續執行
-- [x] self_task 所有模式優先恢復中斷任務（resume_task flag）
-- [x] activity_stuck 加上層活動堆疊 context（smelting 不再誤 skip）
-- [x] activity_stack 顯示修正（entry.get("activity") 而非 "name"）
-- [x] 工作檯 / 熔爐放置改為前方兩格，被擋則挖除
-- [x] blockUpdate timeout 不再誤判為放置失敗（確認方塊存在再判斷）
-- [x] 大箱子放置驗證同 Y + XZ 距離 = 1（避免斜對角）
-- [x] tp 指令加入 planner（恢復任務時可傳送到上次工作位置）
-- [x] 強化 planner 前置條件推理（模糊指令 → 自動展開完整 plan）
-- [x] executor 錯誤處理（step 失敗時不卡住，能 skip 或 abort）
-- [x] **Task memory 基礎版**
-  - 保留當前 task、steps、currentStep、step status、step context
-  - 支援 interrupted / resumed / done 的基本任務生命週期
-  - planner / executor / self_task 可讀取目前 task 脈絡
-  - `task.json` 整合短期 interrupted memory（`interruptedTasks`）與 recent transitions（`recentTransitions`）
-  - 寫入 `task.json` 時自動做 normalize / prune，維持短期工作記憶而不是無限累積
-- [x] **Task memory 事件 / 失敗模式補強**
-  - 記錄 recent replans、skip、abort、resumetask 的歷史原因與時間線
-  - planner / self_task 可讀取 `recentFailures`，不只讀當前 task 狀態
-- [x] **恢復挖礦 / 食物鏈 deterministic 補強**
-  - `回去 / 恢復 / 繼續挖礦` 類語句優先走 deterministic 恢復最近 mining task，而不是完全交給 LLM 重規劃
-  - 恢復 mining / diamond 任務時，若熟食已足夠（目前先用 `cooked_total >= 16`），不再重建 `hunt / getfood` 前置鏈
-  - `hunting -> mine` 的 no-weapon shortcut 改成真正終止 hunting activity，而不是把 hunting 殘留在 stack 裡
-- [x] **Multi-agent logging / strict chat gating**
-  - bot / brain log 檔名可自動帶 `bot0` / `bot1` 標籤（優先取 `BOT_ID`，再 fallback `BOT_DATA_DIR` / `MC_USERNAME`）
-  - bot 側預設啟用 strict chat addressing，沒有 `@AgentX` / `@all` 前綴的聊天不再直接送進 LLM
-  - bot 側加入更硬的 bot speaker ignore 規則，避免 `Agent0` / `Agent1` 在聊天欄互相觸發 loop
+- [x] 箱子自動化（makechest + labelchest + deposit，含 `{new_chest_id}` placeholder）
+- [x] 裝備耐久監控 + 背包滿攔截
+- [x] 復活後恢復任務
+- [x] self_task workflow mode 自動恢復中斷任務
+- [x] Spatial memory（exploration_memory.json）接入 self_task
