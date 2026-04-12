@@ -506,7 +506,11 @@ def _sync_task_context(state: dict) -> None:
         step_patch = {
             "currentStepCmd": current_cmd,
             "expectedActivity": expected_activity,
+            "stackActivity": None,
+            "workPos": current_pos,
             "currentPos": current_pos,
+            "goal": {},
+            "progress": {},
             "activeActivity": active_activity,
             "activeCommand": active_command,
             "activityStack": stack_names,
