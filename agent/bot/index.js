@@ -14,6 +14,8 @@ const { applyMovements } = require('./movement_prefs')
 
 initLogger('bot')
 
+const _STRICT_CHAT_ADDRESSING = String(process.env.STRICT_CHAT_ADDRESSING || 'true').toLowerCase() !== 'false'
+
 const bot = mineflayer.createBot({
     host: process.env.MC_HOST || 'localhost',
     port: parseInt(process.env.MC_PORT || '25565'),
@@ -140,29 +142,40 @@ for (const name of Array.from(_BOT_USERNAMES)) {
     if (base && base !== name) _BOT_USERNAMES.add(base)
 }
 
+function _isIgnoredBotSpeaker(username) {
+    const lowered = String(username || '').trim().toLowerCase()
+    if (!lowered) return false
+    if (_BOT_USERNAMES.has(lowered)) return true
+    // Fallback: if env is incomplete, still ignore conventional bot names.
+    if (/^agent\d*$/i.test(lowered)) return true
+    return false
+}
+
 bot.on('chat', (username, message) => {
     if (username === bot.username) return
-    if (_BOT_USERNAMES.has(username.toLowerCase())) return  // ignore other bots
-    console.log(`[Chat] ${username}: ${message}`)
+    if (_isIgnoredBotSpeaker(username)) return
 
     // Addressing: "@Agent0 mine iron 8"  → only Agent0 responds
     //             "@all sethome"          → all bots respond
-    //             (no prefix)             → all bots respond (backward-compatible)
     const addressMatch = message.match(/^@(\S+)\s+([\s\S]*)$/)
     if (addressMatch) {
         const [, target, rest] = addressMatch
         if (target.toLowerCase() !== 'all' &&
             target.toLowerCase() !== bot.username.toLowerCase()) return
         message = rest.trim()
+    } else if (_STRICT_CHAT_ADDRESSING) {
+        return
     }
+
+    if (!message || message.startsWith('/')) return  // Minecraft client command — ignore
+
+    console.log(`[Chat] ${username}: ${message}`)
 
     if (message.startsWith('!')) {
         const [cmd, ...args] = message.slice(1).split(' ')
         handle(bot, { command: cmd, text: args.join(' '), args })
         return
     }
-
-    if (message.startsWith('/')) return  // Minecraft client command — ignore
 
     bridge.sendState(bot, 'chat', { from: username, message })
 })

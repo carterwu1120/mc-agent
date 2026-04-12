@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -43,7 +44,9 @@ def init_logger(name: str = "agent") -> str:
     log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = os.path.join(log_dir, f"{name}-{stamp}.txt")
+    bot_label = _resolve_log_label()
+    filename = f"{name}-{bot_label}-{stamp}.txt" if bot_label else f"{name}-{stamp}.txt"
+    log_path = os.path.join(log_dir, filename)
     file_handle = open(log_path, "a", encoding="utf-8", buffering=1)
 
     sys.stdout = _TeeStream(sys.stdout, file_handle, "INFO")
@@ -52,3 +55,25 @@ def init_logger(name: str = "agent") -> str:
     sys._agent_log_path = log_path
     print(f"[Log] 已寫入 {log_path}")
     return log_path
+
+
+def _resolve_log_label() -> str | None:
+    bot_id = (os.getenv("BOT_ID") or "").strip()
+    if bot_id:
+        return _sanitize_label(bot_id)
+
+    data_dir = (os.getenv("BOT_DATA_DIR") or "").strip()
+    if data_dir:
+        base = os.path.basename(os.path.normpath(data_dir))
+        if re.fullmatch(r"bot\d+", base, flags=re.IGNORECASE):
+            return _sanitize_label(base)
+
+    mc_username = (os.getenv("MC_USERNAME") or "").strip()
+    if re.fullmatch(r"Agent\d+", mc_username, flags=re.IGNORECASE):
+        return _sanitize_label(mc_username)
+    return None
+
+
+def _sanitize_label(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", value.strip())
+    return cleaned.strip("-_") or "bot"

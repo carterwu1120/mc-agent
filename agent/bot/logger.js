@@ -1,6 +1,28 @@
 const fs = require('fs')
 const path = require('path')
 
+function _sanitizeLabel(value) {
+    return String(value || '')
+        .trim()
+        .replace(/[^A-Za-z0-9_-]+/g, '-')
+        .replace(/^[-_]+|[-_]+$/g, '') || 'bot'
+}
+
+function _resolveLogLabel() {
+    const botId = String(process.env.BOT_ID || '').trim()
+    if (botId) return _sanitizeLabel(botId)
+
+    const dataDir = String(process.env.BOT_DATA_DIR || '').trim()
+    if (dataDir) {
+        const base = path.basename(path.normalize(dataDir))
+        if (/^bot\d+$/i.test(base)) return _sanitizeLabel(base)
+    }
+
+    const mcUsername = String(process.env.MC_USERNAME || '').trim()
+    if (/^Agent\d+$/i.test(mcUsername)) return _sanitizeLabel(mcUsername)
+    return ''
+}
+
 function _timestamp() {
     const now = new Date()
     const pad = (n) => String(n).padStart(2, '0')
@@ -28,7 +50,9 @@ function initLogger(name = 'bot') {
 
     const logDir = path.join(__dirname, '..', 'logs')
     fs.mkdirSync(logDir, { recursive: true })
-    const logPath = path.join(logDir, `${name}-${_filenameStamp()}.txt`)
+    const botLabel = _resolveLogLabel()
+    const filename = botLabel ? `${name}-${botLabel}-${_filenameStamp()}.txt` : `${name}-${_filenameStamp()}.txt`
+    const logPath = path.join(logDir, filename)
 
     const original = {
         log: console.log.bind(console),

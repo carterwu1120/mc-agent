@@ -35,6 +35,15 @@
   - 下一步聚焦：補自然語言 interrupt / resume 分類，不只靠前綴判斷
   - 後續可延伸成 dashboard 上的手動控制入口，並作為 multi-agent coordinator 介入單一 bot 的基礎能力
 
+- [ ] **Multi-agent chat / routing isolation**
+  - 目標：多 bot 同場時，只有被明確點名的 bot 會把聊天送進 LLM；其他 bot 不應因聊天欄回聲、系統訊息、或其他 bot 的回覆而被觸發
+  - [x] bot / brain log 檔名可帶 `bot0` / `bot1` 標籤，方便分辨多 agent 執行紀錄
+  - [x] bot 側支援 strict chat addressing：預設只有 `@Agent0 ...` / `@Agent1 ...` / `@all ...` 會進 LLM
+  - [x] bot 側忽略其他 bot 的聊天內容，不再把 bot-to-bot 回覆直接送進 LLM
+  - [ ] 在啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`，方便確認實際生效設定
+  - [ ] 統一 system chat / player chat / bot chat 的分類，避免 `Teleported ...`、伺服器公告、bot 自己的回覆被誤送進 planner
+  - [ ] 規劃 coordinator 層專用的 bot-to-bot channel，不再依賴 Minecraft 公共聊天欄做協調
+
 - [ ] **強化 self_task 自主規劃**（Spatial memory 已接入，下一步做 deterministic 強化）
   - [x] 已把 exploration memory 接入 self_task prompt，LLM 已能看到已知礦點 / 森林 / 動物區
   - [ ] 目標分解下沉：目前 planner 已支援部分裝備 / 工具需求的缺口推算；下一步是把這種推理擴展成更通用的系統層目標分解，而不只限於 equipment 類需求
@@ -179,3 +188,7 @@
   - `回去 / 恢復 / 繼續挖礦` 類語句優先走 deterministic 恢復最近 mining task，而不是完全交給 LLM 重規劃
   - 恢復 mining / diamond 任務時，若熟食已足夠（目前先用 `cooked_total >= 16`），不再重建 `hunt / getfood` 前置鏈
   - `hunting -> mine` 的 no-weapon shortcut 改成真正終止 hunting activity，而不是把 hunting 殘留在 stack 裡
+- [x] **Multi-agent logging / strict chat gating**
+  - bot / brain log 檔名可自動帶 `bot0` / `bot1` 標籤（優先取 `BOT_ID`，再 fallback `BOT_DATA_DIR` / `MC_USERNAME`）
+  - bot 側預設啟用 strict chat addressing，沒有 `@AgentX` / `@all` 前綴的聊天不再直接送進 LLM
+  - bot 側加入更硬的 bot speaker ignore 規則，避免 `Agent0` / `Agent1` 在聊天欄互相觸發 loop
