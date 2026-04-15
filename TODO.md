@@ -2,17 +2,24 @@
 
 ## 進行中 / 近期
 
+- [ ] **Pydantic schema validation（LLM 輸出驗證）**
+  - 目標：消滅 `json.loads` 後才炸的 KeyError，改在 LLM 層就驗收格式
+  - [ ] 在 `planner.py` 定義 `PlanResponse(BaseModel)`，用 `model_validate_json` 取代 `json.loads`
+  - [ ] 加 `reasoning` optional 欄位（model 說明為什麼這樣規劃）
+  - [ ] 推廣到 `inventory.py` / `activity_stuck/` / `self_task.py` 等其他 skill
+
 - [ ] **Stuck recovery context 強化**
   - 目前 stuck 時 LLM 收到的環境資訊不夠精確，導致恢復策略不適當
   - [ ] stuck prompt 明確利用 `nearby.trees` / `nearby.stone` — `trees=false` 時 deterministic 轉 explore，不讓 LLM 猜
   - [ ] Y 座標規則下沉：Y < 40 = 地底，stuck 時不建議 explore animals / chop trees
   - [ ] 傳入 `startPos` vs `currentPos` 距離差，讓 LLM 判斷是否真的在移動
 
-- [ ] **Python 側 context 清理機制 v2**
-  - [x] v1：`context_builder` 對 recent events / failures / interrupted tasks / chests 做截斷與摘要
-  - [x] v1：planner / self_task 改走共用 builder
-  - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
-  - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
+- [ ] **Coordinator agent（基本版）**
+  - 目標：兩個 bot 不重複搶同一資源（e.g. 同時決定去釣魚）
+  - [ ] Python coordinator class（不需要 LangGraph，一個有狀態的 dict + 一個 LLM call）
+  - [ ] Shared resource registry：`{ "fishing": "bot0", "mining": "bot1" }`
+  - [ ] Bot 規劃前先查詢 registry，已被 claimed 的 activity 不重複分配
+  - [ ] Bot-to-bot messaging via Python queue（不走 Minecraft chat）
 
 - [ ] **Multi-agent routing 收尾**
   - [x] `@BotName` / `@all` chat addressing
@@ -23,13 +30,6 @@
   - [ ] 啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`，方便確認生效設定
   - [ ] 統一 system chat / server announcement 過濾，避免 `Teleported ...` 被送進 planner
 
-- [ ] **Coordinator agent（基本版）**
-  - 目標：兩個 bot 不重複搶同一資源（e.g. 同時決定去釣魚）
-  - [ ] Python coordinator class（不需要 LangGraph，一個有狀態的 dict + 一個 LLM call）
-  - [ ] Shared resource registry：`{ "fishing": "bot0", "mining": "bot1" }`
-  - [ ] Bot 規劃前先查詢 registry，已被 claimed 的 activity 不重複分配
-  - [ ] Bot-to-bot messaging via Python queue（不走 Minecraft chat）
-
 - [ ] **Manual override / interrupt 機制**
   - [ ] 自然語言 interrupt / resume 分類（不只靠前綴）
   - [ ] executor / stuck recovery 能接受人工覆蓋，避免舊流程在背景等待
@@ -39,11 +39,27 @@
   - [ ] 共享 retry cooldown：上次 craft 失敗的 resource fingerprint，inventory 有哪些變化才允許重試
   - [ ] 統一 fallback：可徒手繼續的先繼續；不可徒手才升級成 replan
 
+- [ ] **Python 側 context 清理機制 v2**
+  - [x] v1：`context_builder` 對 recent events / failures / interrupted tasks / chests 做截斷與摘要
+  - [x] v1：planner / self_task 改走共用 builder
+  - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
+  - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
+
 ## 中期
 
-- [ ] **Pydantic AI 引入（pilot on planner.py）**
-  - 目標：消滅 `re.sub + json.loads` 脆弱解析，改用 typed structured output
-  - 先只包 `planner.py`，驗證 DX 改善後再推廣到其他 skill
+- [ ] **Goal-level verification（任務目標驗證）**
+  - 目標：plan 全部 steps 跑完後，驗證是否真的達成 goal，而不只是 steps 跑完就算 done
+  - 現有的 `_verify_step` 是 step-level（equip/smelt/mine 個別確認），缺 goal-level
+  - [ ] `PlanExecutor` plan 完成後，拿 `goal` + before/after inventory snapshot 做 goal 驗收
+  - [ ] 驗收失敗 → replan（優先 deterministic，不一定需要 LLM）
+  - [ ] `task_memory` status `done` 改為區分 `completed`（goal 達成）vs `finished`（steps 跑完）
+  - 搭配 `plan reasoning` 欄位一起設計，reasoning 裡的目標描述可用來驗收
+
+- [ ] **Plan reasoning 欄位推廣與驗證**
+  - Pydantic schema 加 `reasoning` optional 欄位後，進一步利用這個欄位
+  - [ ] `reasoning` vs `commands` 一致性檢查（說要補鐵但 commands 沒有 smelt → 抓邏輯錯）
+  - [ ] reasoning 可選擇性 chat 給玩家看（透明度）
+  - [ ] 評估 Gemini 2.5 Flash vs Ollama 小模型的 reasoning 品質差距
 
 - [ ] **Memory roadmap**
   - [ ] **Spatial memory 強化**（`exploration_memory.json` 已有基礎）
