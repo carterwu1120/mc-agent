@@ -76,6 +76,22 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - 玩家問問題、打招呼、或說的不是任務指令時，回傳 chat
 - 只輸出 JSON，不要加任何解釋或其他文字
 
+【執行中任務合併規則】
+若玩家新需求與當前或剛被中斷的任務（待執行步驟中有 mine diamond 或 mine iron）使用相同資源：
+- ⚠️ 絕對不要回傳 chat 說「沒有材料」或「背包沒有鑽石」——pending mine 步驟代表鑽石「即將取得」
+- ⚠️ 不要看當前背包鑽石數量來判斷能不能做；要看 pending steps 的預期產出 + 背包現有量
+- 輸出合併後的 plan（stopmine → mine 合併量 → equip）
+- 合併量計算：
+    1. 原任務 pending mine 量 = 待執行步驟中的 mine diamond X（X 已扣除當前進度）
+    2. 新需求量 = 新裝備所需鑽石數
+    3. 合併後 mine 量 = 原 pending + 新需求（不要從 0 重算）
+    例：待執行步驟=["mine diamond 19","equip"]，新需求稿+劍=5 → ["stopmine","mine diamond 24","equip"]
+- 若 pending steps 裡已有該資源的 mine，直接加量；不要新增重複的 mine 指令
+- 若新需求的裝備可以在現有 equip 步驟一起完成，不要新增額外 equip
+- 尊重步驟依賴順序：smelt 必須在對應 mine 之後，equip 必須在 mine/smelt 之後
+- 若新需求有前置步驟需要比現有 pending 更早執行（例如先補食物），
+  先讓當前步驟繼續（不 stop），把前置步驟排在 mine 合併步驟之前
+
 【前置條件推理（重要）】
 收到模糊或複合目標時，根據背包狀態（inventory）和裝備狀態（capabilities）自動推斷前置步驟，依序加入 commands：
 
@@ -414,6 +430,25 @@ def _requested_equipment_items(message: str, lowered: str) -> list[str]:
     return deduped
 
 
+def _running_task_pending_mine_count(material: str) -> int:
+    """Returns total pending mine count for the given material in the current or just-interrupted task.
+
+    Also checks "interrupted" because task_arbitration interrupts the task before planner runs,
+    so by the time planner is called the status is already "interrupted".
+    """
+    task = task_memory.load_any()
+    if not task or task.get("status") not in ("running", "interrupted"):
+        return 0
+    for cmd in _task_remaining_commands(task):
+        parts = (cmd or "").split()
+        if len(parts) >= 3 and parts[0] == "mine" and parts[1] == material:
+            try:
+                return int(parts[2])
+            except (ValueError, IndexError):
+                pass
+    return 0
+
+
 def _equipment_goal_shortcut(message: str, state: dict, activity: str) -> dict | None:
     lowered = message.lower()
     material = next(
@@ -427,6 +462,14 @@ def _equipment_goal_shortcut(message: str, state: dict, activity: str) -> dict |
     if not requested_items:
         return None
     if material == "stone" and any(item in ARMOR_SET_ITEMS for item in requested_items):
+        return None
+
+    # If there's a running task that already has pending mine steps for the same
+    # material, skip the shortcut and let the LLM merge the tasks properly.
+    pending_count = _running_task_pending_mine_count(material) if material in ("diamond", "iron") else 0
+    print(f"[Planner] equipment shortcut: material={material}, pending_mine={pending_count}")
+    if pending_count > 0:
+        print(f"[Planner] 偵測到 running task 有 pending mine {material}，跳過 shortcut → LLM 合併")
         return None
 
     summary = json.loads(summary_json(state))
@@ -854,10 +897,14 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         }
         label = _STATUS_LABEL.get(task_status, f"【任務({task_status})】")
 
+        pending_note = ""
+        if task_status in ("running", "interrupted") and remaining_cmds_for_resume:
+            pending_note = "（注意：待執行步驟的資源視為「即將取得」，規劃時不要因背包暫時沒有而說無法完成）\n"
+
         task_ctx = (
             f"\n\n{label}目標：{prev_task['goal']}{final_goal_str}\n"
             f"已完成步驟：{done_steps or '（無）'}\n"
-            + (f"待執行步驟：{remaining_cmds_for_resume}\n" if remaining_cmds_for_resume else "")
+            + (f"待執行步驟：{remaining_cmds_for_resume}\n{pending_note}" if remaining_cmds_for_resume else "")
             + work_pos_str
         )
 
