@@ -9,6 +9,8 @@ dependencies = [
   "google-genai>=1.0.0",
   "ollama>=0.6.1",
   "aiohttp>=3.13.5",
+  "pydantic>=2.0",
+  "openai>=1.0",
 ]
 
 [build-system]
@@ -20,3 +22,11 @@ packages = ["agent"]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

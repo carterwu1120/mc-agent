@@ -7,7 +7,7 @@ from collections import deque
 import websockets
 from dotenv import load_dotenv
 
-from agent.brain import LLMClient, GeminiClient, OllamaClient
+from agent.brain import LLMClient, GeminiClient, OllamaClient, OpenAIClient
 from agent.logger import init_logger
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
@@ -32,9 +32,20 @@ BOT_DATA_DIR = pathlib.Path(os.environ.get("BOT_DATA_DIR", str(pathlib.Path(__fi
 DEATH_FILE = BOT_DATA_DIR / 'death.json'
 _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 
-# ── 在這裡切換 LLM ────────────────────────────────────────
-llm: LLMClient = GeminiClient()
-# llm = OllamaClient(model="qwen3:14b")
+# ── LLM provider 由 env var 控制，不需要 rebuild ──────────
+# LLM_PROVIDER=gemini|openai|ollama  (default: gemini)
+# LLM_MODEL=<model>                  (optional, overrides provider default)
+def _build_llm() -> LLMClient:
+    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
+    model = os.environ.get("LLM_MODEL")
+    if provider == "openai":
+        return OpenAIClient(model=model or "gpt-5.4-mini")
+    if provider == "ollama":
+        return OllamaClient(model=model or "qwen3:14b")
+    # default: gemini
+    return GeminiClient(model=model or "gemini-2.5-flash")
+
+llm: LLMClient = _build_llm()
 
 executor = PlanExecutor()
 

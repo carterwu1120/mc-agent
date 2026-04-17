@@ -1,6 +1,10 @@
 import asyncio
 import json
 import re
+from typing import Literal
+
+from pydantic import BaseModel
+
 from agent.brain import LLMClient
 from agent.skills.command_validation import (
     PLAN_ALLOWED_COMMANDS,
@@ -26,10 +30,24 @@ _PLANNER_ALLOWED_KEYS = [
 ]
 _PLANNER_COMMANDS = command_list(_PLANNER_ALLOWED_KEYS)
 
+class _PlanLLMResponse(BaseModel):
+    action: Literal["plan"]
+    goal: str = ""
+    final_goal: str | None = None
+    reasoning: str | None = None
+    commands: list[str] = []
+
+
+class _ChatLLMResponse(BaseModel):
+    action: Literal["chat"]
+    text: str = ""
+    reasoning: str | None = None
+
+
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 玩家用自然語言下達指令，你要轉換成機器人可執行的指令序列。
 只能回覆以下其中一種 JSON（不含其他文字）：
-{{"action": "plan", "goal": "簡短描述此次任務目標", "final_goal": "玩家的最終目標（若不明確或與前次相同可省略）", "commands": ["chop logs 20", "mine iron 10"]}}
+{{"action": "plan", "goal": "簡短描述此次任務目標", "final_goal": "玩家的最終目標（若不明確或與前次相同可省略）", "reasoning": "為何這樣規劃（前置條件、缺少資源等）", "commands": ["chop logs 20", "mine iron 10"]}}
 {{"action": "chat", "text": "我聽不懂你的意思"}}
 
 【final_goal 說明】
@@ -267,7 +285,19 @@ async def _chat_with_retry(llm: LLMClient, prompt: str, system: str, attempts: i
 def _parse_decision_text(response: str) -> dict:
     clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
     clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-    return json.loads(clean)
+    raw = json.loads(clean)
+    action = raw.get("action")
+    if action == "plan":
+        parsed = _PlanLLMResponse.model_validate(raw)
+        if parsed.reasoning:
+            print(f"[Planner] 推理：{parsed.reasoning}")
+        return parsed.model_dump(exclude_none=True)
+    if action == "chat":
+        parsed = _ChatLLMResponse.model_validate(raw)
+        if parsed.reasoning:
+            print(f"[Planner] 推理：{parsed.reasoning}")
+        return parsed.model_dump(exclude_none=True)
+    return raw
 
 
 def _planner_failure_chat() -> dict:
