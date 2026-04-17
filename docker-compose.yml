@@ -12,11 +12,11 @@ services:
       MC_VERSION:  ${MC_VERSION:-1.20.1}
       MC_AUTH:     ${MC_AUTH:-offline}
       BOT_WS_PORT: 3001
-      BOT_DATA_DIR: /app/data/bot0
+      BOT_DATA_DIR: /app/agent/data/bot0
       BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
     volumes:
-      - ./agent/data:/app/data
-      - ./agent/logs:/app/logs
+      - ./agent/data:/app/agent/data
+      - ./agent/logs:/app/agent/logs
     restart: unless-stopped
 
   agent0:
