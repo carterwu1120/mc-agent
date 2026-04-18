@@ -4,6 +4,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta
 from agent.plan_utils import build_step_records, normalize_commands
+from agent import history_db
 
 _DATA_DIR = os.environ.get('BOT_DATA_DIR', os.path.join(os.path.dirname(__file__), 'data'))
 os.makedirs(_DATA_DIR, exist_ok=True)
@@ -98,6 +99,9 @@ def mark_step_failed(step: int, error: str | None = None) -> None:
             activity=expected_activity,
         )
         _write(t)
+        failures = t.get("recentFailures") or []
+        if failures:
+            history_db._fire_and_forget(history_db.write_failure, dict(failures[0]), t.get("id"))
 
 
 def update_context(patch: dict) -> None:
@@ -261,14 +265,21 @@ def interrupt(reason: str) -> None:
         step=current_step,
     )
     _write(t)
+    history_db._fire_and_forget(history_db.archive_task, dict(t))
 
 
 def done() -> None:
     _patch({"status": "done"})
+    t = _load_raw()
+    if t:
+        history_db._fire_and_forget(history_db.archive_task, dict(t))
 
 
 def failed() -> None:
     _patch({"status": "failed"})
+    t = _load_raw()
+    if t:
+        history_db._fire_and_forget(history_db.archive_task, dict(t))
 
 
 def resume_interrupted(new_commands: list | None = None, goal: str | None = None) -> dict | None:
@@ -322,6 +333,9 @@ def record_event(
         step=step,
     )
     _write(t)
+    events = t.get("recentEvents") or []
+    if events:
+        history_db._fire_and_forget(history_db.write_event, dict(events[0]), t.get("id"))
 
 
 def recent_events() -> list[dict]:
@@ -349,6 +363,9 @@ def record_failure(
         activity=activity or _command_to_activity(cmd),
     )
     _write(t)
+    failures = t.get("recentFailures") or []
+    if failures:
+        history_db._fire_and_forget(history_db.write_failure, dict(failures[0]), t.get("id"))
 
 
 def recent_failures() -> list[dict]:
