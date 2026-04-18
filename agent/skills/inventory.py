@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import equipment_summary
 
 LABEL_PATTERNS = {
@@ -196,9 +197,9 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-        decision = json.loads(clean)
+        decision = parse_llm_json(json.loads(clean), "Skill/inventory")
         if decision.get('action') == 'plan':
-            return decision  # handled by executor in agent.py
+            return decision
         return {"command": "inventory_decision", **decision}
     except Exception as e:
         print(f"[Skill/inventory] 解析失敗: {e}\n原始回應: {response!r}")

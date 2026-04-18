@@ -1,10 +1,6 @@
 import asyncio
 import json
 import re
-from typing import Literal
-
-from pydantic import BaseModel
-
 from agent.brain import LLMClient
 from agent.skills.command_validation import (
     PLAN_ALLOWED_COMMANDS,
@@ -21,6 +17,7 @@ from agent.context_builder import (
     build_recent_failures_section,
 )
 from agent.plan_utils import normalize_commands
+from agent.skills.llm_response import parse_llm_json
 
 _PLANNER_ALLOWED_KEYS = [
     "mine", "chop", "fish", "smelt", "combat",
@@ -29,20 +26,6 @@ _PLANNER_ALLOWED_KEYS = [
     "deposit", "withdraw", "makechest", "labelchest", "equip", "come", "tp",
 ]
 _PLANNER_COMMANDS = command_list(_PLANNER_ALLOWED_KEYS)
-
-class _PlanLLMResponse(BaseModel):
-    action: Literal["plan"]
-    goal: str = ""
-    final_goal: str | None = None
-    reasoning: str | None = None
-    commands: list[str] = []
-
-
-class _ChatLLMResponse(BaseModel):
-    action: Literal["chat"]
-    text: str = ""
-    reasoning: str | None = None
-
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 玩家用自然語言下達指令，你要轉換成機器人可執行的指令序列。
@@ -302,18 +285,7 @@ def _parse_decision_text(response: str) -> dict:
     clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
     clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
     raw = json.loads(clean)
-    action = raw.get("action")
-    if action == "plan":
-        parsed = _PlanLLMResponse.model_validate(raw)
-        if parsed.reasoning:
-            print(f"[Planner] 推理：{parsed.reasoning}")
-        return parsed.model_dump(exclude_none=True)
-    if action == "chat":
-        parsed = _ChatLLMResponse.model_validate(raw)
-        if parsed.reasoning:
-            print(f"[Planner] 推理：{parsed.reasoning}")
-        return parsed.model_dump(exclude_none=True)
-    return raw
+    return parse_llm_json(raw, "Planner")
 
 
 def _planner_failure_chat() -> dict:

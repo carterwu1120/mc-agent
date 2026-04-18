@@ -1,6 +1,7 @@
 import re
 
 from agent.brain import LLMClient
+from agent.skills.llm_response import parse_llm_json
 from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
 from agent.skills.stuck import decision as decision_utils
 from agent.skills.stuck import getfood as getfood_stuck
@@ -271,7 +272,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-        decision = llm_utils.parse_json_with_repair(clean)
+        decision = parse_llm_json(llm_utils.parse_json_with_repair(clean), "Skill/activity_stuck")
 
         if _should_prefer_replan(activity, reason, plan_context) and decision.get("action") not in {"replan", "skip"}:
             repaired = await llm_utils.reprompt_for_replan_strategy(

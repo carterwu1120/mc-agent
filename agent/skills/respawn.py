@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import equipment_summary
 from agent.skills.commands_ref import command_list
 
@@ -167,7 +168,7 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-        decision = json.loads(clean)
+        decision = parse_llm_json(json.loads(clean), "Respawn")
 
         text = decision.get("text", "").strip()
         result = []

@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json
 from agent.skills.commands_ref import command_list
 from agent import task_memory
@@ -177,10 +178,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         try:
-            decision = json.loads(clean)
+            raw = json.loads(clean)
         except json.JSONDecodeError:
-            decision = _extract_first_json_object(clean)
-        decision = _normalize_result(decision)
+            raw = _extract_first_json_object(clean)
+        decision = _normalize_result(parse_llm_json(raw, "SelfTask"))
 
         if decision.get("action") == "plan":
             if not _is_valid_plan_result(decision):

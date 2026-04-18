@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 _DATA_DIR = os.environ.get("BOT_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 _DB_FILE = os.path.join(_DATA_DIR, "task_history.db")
@@ -113,7 +113,7 @@ def archive_task(task: dict) -> None:
                 task.get("status") or "unknown",
                 task.get("interruptedBy"),
                 task.get("createdAt") or "",
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
             ),
         )
         conn.commit()
@@ -138,7 +138,7 @@ def write_event(event: dict, task_id: str | None) -> None:
                 event.get("command"),
                 event.get("step"),
                 json.dumps(event.get("details") or {}, ensure_ascii=False),
-                event.get("at") or datetime.utcnow().isoformat(),
+                event.get("at") or datetime.now(timezone.utc).isoformat(),
             ),
         )
         conn.commit()
@@ -160,7 +160,7 @@ def write_failure(failure: dict, task_id: str | None) -> None:
                 failure.get("step"),
                 failure.get("reason") or "",
                 failure.get("activity"),
-                failure.get("at") or datetime.utcnow().isoformat(),
+                failure.get("at") or datetime.now(timezone.utc).isoformat(),
             ),
         )
         conn.commit()

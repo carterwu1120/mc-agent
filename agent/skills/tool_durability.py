@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json, equipment_summary
 from agent.skills.commands_ref import command_list
 
@@ -77,7 +78,7 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         if not clean.endswith("}"):
             clean += "}"
-        decision = json.loads(clean)
+        decision = parse_llm_json(json.loads(clean), "Durability")
 
         text = decision.get("text", "").strip()
         result = []

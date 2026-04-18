@@ -1,6 +1,7 @@
 import json
 import re
 from agent.brain import LLMClient
+from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json
 
 SYSTEM_PROMPT = """你是 Minecraft 陪玩型 agent 的玩家任務仲裁助手。
@@ -57,9 +58,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         try:
-            decision = json.loads(clean)
+            raw = json.loads(clean)
         except json.JSONDecodeError:
-            decision = _extract_first_json_object(clean)
+            raw = _extract_first_json_object(clean)
+        decision = parse_llm_json(raw, "TaskArb")
 
         if decision.get("decision") not in ALLOWED_DECISIONS:
             print(f"[TaskArb] 無效 decision，忽略: {decision}")
