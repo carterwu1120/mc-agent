@@ -205,6 +205,22 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             print("[Skill/activity_stuck] getfood/no_raw_food 但熟食已足夠，直接跳過補食流程")
             return shortcut
 
+    if activity == "chopping" and reason == "no_trees":
+        nearby = state.get("nearby") or {}
+        if not nearby.get("trees"):
+            pending_steps = (plan_context or {}).get("pending_steps", [])
+            if y < 40:
+                commands = ["surface", "explore trees"] + pending_steps
+                msg = "附近沒有樹且目前在地底，先回到地表再尋找新的樹木區域。"
+            else:
+                commands = ["explore trees"] + pending_steps
+                msg = "附近已沒有樹，移動到新的區域尋找樹木。"
+            print(f"[Skill/activity_stuck] chopping/no_trees deterministic: {commands}")
+            return [
+                {"command": "chat", "text": msg},
+                {"action": "replan", "commands": commands},
+            ]
+
     if activity == "mining" and reason == "no_tools":
         shortcut = mining_stuck.deterministic_shortcut(state, plan_context)
         if shortcut:

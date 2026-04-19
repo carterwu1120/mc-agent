@@ -2,17 +2,16 @@
 
 ## 進行中 / 近期
 
-- [ ] **Pydantic schema validation（LLM 輸出驗證）**
+- [x] **Pydantic schema validation（LLM 輸出驗證）**
   - 目標：消滅 `json.loads` 後才炸的 KeyError，改在 LLM 層就驗收格式
-  - [ ] 在 `planner.py` 定義 `PlanResponse(BaseModel)`，用 `model_validate_json` 取代 `json.loads`
-  - [ ] 加 `reasoning` optional 欄位（model 說明為什麼這樣規劃）
-  - [ ] 推廣到 `inventory.py` / `activity_stuck/` / `self_task.py` 等其他 skill
+  - [x] 在 `planner.py` 定義 `PlanResponse(BaseModel)`，用 `model_validate_json` 取代 `json.loads`
+  - [x] 加 `reasoning` optional 欄位（model 說明為什麼這樣規劃）
+  - [x] 推廣到所有 skill — 統一 `BaseLLMResponse` + `parse_llm_json` (`skills/llm_response.py`)
 
-- [ ] **Stuck recovery context 強化**
-  - 目前 stuck 時 LLM 收到的環境資訊不夠精確，導致恢復策略不適當
-  - [ ] stuck prompt 明確利用 `nearby.trees` / `nearby.stone` — `trees=false` 時 deterministic 轉 explore，不讓 LLM 猜
-  - [ ] Y 座標規則下沉：Y < 40 = 地底，stuck 時不建議 explore animals / chop trees
-  - [ ] 傳入 `startPos` vs `currentPos` 距離差，讓 LLM 判斷是否真的在移動
+- [x] **Stuck recovery context 強化**
+  - [x] `chopping/no_trees` + `nearby.trees=false` → deterministic shortcut，不走 LLM
+  - [x] Y < 40 地底規則：prompt 注入 surface 前置約束，LLM 不可直接回 explore
+  - [x] 傳入 `startPos` vs `currentPos` 距離差，讓 LLM 判斷是否真的在移動
 
 - [ ] **Coordinator agent（基本版）**
   - 目標：兩個 bot 不重複搶同一資源（e.g. 同時決定去釣魚）

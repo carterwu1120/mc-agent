@@ -1,4 +1,5 @@
 import json
+import math
 
 from agent.skills.state_summary import summary_json
 from agent.skills.stuck import hunting as hunting_stuck
@@ -54,6 +55,12 @@ def build_activity_prompt(
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
     reason_desc = REASON_DESC.get(reason, reason)
 
+    pos = state.get("pos") or {}
+    nearby = state.get("nearby") or {}
+    stack = state.get("stack") or []
+    top_frame = stack[-1] if stack else {}
+    start_pos = top_frame.get("startPos") or {}
+
     extra_lines = []
     if missing:
         extra_lines.append(f"缺少資源/工具：{', '.join(missing)}")
@@ -67,6 +74,27 @@ def build_activity_prompt(
         extra_lines.append("注意：目前看起來不是單純缺資源，而是 craft 流程可能異常失敗")
     if detail:
         extra_lines.append(f"補充說明：{detail}")
+
+    # #2 — underground sequencing constraint
+    if y < 40:
+        extra_lines.append(f"⚠ 目前在地底（Y={y}）。若要 explore，必須先執行 surface，不可直接回覆 explore 作為單一指令。")
+
+    # #1 — nearby terrain for chopping
+    if activity == "chopping":
+        extra_lines.append(
+            f"附近地形：trees={nearby.get('trees', '?')}，stone={nearby.get('stone', '?')}，water={nearby.get('water', '?')}"
+        )
+
+    # #3 — startPos distance
+    if start_pos and pos:
+        dx = pos.get("x", 0) - start_pos.get("x", 0)
+        dz = pos.get("z", 0) - start_pos.get("z", 0)
+        dy = pos.get("y", 0) - start_pos.get("y", 0)
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+        extra_lines.append(
+            f"活動起始位置：Y={round(start_pos.get('y', 0))}（與起始點距離 {dist:.1f} 格）"
+        )
+
     if activity == "hunting" and reason == "no_animals":
         summary = state.get("summary") or {}
         raw_total = ((((summary.get("resources") or {}).get("food") or {}).get("raw_total", None)))
