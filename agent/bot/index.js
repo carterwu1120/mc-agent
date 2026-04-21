@@ -15,6 +15,7 @@ const { applyMovements } = require('./movement_prefs')
 initLogger('bot')
 
 const _STRICT_CHAT_ADDRESSING = String(process.env.STRICT_CHAT_ADDRESSING || 'true').toLowerCase() !== 'false'
+const _IS_COORDINATOR = String(process.env.COORDINATOR_BOT || 'false').toLowerCase() === 'true'
 
 const bot = mineflayer.createBot({
     host: process.env.MC_HOST || 'localhost',
@@ -160,6 +161,10 @@ bot.on('chat', (username, message) => {
     const addressMatch = message.match(/^@(\S+)\s+([\s\S]*)$/)
     if (addressMatch) {
         const [, target, rest] = addressMatch
+        if (target.toLowerCase() === 'coord' && _IS_COORDINATOR) {
+            bridge.sendState(bot, 'chat', { from: username, message: rest.trim(), coordinator_mode: true })
+            return
+        }
         if (target.toLowerCase() !== 'all' &&
             target.toLowerCase() !== bot.username.toLowerCase()) return
         message = rest.trim()

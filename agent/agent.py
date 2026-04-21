@@ -12,6 +12,7 @@ from agent.logger import init_logger
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
 from agent.skills import activity_stuck as activity_stuck_skill
+from agent.skills import coordinator as coordinator_skill
 from agent.skills import food as food_skill
 from agent.skills import planner as planner_skill
 from agent.skills import self_task as self_task_skill
@@ -574,6 +575,19 @@ async def _send_chat(ws, text: str) -> None:
     await ws.send(json.dumps({"command": "chat", "text": text}))
 
 
+async def _dispatch_result(item: dict, state: dict, ws) -> None:
+    """Dispatch a single action item — used by coordinator and other direct-dispatch paths."""
+    if item.get("action") == "plan":
+        commands = item.get("commands", [])
+        goal = item.get("goal", "")
+        if commands:
+            if executor.is_running():
+                executor.abort()
+            asyncio.create_task(executor.execute(commands, ws, goal=goal))
+    else:
+        await ws.send(json.dumps(item))
+
+
 async def _apply_manual_abort(state: dict, ws) -> None:
     if executor.is_running():
         print("[TaskArb] 手動 abort：中止目前計畫")
@@ -655,6 +669,21 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if state.get("activity") != "idle":
                 _idle_started_at = None
                 return
+            # Poll coordinator command queue
+            queue_file = BOT_DATA_DIR / "command_queue.json"
+            if queue_file.exists():
+                try:
+                    queued = json.loads(queue_file.read_text(encoding="utf-8"))
+                    queue_file.unlink()
+                    cmds = queued.get("commands") or []
+                    goal = queued.get("goal", "coordinator task")
+                    if cmds:
+                        print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
+                        task_memory.save(goal, cmds)
+                        asyncio.create_task(executor.execute(cmds, ws, goal=goal))
+                        return
+                except Exception as e:
+                    print(f"[Agent] command_queue 讀取失敗: {e}")
             if _idle_started_at is None:
                 _idle_started_at = now
                 return
@@ -817,6 +846,14 @@ async def _handle_player_chat(state: dict, ws) -> None:
     message = state.get("message", "")
     if _is_system_chat_message(message):
         print(f"[TaskArb] 忽略系統聊天: {message}")
+        return
+
+    if state.get("coordinator_mode"):
+        print(f"[Coordinator] 收到調度請求: {message}")
+        result = await coordinator_skill.handle(state, llm, message)
+        if result:
+            for item in (result if isinstance(result, list) else [result]):
+                await _dispatch_result(item, state, ws)
         return
 
     override = _parse_manual_override(message)

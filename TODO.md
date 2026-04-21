@@ -1,5 +1,7 @@
 # Minecraft Bot — Roadmap
 
+> 標記 **[Backend]** 的項目對應真實的 backend / system design 概念。
+
 ## 進行中 / 近期
 
 - [x] **Pydantic schema validation（LLM 輸出驗證）**
@@ -13,12 +15,12 @@
   - [x] Y < 40 地底規則：prompt 注入 surface 前置約束，LLM 不可直接回 explore
   - [x] 傳入 `startPos` vs `currentPos` 距離差，讓 LLM 判斷是否真的在移動
 
-- [ ] **Coordinator agent（基本版）**
-  - 目標：兩個 bot 不重複搶同一資源（e.g. 同時決定去釣魚）
-  - [ ] Python coordinator class（不需要 LangGraph，一個有狀態的 dict + 一個 LLM call）
-  - [ ] Shared resource registry：`{ "fishing": "bot0", "mining": "bot1" }`
-  - [ ] Bot 規劃前先查詢 registry，已被 claimed 的 activity 不重複分配
-  - [ ] Bot-to-bot messaging via Python queue（不走 Minecraft chat）
+- [x] **Coordinator agent（基本版）**
+  - [x] `agent/skills/coordinator.py` — LLM 調度員，讀取所有 bot 狀態，智慧分配任務
+  - [x] `@coord <request>` chat prefix → bot0 (COORDINATOR_BOT=true) 觸發調度流程
+  - [x] 其他 bot 透過 `command_queue.json` 接收指派任務，idle 時自動執行
+  - [x] dashboard `/state` 顯示 coordinator 各 bot 狀態摘要
+  - 目前用 file-based IPC（`command_queue.json`）→ 升級見中期「Coordinator HTTP Service」
 
 - [ ] **Multi-agent routing 收尾**
   - [x] `@BotName` / `@all` chat addressing
@@ -44,6 +46,15 @@
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
   - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
 
+- [ ] **Structured Logging** `[Backend: Observability]`
+  - 為什麼需要：現在 log 是純文字，跨 service 難以追蹤問題根源。加上 `task_id` 後，
+    一個任務從 coordinator 派出 → agent 接收 → bot 執行的整條流程都能串起來查。
+  - [ ] log 改成 JSON 格式（`{"time", "level", "task_id", "service", "msg"}`）
+  - [ ] coordinator / agent / executor 的操作都帶同一個 `task_id`
+  - [ ] dashboard `/events?task_id=xxx` 可查整條 trace
+
+---
+
 ## 中期
 
 - [ ] **Goal-level verification（任務目標驗證）**
@@ -52,10 +63,8 @@
   - [ ] `PlanExecutor` plan 完成後，拿 `goal` + before/after inventory snapshot 做 goal 驗收
   - [ ] 驗收失敗 → replan（優先 deterministic，不一定需要 LLM）
   - [ ] `task_memory` status `done` 改為區分 `completed`（goal 達成）vs `finished`（steps 跑完）
-  - 搭配 `plan reasoning` 欄位一起設計，reasoning 裡的目標描述可用來驗收
 
 - [ ] **Plan reasoning 欄位推廣與驗證**
-  - Pydantic schema 加 `reasoning` optional 欄位後，進一步利用這個欄位
   - [ ] `reasoning` vs `commands` 一致性檢查（說要補鐵但 commands 沒有 smelt → 抓邏輯錯）
   - [ ] reasoning 可選擇性 chat 給玩家看（透明度）
   - [ ] 評估 Gemini 2.5 Flash vs Ollama 小模型的 reasoning 品質差距
@@ -66,8 +75,8 @@
     - [x] self_task 讀取記憶優先去已知位置
     - [ ] 補 explored_chunks / 區域密度，讓 explore 不只記點，也記地圖覆蓋狀態
     - [ ] 記錄已知工作點（礦坑入口 / 熔爐位置 / 常用補給點）
-  - [ ] **Task history**（`task_history.jsonl` / SQLite）
-    - `task.json` 只維持短期工作記憶；長期完整歷史另存
+  - [ ] **Task history**（SQLite 已有基礎）
+    - `task.json` 只維持短期工作記憶；長期完整歷史已存 SQLite
   - [ ] **Interaction memory**（玩家偏好、長期目標、open threads）
   - [ ] **Reflection memory**（failure patterns、有效策略、bot 主動建議）
 
@@ -76,7 +85,46 @@
   - [ ] 資源導向規劃：缺資源時先查 spatial memory，再決定是否 explore
   - [ ] deterministic 選點策略：多個已知資源點時定義最近 / 最新 / 最可信的選擇規則
 
+- [ ] **Coordinator HTTP Service** `[Backend: Service-to-service communication / REST API design]`
+  - 為什麼需要：現在用 `command_queue.json` 做 IPC — 只能單機、需要 polling、
+    兩個 process 同時寫可能衝突。改成 HTTP API 後 coordinator 是唯一的 task owner，
+    agent 透過 REST 接任務，不需要共享檔案系統。
+  - [ ] coordinator 獨立成 aiohttp service（port 3010）
+  - [ ] `POST /bots/register` — agent 啟動時向 coordinator 登記
+  - [ ] `POST /bots/{id}/tasks` — 指派任務（body 帶 `task_id` 作為 idempotency key）
+  - [ ] `PATCH /bots/{id}/tasks/{task_id}` — agent 回報任務進度 / 完成
+  - [ ] `GET  /bots/{id}/state` — 查詢 bot 狀態（取代 `live_state.json` polling）
+  - [ ] 移除 `command_queue.json` file polling
+
+- [ ] **Heartbeat / Health Check** `[Backend: Reliability — failure detection]`
+  - 為什麼需要：現在 coordinator 不知道 bot 是否還活著。Bot crash 後，
+    coordinator 會永遠等它完成任務。Heartbeat 讓系統在 N 秒內偵測斷線並重新分配任務。
+  - [ ] agent 每 10s 打 `POST /bots/{id}/heartbeat`
+  - [ ] coordinator 超過 30s 沒收到 → 標記該 bot `offline`
+  - [ ] offline bot 的 pending task 重新放回 queue（搭配 Task Queue 一起做）
+
+- [ ] **Task Queue** `[Backend: Async decoupling — producer/consumer pattern]`
+  - 為什麼需要：現在 coordinator 直接寫任務給某個 bot（同步 push）。
+    改成 queue 後兩邊解耦：coordinator 只管「放進去」，bot 只管「拿出來執行」。
+    Bot 忙碌時任務排隊等待，重連後自動繼續，任務不遺失。
+  - [ ] in-memory queue per bot（`asyncio.Queue`）
+  - [ ] task 有完整 lifecycle：`queued → running → done / failed`
+  - [ ] bot 執行完後 ack，coordinator 才從 queue 移除（at-least-once delivery）
+
+- [ ] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
+  - 為什麼需要：多個 bot 同時卡住時，可能在短時間打出大量 LLM request 超過 API quota。
+    Token bucket 讓系統在壓力下仍然穩定，超過限制時 queue 等待而不是直接報錯。
+  - [ ] LLM client 層加 token bucket rate limiter（每分鐘最多 N 次）
+  - [ ] 超過限制時 exponential backoff 等待，不拋例外
+
+---
+
 ## 已完成
+
+- [x] **Vertex AI provider（VertexClient）**
+  - `agent/brain/vertex.py`：用 ADC 認證（`gcloud auth application-default login`），不需要 API key
+  - `LLM_PROVIDER=vertex` 切換；`GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` env vars
+  - docker-compose mount `~/.config/gcloud` 進 container
 
 - [x] **Multi-agent 基礎建設**
   - per-bot data isolation（`BOT_DATA_DIR` env var）
@@ -106,6 +154,10 @@
   - `interruptedTasks`、`recentEvents`、`recentFailures`、`recentTransitions`，附 TTL/cap prune
   - `final_goal` 欄位跨任務繼承最終目標
   - `load_any()` 讓 planner 看到所有狀態的任務
+
+- [x] **SQLite task history（history_db.py）**
+  - `tasks` / `events` / `failures` 三張表
+  - dashboard `/history` `/failures` `/events` endpoint
 
 - [x] **context_builder v1**
   - 抽出共用 `context_builder.py`，planner / self_task 改走共用 builder

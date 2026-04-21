@@ -14,6 +14,7 @@ services:
       BOT_WS_PORT: 3001
       BOT_DATA_DIR: /app/agent/data/bot0
       BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
+      COORDINATOR_BOT: "true"
     volumes:
       - ./agent/data:/app/agent/data
       - ./agent/logs:/app/agent/logs

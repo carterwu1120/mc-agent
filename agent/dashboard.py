@@ -214,10 +214,12 @@ def _collect_all_bots() -> list[dict]:
 
 
 def _build_state() -> dict:
+    from agent.skills.coordinator import _collect_all_bots_state
+    coordinator_bots = _collect_all_bots_state()
     return {
-        # Coordinator placeholder — null until multi-agent coordinator is implemented.
-        # Future shape: { "assigned_tasks": [], "active_bots": [], "pending_decisions": [] }
-        "coordinator": None,
+        "coordinator": {
+            "bots": [{"bot_id": b["bot_id"], "activity": b["activity"], "current_task": b["current_task"]} for b in coordinator_bots],
+        },
         "agents": _collect_all_bots(),
     }
 
