@@ -24,18 +24,21 @@ services:
       context: .
       dockerfile: Dockerfile.agent
     environment:
-      GOOGLE_API_KEY:    ${GOOGLE_API_KEY}
-      OPENAI_API_KEY:    ${OPENAI_API_KEY}
-      OLLAMA_BASE_URL:   ${OLLAMA_BASE_URL:-http://localhost:11434}
-      LLM_PROVIDER:      ${LLM_PROVIDER:-gemini}
-      LLM_MODEL:         ${LLM_MODEL}
-      BOT_WS_URL:        ws://bot0:3001
-      BOT_ID:            bot0
-      BOT_DATA_DIR:      /app/agent/data/bot0
-      DASHBOARD_PORT:    3002
+      GOOGLE_API_KEY:         ${GOOGLE_API_KEY}
+      OPENAI_API_KEY:         ${OPENAI_API_KEY}
+      OLLAMA_BASE_URL:        ${OLLAMA_BASE_URL:-http://localhost:11434}
+      LLM_PROVIDER:           ${LLM_PROVIDER:-gemini}
+      LLM_MODEL:              ${LLM_MODEL}
+      GOOGLE_CLOUD_PROJECT:   ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION:  ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      BOT_WS_URL:             ws://bot0:3001
+      BOT_ID:                 bot0
+      BOT_DATA_DIR:           /app/agent/data/bot0
+      DASHBOARD_PORT:         3002
     volumes:
       - ./agent/data:/app/agent/data
       - ./agent/logs:/app/agent/logs
+      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
     depends_on:
       - bot0
     ports:
