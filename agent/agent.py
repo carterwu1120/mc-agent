@@ -696,6 +696,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     if cmds:
                         print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
                         task_memory.save(goal, cmds)
+                        await ws.send(json.dumps({"command": "chat", "text": f"收到指派任務：{goal}"}))
                         _launch_plan(cmds, ws, goal=goal)
                         return
                 except Exception as e:
