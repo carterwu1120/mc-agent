@@ -1,30 +1,51 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
+
+_current_task_id: str | None = None
+
+
+def set_task_id(tid: str | None) -> None:
+    global _current_task_id
+    _current_task_id = tid
+
+
+def get_task_id() -> str | None:
+    return _current_task_id
 
 
 class _TeeStream:
-    def __init__(self, original, file_handle, level: str):
+    def __init__(self, original, file_handle, level: str, service: str, bot_id: str):
         self._original = original
         self._file_handle = file_handle
         self._level = level
+        self._service = service
+        self._bot_id = bot_id
 
     def write(self, data: str) -> int:
         written = self._original.write(data)
         if data and not data.isspace():
             for line in data.splitlines(True):
                 if not line.strip():
-                    self._file_handle.write(line)
+                    self._file_handle.write("\n")
                     continue
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                if line.endswith("\n"):
-                    payload = line[:-1]
-                    self._file_handle.write(f"[{timestamp}] [{self._level}] {payload}\n")
-                else:
-                    self._file_handle.write(f"[{timestamp}] [{self._level}] {line}")
+                msg = line.rstrip("\n")
+                # [State] tick lines are terminal-only — too noisy for log file
+                if msg.lstrip().startswith("[State]"):
+                    continue
+                entry = {
+                    "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                    "level": self._level,
+                    "service": self._service,
+                    "bot_id": self._bot_id,
+                    "task_id": _current_task_id,
+                    "msg": msg,
+                }
+                self._file_handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._file_handle.flush()
         return written
 
@@ -36,25 +57,30 @@ class _TeeStream:
         return getattr(self._original, "isatty", lambda: False)()
 
 
-def init_logger(name: str = "agent") -> str:
+def init_logger(service: str = "agent") -> str:
     if getattr(sys, "_agent_log_initialized", False):
         return getattr(sys, "_agent_log_path")
 
+    bot_id = _resolve_bot_id()
     base_dir = os.path.dirname(__file__)
     log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     bot_label = _resolve_log_label()
-    filename = f"{name}-{bot_label}-{stamp}.txt" if bot_label else f"{name}-{stamp}.txt"
+    filename = f"{service}-{bot_label}-{stamp}.jsonl" if bot_label else f"{service}-{stamp}.jsonl"
     log_path = os.path.join(log_dir, filename)
     file_handle = open(log_path, "a", encoding="utf-8", buffering=1)
 
-    sys.stdout = _TeeStream(sys.stdout, file_handle, "INFO")
-    sys.stderr = _TeeStream(sys.stderr, file_handle, "ERROR")
+    sys.stdout = _TeeStream(sys.stdout, file_handle, "INFO", service, bot_id)
+    sys.stderr = _TeeStream(sys.stderr, file_handle, "ERROR", service, bot_id)
     sys._agent_log_initialized = True
     sys._agent_log_path = log_path
     print(f"[Log] 已寫入 {log_path}")
     return log_path
+
+
+def _resolve_bot_id() -> str:
+    return (os.getenv("BOT_ID") or "").strip() or "bot0"
 
 
 def _resolve_log_label() -> str | None:

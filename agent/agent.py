@@ -3,12 +3,13 @@ import json
 import os
 import pathlib
 import re
+import uuid
 from collections import deque
 import websockets
 from dotenv import load_dotenv
 
 from agent.brain import LLMClient, GeminiClient, OllamaClient, OpenAIClient, VertexClient
-from agent.logger import init_logger
+from agent.logger import init_logger, set_task_id
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
 from agent.skills import activity_stuck as activity_stuck_skill
@@ -51,6 +52,12 @@ def _build_llm() -> LLMClient:
 llm: LLMClient = _build_llm()
 
 executor = PlanExecutor()
+
+
+def _launch_plan(commands: list, ws, **kwargs) -> None:
+    """Start a plan and assign a new task_id for log tracing."""
+    set_task_id(uuid.uuid4().hex[:8])
+    asyncio.create_task(executor.execute(commands, ws, **kwargs))
 
 
 async def _on_verify_failed(state: dict, ws) -> None:
@@ -116,6 +123,7 @@ async def _on_done(_state: dict, _llm: LLMClient):
         task = task_memory.load()
         if task and task.get('status') == 'running':
             task_memory.done()
+        set_task_id(None)
     _record_to_exploration_memory(_state)
     return None
 
@@ -537,17 +545,25 @@ def _sync_task_context(state: dict) -> None:
 
 
 
+_SYSTEM_CHAT_PATTERNS = (
+    r"^teleported\s+\S+\s+to\s+",           # Teleported X to Y/pos
+    r"^teleported\s+to\s+",                  # Teleported to X
+    r"^gave\s+\d+\s+\[.+\]\s+to\s+",        # Gave N [item] to X
+    r"^set\s+the\s+time\s+to\s+\d+",         # Set the time to N
+    r"^gamerule\s+\S+\s+is\s+now\s+set\s+to\s+",  # Gamerule X is now set to Y
+    r"^\[server\]",                           # [Server] ... prefixed messages
+    r"^.+\s+has\s+made\s+the\s+advancement\s+\[",  # Advancement notifications
+    r"^your\s+(home|spawn)\s+(has\s+been\s+set|is\s+set)",
+    r"^\S+'?s?\s+home\s+(has\s+been\s+set|is\s+set)",
+    r"^moved\s+\S+\s+to\s+",                 # Moved X to Y (admin tp)
+)
+
+
 def _is_system_chat_message(message: str) -> bool:
     if not message:
         return False
     lowered = message.strip().lower()
-    if re.match(r"^teleported\s+.+\s+to\s+agent]?$", lowered):
-        return True
-    if re.match(r"^gave\s+.+\s+to\s+agent]?$", lowered):
-        return True
-    if re.match(r"^set\s+the\s+time\s+to\s+\d+]?$", lowered):
-        return True
-    return False
+    return any(re.match(p, lowered) for p in _SYSTEM_CHAT_PATTERNS)
 
 
 def _parse_manual_override(message: str) -> dict | None:
@@ -583,7 +599,7 @@ async def _dispatch_result(item: dict, state: dict, ws) -> None:
         if commands:
             if executor.is_running():
                 executor.abort()
-            asyncio.create_task(executor.execute(commands, ws, goal=goal))
+            _launch_plan(commands, ws, goal=goal)
     else:
         await ws.send(json.dumps(item))
 
@@ -680,7 +696,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     if cmds:
                         print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
                         task_memory.save(goal, cmds)
-                        asyncio.create_task(executor.execute(cmds, ws, goal=goal))
+                        _launch_plan(cmds, ws, goal=goal)
                         return
                 except Exception as e:
                     print(f"[Agent] command_queue 讀取失敗: {e}")
@@ -762,7 +778,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     else:
                         print('[Agent] 計畫執行中，中止舊計畫')
                         executor.abort()
-                asyncio.create_task(executor.execute(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task))
+                _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task)
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
@@ -799,7 +815,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         else:
                             print('[Agent] 計畫執行中，中止舊計畫')
                             executor.abort()
-                    asyncio.create_task(executor.execute(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task))
+                    _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task)
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
                 cmds = a.get("commands", [])
@@ -818,7 +834,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     executor.replan(cmds)
                 elif cmds:
                     print(f"[Agent] replan 但 executor 未執行，改為新計畫: {cmds}")
-                    asyncio.create_task(executor.execute(cmds, ws))
+                    _launch_plan(cmds, ws)
                 continue
             if isinstance(a, dict) and a.get("action") == "skip":
                 if executor.is_running():
@@ -916,6 +932,18 @@ async def _handle_player_chat(state: dict, ws) -> None:
 
 
 async def run():
+    _mc_username   = os.environ.get("MC_USERNAME", "?")
+    _bot_usernames = os.environ.get("BOT_USERNAMES", "") or "(none)"
+    _strict_chat   = os.environ.get("STRICT_CHAT_ADDRESSING", "true")
+    _is_coord      = os.environ.get("COORDINATOR_BOT", "false")
+    _provider      = os.environ.get("LLM_PROVIDER", "gemini")
+    _model         = os.environ.get("LLM_MODEL") or "default"
+    print(
+        f"[Agent] 啟動 BOT_ID={BOT_ID} | WS={WS_URL} | MC_USERNAME={_mc_username} | "
+        f"LLM={_provider}/{_model} | BOT_USERNAMES={_bot_usernames} | "
+        f"STRICT_CHAT={_strict_chat} | COORDINATOR={_is_coord}"
+    )
+
     # 啟動時把任何殘留的 running 任務標記為 interrupted
     # （表示上次 agent 異常終止，下次說「繼續」可以接回）
     _startup_task = task_memory._load_raw()

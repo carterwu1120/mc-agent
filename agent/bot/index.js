@@ -84,7 +84,13 @@ function _wrapPathfinderDebug(bot) {
 }
 
 bot.once('spawn', () => {
-    console.log(`[Bot] 進入世界！位置：${JSON.stringify(bot.entity.position)}`)
+    const _mcUsername   = process.env.MC_USERNAME || 'Agent'
+    const _botUsernames = process.env.BOT_USERNAMES || '(none)'
+    console.log(
+        `[Bot] 進入世界！位置：${JSON.stringify(bot.entity.position)} | ` +
+        `MC_USERNAME=${_mcUsername} | BOT_USERNAMES=${_botUsernames} | ` +
+        `STRICT_CHAT=${_STRICT_CHAT_ADDRESSING} | COORDINATOR=${_IS_COORDINATOR}`
+    )
 
     _wrapPathfinderDebug(bot)
     applyMovements(bot)
