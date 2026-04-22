@@ -12,9 +12,7 @@ from agent.skills.commands_ref import command_list
 from agent import task_memory
 from agent.context_builder import (
     build_chests_summary,
-    build_interrupted_tasks_section,
-    build_recent_events_section,
-    build_recent_failures_section,
+    build_for_skill,
 )
 from agent.plan_utils import normalize_commands
 from agent.skills.llm_response import parse_llm_json
@@ -880,9 +878,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             + work_pos_str
         )
 
-    recent_events_section = build_recent_events_section(task_memory.recent_events(), limit=6)
-    recent_failures_section = build_recent_failures_section(task_memory.recent_failures(), limit=4)
-    interrupted_tasks_section = build_interrupted_tasks_section(task_memory.interrupted_tasks(), limit=2)
+    task_history = build_for_skill("planner", task_memory.recent_events(), task_memory.recent_failures(), task_memory.interrupted_tasks())
     chests_summary = build_chests_summary(chests, max_chests=4, max_items=4)
 
     prompt = (
@@ -892,9 +888,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}{task_ctx}\n\n"
         f"已登記箱子：\n{chests_summary}\n\n"
-        f"{interrupted_tasks_section}"
-        f"{recent_events_section}"
-        f"{recent_failures_section}"
+        f"{task_history}"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請根據玩家的話決定要做什麼。"
     )

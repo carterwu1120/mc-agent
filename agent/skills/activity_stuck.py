@@ -1,7 +1,9 @@
 import re
 
 from agent.brain import LLMClient
+from agent.context_builder import build_for_skill
 from agent.skills.llm_response import parse_llm_json
+from agent import task_memory as _task_memory
 from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
 from agent.skills.stuck import decision as decision_utils
 from agent.skills.stuck import getfood as getfood_stuck
@@ -274,6 +276,15 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             missing_count=missing_count,
             plan_context=plan_context,
         )
+
+    task_history = build_for_skill(
+        "activity_stuck",
+        _task_memory.recent_events(),
+        _task_memory.recent_failures(),
+        _task_memory.interrupted_tasks(),
+    )
+    if task_history:
+        prompt = prompt.replace("請決定機器人接下來要做什麼。", task_history + "\n請決定機器人接下來要做什麼。")
 
     system = stuck_prompts.SYSTEM_PROMPTS.get(activity, stuck_prompts.SYSTEM_PROMPT_FALLBACK)
     if plan_context:

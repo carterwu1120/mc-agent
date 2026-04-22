@@ -7,9 +7,7 @@ from agent.skills.commands_ref import command_list
 from agent import task_memory
 from agent import exploration_memory
 from agent.context_builder import (
-    build_interrupted_tasks_section,
-    build_recent_events_section,
-    build_recent_failures_section,
+    build_for_skill,
 )
 
 _SELF_TASK_COMMANDS = command_list(["getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "tp", "idle"])
@@ -155,17 +153,13 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     mem_summary = exploration_memory.summary_for_prompt()
     mem_section = f"\n【已知資源位置（探索記憶）】\n{mem_summary}\n" if mem_summary else ""
 
-    failure_section = build_recent_failures_section(task_memory.recent_failures(), limit=4)
-    event_section = build_recent_events_section(task_memory.recent_events(), limit=6)
-    interrupted_section = build_interrupted_tasks_section(task_memory.interrupted_tasks(), limit=2)
+    task_history = build_for_skill("self_task", task_memory.recent_events(), task_memory.recent_failures(), task_memory.interrupted_tasks())
 
     prompt = (
         "請根據以下機器人狀態摘要，決定下一個自主任務。\n\n"
         f"{summary_json(state)}"
         f"{mem_section}"
-        f"{interrupted_section}"
-        f"{event_section}"
-        f"{failure_section}"
+        f"{task_history}"
     )
 
     response = None
