@@ -34,6 +34,8 @@ BOT_ID = os.environ.get("BOT_ID", "bot0")
 BOT_DATA_DIR = pathlib.Path(os.environ.get("BOT_DATA_DIR", str(pathlib.Path(__file__).parent / "data")))
 COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "")
 DEATH_FILE = BOT_DATA_DIR / 'death.json'
+_last_heartbeat_at: float = 0.0
+HEARTBEAT_INTERVAL: float = 10.0
 _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 
 # ── LLM provider 由 env var 控制，不需要 rebuild ──────────
@@ -676,6 +678,21 @@ def _is_stale_response(event_type: str, request_state: dict) -> bool:
     return False
 
 
+async def _send_heartbeat() -> None:
+    global _last_heartbeat_at
+    _last_heartbeat_at = asyncio.get_running_loop().time()
+    try:
+        task = task_memory.load()
+        payload = {
+            "task_id": (task or {}).get("id"),
+            "activity": _latest_state.get("activity"),
+        }
+        async with aiohttp.ClientSession() as s:
+            await s.post(f"{COORDINATOR_URL}/bots/{BOT_ID}/heartbeat", json=payload)
+    except Exception as e:
+        print(f"[Agent] heartbeat 失敗: {e}")
+
+
 async def _check_coordinator_interrupt(state: dict, ws) -> None:
     """On every tick, check abort flag then interrupt slot."""
     try:
@@ -755,6 +772,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             now = asyncio.get_running_loop().time()
             if COORDINATOR_URL:
                 asyncio.create_task(_check_coordinator_interrupt(state, ws))
+                if now - _last_heartbeat_at > HEARTBEAT_INTERVAL:
+                    asyncio.create_task(_send_heartbeat())
             if executor.is_running():
                 return
             if state.get("activity") != "idle":

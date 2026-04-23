@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -25,6 +26,10 @@ _tasks:           dict[str, Task]          = {}        # task_id → Task (idemp
 _registered:      set[str]                 = set()
 _interrupt_slots: dict[str, Task | None]   = {}        # bot_id → single pending interrupt task
 _abort_flags:     dict[str, bool]          = {}        # bot_id → force-abort pending
+_bot_last_seen:   dict[str, float]         = {}        # bot_id → time.time() of last heartbeat
+
+_OFFLINE_THRESHOLD = 30.0   # seconds without heartbeat → bot considered offline
+_MONITOR_INTERVAL  = 10.0   # how often the health monitor wakes
 
 _CORS = {"Access-Control-Allow-Origin": "*"}
 
@@ -48,6 +53,7 @@ async def handle_register(request: web.Request) -> web.Response:
         _queues[bot_id] = asyncio.Queue()
     _interrupt_slots[bot_id] = None
     _abort_flags[bot_id] = False
+    _bot_last_seen[bot_id] = time.time()
     print(f"[CoordinatorService] Registered: {bot_id}")
     return _json({"ok": True})
 
@@ -134,11 +140,44 @@ async def handle_update(request: web.Request) -> web.Response:
     return _json({"ok": True})
 
 
+async def handle_heartbeat(request: web.Request) -> web.Response:
+    bot_id = request.match_info["id"]
+    if bot_id not in _registered:
+        return _json({"error": "bot not registered"}, 404)
+    _bot_last_seen[bot_id] = time.time()
+    return _json({"ok": True})
+
+
+async def _monitor_bot_health() -> None:
+    while True:
+        await asyncio.sleep(_MONITOR_INTERVAL)
+        now = time.time()
+        for bot_id in list(_registered):
+            last = _bot_last_seen.get(bot_id, 0.0)
+            if now - last <= _OFFLINE_THRESHOLD:
+                continue
+            q = _queues.get(bot_id)
+            if q is None:
+                continue
+            recovered = []
+            while True:
+                try:
+                    task = q.get_nowait()
+                    task.status = "failed"
+                    recovered.append(task.task_id)
+                except asyncio.QueueEmpty:
+                    break
+            if recovered:
+                print(f"[CoordinatorService] {bot_id} offline — marked {len(recovered)} queued tasks failed: {recovered}")
+            _bot_last_seen[bot_id] = now  # reset to suppress log spam until re-register
+
+
 async def start(port: int | None = None) -> None:
     port = port or int(os.environ.get("COORDINATOR_PORT", 3010))
     try:
         app = web.Application()
         app.router.add_post("/bots/register", handle_register)
+        app.router.add_post("/bots/{id}/heartbeat", handle_heartbeat)
         app.router.add_post("/bots/{id}/tasks", handle_enqueue)
         app.router.add_get("/bots/{id}/tasks/next", handle_next)
         app.router.add_post("/bots/{id}/abort", handle_abort)
@@ -150,6 +189,7 @@ async def start(port: int | None = None) -> None:
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
         print(f"[CoordinatorService] http://0.0.0.0:{port}")
+        asyncio.create_task(_monitor_bot_health())
     except Exception as e:
         print(f"[CoordinatorService] 啟動失敗: {type(e).__name__}: {e}")
         return
