@@ -85,31 +85,31 @@
   - [ ] 資源導向規劃：缺資源時先查 spatial memory，再決定是否 explore
   - [ ] deterministic 選點策略：多個已知資源點時定義最近 / 最新 / 最可信的選擇規則
 
-- [ ] **Coordinator HTTP Service** `[Backend: Service-to-service communication / REST API design]`
+- [x] **Coordinator HTTP Service** `[Backend: Service-to-service communication / REST API design]`
   - 為什麼需要：現在用 `command_queue.json` 做 IPC — 只能單機、需要 polling、
     兩個 process 同時寫可能衝突。改成 HTTP API 後 coordinator 是唯一的 task owner，
     agent 透過 REST 接任務，不需要共享檔案系統。
-  - [ ] coordinator 獨立成 aiohttp service（port 3010）
-  - [ ] `POST /bots/register` — agent 啟動時向 coordinator 登記
-  - [ ] `POST /bots/{id}/tasks` — 指派任務（body 帶 `task_id` 作為 idempotency key）
-  - [ ] `PATCH /bots/{id}/tasks/{task_id}` — agent 回報任務進度 / 完成
-  - [ ] `GET  /bots/{id}/state` — 查詢 bot 狀態（取代 `live_state.json` polling）
-  - [ ] 移除 `command_queue.json` file polling
+  - [x] coordinator 獨立成 aiohttp service（port 3010）— `agent/coordinator_service.py`
+  - [x] `POST /bots/register` — agent 啟動時向 coordinator 登記（含 retry）
+  - [x] `POST /bots/{id}/tasks` — 指派任務（body 帶 `task_id` 作為 idempotency key）
+  - [x] `PATCH /bots/{id}/tasks/{task_id}` — agent 回報任務完成
+  - [x] 移除 `command_queue.json` file polling
+  - 額外實作：interrupt slot（`GET /bots/{id}/tasks/interrupt`）、abort flag（`POST/GET /bots/{id}/abort`）、task source tracking
 
-- [ ] **Heartbeat / Health Check** `[Backend: Reliability — failure detection]`
+- [x] **Heartbeat / Health Check** `[Backend: Reliability — failure detection]`
   - 為什麼需要：現在 coordinator 不知道 bot 是否還活著。Bot crash 後，
     coordinator 會永遠等它完成任務。Heartbeat 讓系統在 N 秒內偵測斷線並重新分配任務。
-  - [ ] agent 每 10s 打 `POST /bots/{id}/heartbeat`
-  - [ ] coordinator 超過 30s 沒收到 → 標記該 bot `offline`
-  - [ ] offline bot 的 pending task 重新放回 queue（搭配 Task Queue 一起做）
+  - [x] agent 每 10s 打 `POST /bots/{id}/heartbeat`
+  - [x] coordinator 超過 30s 沒收到 → monitor 偵測，drain queued tasks 並標記 failed
+  - [x] `PYTHONUNBUFFERED=1` 加入 Dockerfile.agent，確保 log 即時輸出
 
-- [ ] **Task Queue** `[Backend: Async decoupling — producer/consumer pattern]`
+- [x] **Task Queue** `[Backend: Async decoupling — producer/consumer pattern]`
   - 為什麼需要：現在 coordinator 直接寫任務給某個 bot（同步 push）。
     改成 queue 後兩邊解耦：coordinator 只管「放進去」，bot 只管「拿出來執行」。
     Bot 忙碌時任務排隊等待，重連後自動繼續，任務不遺失。
-  - [ ] in-memory queue per bot（`asyncio.Queue`）
-  - [ ] task 有完整 lifecycle：`queued → running → done / failed`
-  - [ ] bot 執行完後 ack，coordinator 才從 queue 移除（at-least-once delivery）
+  - [x] in-memory queue per bot（`asyncio.Queue`）
+  - [x] task 有完整 lifecycle：`queued → running → done / failed`
+  - [x] bot 執行完後 PATCH 回報，coordinator 更新 task status
 
 - [ ] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
   - 為什麼需要：多個 bot 同時卡住時，可能在短時間打出大量 LLM request 超過 API quota。
