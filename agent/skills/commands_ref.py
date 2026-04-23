@@ -31,7 +31,7 @@ COMMANDS: dict[str, dict] = {
     "come":        {"desc": "走向玩家",         "usage": "come [player]",                  "example": "come Carter"},
     "tp":          {"desc": "傳送到座標",       "usage": "tp <x> <y> <z>",                "example": "tp 10 64 -200"},
     # ── Equipment & inventory ─────────────────────────────────
-    "equip":       {"desc": "裝備最佳武裝", "usage": "equip"},
+    "equip":       {"desc": "裝備最佳武裝（自動合成所需工具與工作台，不需要單獨的 craft 指令）", "usage": "equip"},
     "deposit":     {"desc": "存入箱子",     "usage": "deposit <chest_id>",                 "example": "deposit 1"},
     "withdraw":    {"desc": "從箱子取出",   "usage": "withdraw <item> [count] <chest_id>", "example": "withdraw oak_log 16 1"},
     "makechest":   {"desc": "合成並放置大箱子（自動登記，完成後 chest_id 存入 {new_chest_id}）", "usage": "makechest"},

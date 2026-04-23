@@ -36,6 +36,7 @@ services:
       BOT_ID:                 bot0
       BOT_DATA_DIR:           /app/agent/data/bot0
       DASHBOARD_PORT:         3002
+      COORDINATOR_PORT:       3010
     volumes:
       - ./agent/data:/app/agent/data
       - ./agent/logs:/app/agent/logs
@@ -44,6 +45,7 @@ services:
       - bot0
     ports:
       - "3002:3002"
+      - "3010:3010"
     restart: unless-stopped
 
   # ── Bot 1 ────────────────────────────────────────────────────────────────────
@@ -80,6 +82,7 @@ services:
       BOT_WS_URL:             ws://bot1:3003
       BOT_ID:                 bot1
       BOT_DATA_DIR:           /app/agent/data/bot1
+      COORDINATOR_URL:        http://agent0:3010
       # No DASHBOARD_PORT — agent1 does not run the dashboard
     volumes:
       - ./agent/data:/app/agent/data

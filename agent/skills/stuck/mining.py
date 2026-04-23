@@ -44,7 +44,7 @@ def deterministic_shortcut(state: dict, plan_context: dict | None) -> list[dict]
 
     pending_steps = (plan_context or {}).get("pending_steps", [])
     current_cmd = (plan_context or {}).get("current_cmd", "")
-    new_cmds = ["craft stone_pickaxe"]
+    new_cmds = ["equip"]
     if current_cmd:
         new_cmds.append(current_cmd)
     new_cmds.extend(pending_steps)

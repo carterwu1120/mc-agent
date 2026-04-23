@@ -5,6 +5,7 @@ import pathlib
 import re
 import uuid
 from collections import deque
+import aiohttp
 import websockets
 from dotenv import load_dotenv
 
@@ -31,6 +32,7 @@ init_logger("brain")
 WS_URL = os.environ.get("BOT_WS_URL", "ws://localhost:3001")
 BOT_ID = os.environ.get("BOT_ID", "bot0")
 BOT_DATA_DIR = pathlib.Path(os.environ.get("BOT_DATA_DIR", str(pathlib.Path(__file__).parent / "data")))
+COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "")
 DEATH_FILE = BOT_DATA_DIR / 'death.json'
 _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 
@@ -685,22 +687,39 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if state.get("activity") != "idle":
                 _idle_started_at = None
                 return
-            # Poll coordinator command queue
-            queue_file = BOT_DATA_DIR / "command_queue.json"
-            if queue_file.exists():
+            # Poll coordinator HTTP service for next task
+            if COORDINATOR_URL:
                 try:
-                    queued = json.loads(queue_file.read_text(encoding="utf-8"))
-                    queue_file.unlink()
-                    cmds = queued.get("commands") or []
-                    goal = queued.get("goal", "coordinator task")
-                    if cmds:
-                        print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
-                        task_memory.save(goal, cmds)
-                        await ws.send(json.dumps({"command": "chat", "text": f"收到指派任務：{goal}"}))
-                        _launch_plan(cmds, ws, goal=goal)
-                        return
+                    async with aiohttp.ClientSession() as s:
+                        resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/next")
+                        data = await resp.json()
+                    envelope = data.get("task")
+                    if envelope:
+                        cmds = envelope.get("commands") or []
+                        goal = envelope.get("goal", "coordinator task")
+                        cid = envelope.get("task_id")
+                        if cmds:
+                            print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
+                            task_memory.save(goal, cmds)
+                            await ws.send(json.dumps({"command": "chat", "text": f"收到指派任務：{goal}"}))
+                            set_task_id(uuid.uuid4().hex[:8])
+
+                            async def _exec_and_report(_cmds=cmds, _goal=goal, _cid=cid):
+                                await executor.execute(_cmds, ws, goal=_goal)
+                                if _cid and COORDINATOR_URL:
+                                    try:
+                                        async with aiohttp.ClientSession() as _s:
+                                            await _s.patch(
+                                                f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_cid}",
+                                                json={"status": "done"},
+                                            )
+                                    except Exception as _e:
+                                        print(f"[Agent] coordinator PATCH 失敗: {_e}")
+
+                            asyncio.create_task(_exec_and_report())
+                            return
                 except Exception as e:
-                    print(f"[Agent] command_queue 讀取失敗: {e}")
+                    print(f"[Agent] coordinator poll 失敗: {e}")
             if _idle_started_at is None:
                 _idle_started_at = now
                 return
@@ -956,6 +975,25 @@ async def run():
         _dashboard.init(_latest_state, _thinking, _queued_player_tasks,
                         _recent_stuck_events, bot_id=BOT_ID)
         asyncio.create_task(_dashboard.start())
+
+    if os.environ.get("COORDINATOR_PORT"):
+        import agent.coordinator_service as _coord_service
+        asyncio.create_task(_coord_service.start())
+
+    if COORDINATOR_URL:
+        async def _register_with_coordinator():
+            for attempt in range(10):
+                try:
+                    async with aiohttp.ClientSession() as s:
+                        await s.post(f"{COORDINATOR_URL}/bots/register", json={"bot_id": BOT_ID})
+                    print(f"[Agent] Registered {BOT_ID} with coordinator at {COORDINATOR_URL}")
+                    return
+                except Exception as e:
+                    wait = 3 * (attempt + 1)
+                    print(f"[Agent] Coordinator register failed (attempt {attempt+1}/10): {e}, retrying in {wait}s")
+                    await asyncio.sleep(wait)
+            print(f"[Agent] Coordinator register gave up after 10 attempts")
+        asyncio.create_task(_register_with_coordinator())
 
     while True:
         try:

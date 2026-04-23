@@ -2,8 +2,10 @@ import json
 import os
 import pathlib
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
 
+import aiohttp
 from agent.brain import LLMClient
 
 _STALE_THRESHOLD = timedelta(seconds=30)
@@ -11,6 +13,7 @@ _STALE_THRESHOLD = timedelta(seconds=30)
 BOT_ID = os.environ.get("BOT_ID", "bot0")
 DATA_ROOT = pathlib.Path(os.environ.get("BOT_DATA_DIR",
     str(pathlib.Path(__file__).parent.parent / "data" / "bot0"))).parent
+COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "http://localhost:3010")
 
 
 SYSTEM_PROMPT = """你是多機器人 Minecraft 任務調度員。
@@ -26,6 +29,7 @@ SYSTEM_PROMPT = """你是多機器人 Minecraft 任務調度員。
 - 若機器人 food < 8，優先讓他先 getfood count 8，或跳過分配
 - 若機器人已有進行中任務且狀態正常，可不打擾
 - commands 必須是合法指令（mine, chop, hunt, fish, explore, equip, smelt, getfood, idle 等）
+- 禁止使用 craft 指令，它不存在。需要工具時用 equip（會自動製作）；需要熟食時用 getfood
 - 可以把大任務拆成多個機器人並行的子任務（一個挖礦，一個補食物）
 - assignments 可以是空陣列（若判斷所有機器人都不適合接任務）
 """
@@ -119,7 +123,7 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
         if bid == BOT_ID:
             own_assignment = {"action": "plan", "commands": cmds, "goal": goal}
         else:
-            _dispatch_to_bot(bid, cmds, goal)
+            await _dispatch_to_bot(bid, cmds, goal)
 
     if own_assignment:
         result.append(own_assignment)
@@ -127,14 +131,22 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
     return result or None
 
 
-def _dispatch_to_bot(bot_id: str, commands: list[str], goal: str) -> None:
-    queue_file = DATA_ROOT / bot_id / "command_queue.json"
-    queue_file.parent.mkdir(parents=True, exist_ok=True)
-    queue_file.write_text(
-        json.dumps({"commands": commands, "goal": goal}, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    print(f"[Coordinator] 指派 {bot_id}: {commands}")
+async def _dispatch_to_bot(bot_id: str, commands: list[str], goal: str) -> None:
+    task_id = uuid.uuid4().hex[:12]
+    try:
+        async with aiohttp.ClientSession() as s:
+            resp = await s.post(
+                f"{COORDINATOR_URL}/bots/{bot_id}/tasks",
+                json={"task_id": task_id, "commands": commands, "goal": goal},
+            )
+            if resp.status not in (200, 201):
+                body = await resp.text()
+                print(f"[Coordinator] 指派 {bot_id} 失敗: HTTP {resp.status} {body}")
+                return
+    except Exception as e:
+        print(f"[Coordinator] 指派 {bot_id} 失敗: {e}")
+        return
+    print(f"[Coordinator] 指派 {bot_id}: {commands} (task_id={task_id})")
 
 
 def _load_json(path: pathlib.Path) -> dict | None:

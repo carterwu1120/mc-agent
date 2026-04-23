@@ -21,7 +21,7 @@ The bot autonomously decomposes a high-level goal into a sequence of steps, exec
 
 ## Architecture
 
-### Two-Process Design
+### Three-Layer Design
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -40,13 +40,75 @@ The bot autonomously decomposes a high-level goal into a sequence of steps, exec
 │  routing, task memory, executor                 │
 │                                                 │
 │  Dashboard HTTP server (:3002)                  │
+└─────────────────┬───────────────────────────────┘
+                  │ HTTP :3010
+                  │ (task assignment between bots)
+┌─────────────────▼───────────────────────────────┐
+│  Coordinator Service (bot0 only)                │
+│  Multi-bot task queue — per-bot FIFO queues,    │
+│  bot registration, task lifecycle tracking      │
+│                                                 │
+│  POST /bots/register        (bot announces ready)│
+│  POST /bots/{id}/tasks      (assign task to bot) │
+│  GET  /bots/{id}/tasks/next (bot polls for work) │
+│  PATCH /bots/{id}/tasks/{id} (report done/fail)  │
 └─────────────────────────────────────────────────┘
 ```
 
-**Why two processes?**
+**Why three layers?**
 - JS (mineflayer) has the best ecosystem for real-time Minecraft control
 - Python has the best ecosystem for LLM integration, async orchestration, and data persistence
-- Clear boundary: JS reports what happened → Python decides what to do next
+- Coordinator decouples multi-bot task assignment from individual bot logic — bots only need to know the coordinator's URL, not each other's addresses
+- Clear boundaries: JS reports what happened → Python decides what to do → Coordinator distributes work across bots
+
+### Example: Player says "mine 10 diamonds"
+
+```
+Player types in Minecraft chat
+  │
+  │  [game protocol]
+  ▼
+JS bot receives chat event
+  │
+  │  [WebSocket]  sendState(bot, 'chat', { message: '...' })
+  ▼
+Python agent — routes to planner.py
+  │
+  │  [HTTPS]  POST api.google.com/gemini
+  ▼
+LLM returns plan: ["equip pickaxe", "mine diamond 10"]
+  │
+  │  [WebSocket]  { command: "equip" }
+  ▼
+JS bot equips pickaxe → done
+  │
+  │  [WebSocket]  { type: "action_done" }
+  ▼
+Python agent sends next step
+  │
+  │  [WebSocket]  { command: "mine diamond 10" }
+  ▼
+JS bot mining... gets stuck
+  │
+  │  [WebSocket]  { type: "activity_stuck", reason: "no_progress" }
+  ▼
+Python agent — routes to activity_stuck.py → asks LLM for recovery
+  │
+  │  [WebSocket]  { command: "explore" }  ← LLM decides to explore first
+  ▼
+JS bot explores, resumes mining, finishes
+  │
+  │  [WebSocket]  { type: "activity_done" }
+  ▼
+Python agent marks task complete
+```
+
+**Communication summary:**
+| Transport | Used for |
+|-----------|---------|
+| WebSocket | All JS bot ↔ Python agent messages (events and commands) |
+| HTTPS | Python agent → Gemini API (LLM calls) |
+| HTTP :3010 | Python agent ↔ Coordinator (multi-bot task assignment only) |
 
 ---
 
@@ -151,20 +213,33 @@ Multiple bots can run simultaneously, each with isolated data and independent LL
 ```
 docker compose up
 → Agent0 (port 3001) + Agent1 (port 3003) join the server
-→ Agent0's Python process serves the dashboard
+→ Agent0's Python process serves the dashboard and coordinator
 → Agent1 writes live_state.json every tick; Agent0's dashboard reads it
 ```
 
 **Chat addressing** prevents interference:
 ```
-@Agent0 mine iron 8    → only Agent0 responds
+@Agent0 mine iron 8     → only Agent0 responds
 @Agent1 fish catches 20 → only Agent1 responds
-@all sethome           → both bots respond
+@all sethome            → both bots respond
 ```
 
 Each bot's Python process writes `live_state.json` on every WebSocket tick. The dashboard aggregates own-bot state (from memory) with remote bots (from files) — no shared database required.
 
-**Bot-to-bot isolation**: Bots ignore each other's Minecraft chat (configurable via `BOT_USERNAMES`). Coordination between bots will go through a Python coordinator layer, not the game chat channel.
+**Bot-to-bot isolation**: Bots ignore each other's Minecraft chat (configurable via `BOT_USERNAMES`). Coordination between bots goes through the HTTP coordinator service, not the game chat channel.
+
+### Coordinator Task Flow
+
+bot0 runs the coordinator service (`COORDINATOR_PORT=3010`). All other bots register with it on startup and poll for tasks:
+
+```
+bot1 startup → POST /bots/register       → coordinator creates bot1's queue
+bot1 idle    → GET  /bots/bot1/tasks/next → pull model, polled every 2s tick
+bot0 LLM     → POST /bots/bot1/tasks      → assign task to bot1
+bot1 done    → PATCH /bots/bot1/tasks/{id}→ report completion back to coordinator
+```
+
+This is a **pull model** — bot1 asks for work rather than bot0 pushing to bot1. Benefits: bot1 needs no open port, can restart freely, and naturally avoids taking new tasks while busy. Adding bot2 requires only setting `COORDINATOR_URL=http://agent0:3010` — no coordinator changes needed.
 
 ---
 
@@ -203,6 +278,8 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 | `BOT_WS_URL` | `ws://localhost:3001` | Python agent connects here |
 | `BOT_USERNAMES` | `` | Comma-separated bot usernames to ignore in chat |
 | `DASHBOARD_PORT` | `3002` | Dashboard HTTP port |
+| `COORDINATOR_PORT` | `` | Set on bot0 to start the coordinator service on this port |
+| `COORDINATOR_URL` | `` | Set on bot1+ to point to bot0's coordinator (e.g. `http://agent0:3010`) |
 | `GOOGLE_API_KEY` | — | Gemini API key |
 
 ---

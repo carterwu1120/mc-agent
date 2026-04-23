@@ -90,7 +90,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - equip（無參數）= 從背包自動換上最好的武器和護甲。挖礦活動**不需要** equip，因為採礦模組會自動切換到最佳鎬子。
 - equip 只在以下情況才加入 plan：
   1. 玩家**明確要求**穿裝備（例如「穿上鑽石盔甲」「換好武器」）
-  2. **前一步剛合成/冶煉出新的裝備/武器**，需要實際穿上（例如 smelt iron → craft iron_sword → equip）
+  2. **前一步剛冶煉出新的裝備/武器**，需要實際穿上（例如 smelt iron → equip）
   3. 要去打架（hunt/combat）且背包有**比目前手持更好的武器或護甲**
 - ⚠️ 不要在 mine / chop / fish / smelt 前盲目加 equip：這些活動自己會處理所需工具
 - ⚠️ 不要在缺乏對應裝備的情況下加 equip（例如背包沒有 diamond_pickaxe 就不要加 equip diamond_pickaxe）
