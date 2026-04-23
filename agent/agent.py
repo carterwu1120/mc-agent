@@ -601,7 +601,7 @@ async def _dispatch_result(item: dict, state: dict, ws) -> None:
         if commands:
             if executor.is_running():
                 executor.abort()
-            _launch_plan(commands, ws, goal=goal)
+            _launch_plan(commands, ws, goal=goal, source="coordinator")
     else:
         await ws.send(json.dumps(item))
 
@@ -674,6 +674,65 @@ def _is_stale_response(event_type: str, request_state: dict) -> bool:
     return False
 
 
+async def _check_coordinator_interrupt(state: dict, ws) -> None:
+    """On every tick, check coordinator interrupt slot. If found and current task
+    is source=self_task, abort it and execute the coordinator task instead."""
+    try:
+        async with aiohttp.ClientSession() as s:
+            resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/interrupt")
+            data = await resp.json()
+        envelope = data.get("task")
+        if not envelope:
+            return
+        cmds = envelope.get("commands") or []
+        goal = envelope.get("goal", "coordinator interrupt task")
+        cid = envelope.get("task_id")
+        if not cmds:
+            return
+
+        current_task = task_memory.load()
+        current_source = (current_task or {}).get("source", "unknown")
+
+        if executor.is_running():
+            if current_source != "self_task":
+                print(f"[Agent] coordinator interrupt: 當前任務 source={current_source}，拒絕中斷")
+                return
+            print(f"[Agent] coordinator interrupt: 中斷 self_task，切換至: {goal}")
+            executor.abort(preserve_task=False, reason="coordinator_interrupt")
+        elif state.get("activity") != "idle":
+            if current_source not in ("self_task", "unknown"):
+                print(f"[Agent] coordinator interrupt: standalone activity source={current_source}，拒絕中斷")
+                return
+            stop_cmd = _STOP_COMMAND_FOR_ACTIVITY.get(state.get("activity"))
+            if stop_cmd:
+                await ws.send(json.dumps({"command": stop_cmd}))
+        else:
+            return  # bot already idle — normal queue poll will handle it
+
+        print(f"[Agent] 執行 coordinator interrupt 任務: {goal} → {cmds}")
+        task_memory.save(goal, cmds, source="coordinator")
+        set_task_id(uuid.uuid4().hex[:8])
+        await ws.send(json.dumps({"command": "chat", "text": f"收到緊急指派任務：{goal}"}))
+
+        async def _exec_interrupt(_cmds=cmds, _goal=goal, _cid=cid):
+            global _idle_started_at
+            await executor.execute(_cmds, ws, goal=_goal, source="coordinator")
+            _idle_started_at = None
+            if _cid and COORDINATOR_URL:
+                try:
+                    async with aiohttp.ClientSession() as _s:
+                        await _s.patch(
+                            f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_cid}",
+                            json={"status": "done"},
+                        )
+                except Exception as _e:
+                    print(f"[Agent] coordinator interrupt PATCH 失敗: {_e}")
+
+        asyncio.create_task(_exec_interrupt())
+    except Exception as e:
+        print(f"[Agent] coordinator interrupt poll 失敗: {e}")
+
+
 async def _handle_and_send(state: dict, handler, ws) -> None:
     event_type = state.get("type")
     global _last_self_task_at
@@ -682,6 +741,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
     try:
         if event_type == "tick":
             now = asyncio.get_running_loop().time()
+            if COORDINATOR_URL:
+                asyncio.create_task(_check_coordinator_interrupt(state, ws))
             if executor.is_running():
                 return
             if state.get("activity") != "idle":
@@ -700,12 +761,14 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         cid = envelope.get("task_id")
                         if cmds:
                             print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
-                            task_memory.save(goal, cmds)
+                            task_memory.save(goal, cmds, source="coordinator")
                             await ws.send(json.dumps({"command": "chat", "text": f"收到指派任務：{goal}"}))
                             set_task_id(uuid.uuid4().hex[:8])
 
                             async def _exec_and_report(_cmds=cmds, _goal=goal, _cid=cid):
-                                await executor.execute(_cmds, ws, goal=_goal)
+                                global _idle_started_at
+                                await executor.execute(_cmds, ws, goal=_goal, source="coordinator")
+                                _idle_started_at = None
                                 if _cid and COORDINATOR_URL:
                                     try:
                                         async with aiohttp.ClientSession() as _s:
@@ -781,6 +844,11 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             return normalized, True
 
         # Plan response: execute commands sequentially
+        _plan_source = (
+            "self_task" if event_type == "tick"
+            else "player" if event_type == "chat"
+            else None
+        )
         if isinstance(result, dict) and result.get('action') == 'plan':
             commands = result.get('commands', [])
             goal = result.get('goal', '')
@@ -798,7 +866,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     else:
                         print('[Agent] 計畫執行中，中止舊計畫')
                         executor.abort()
-                _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task)
+                _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source)
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
@@ -835,7 +903,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         else:
                             print('[Agent] 計畫執行中，中止舊計畫')
                             executor.abort()
-                    _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task)
+                    _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source)
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
                 cmds = a.get("commands", [])

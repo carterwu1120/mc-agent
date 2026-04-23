@@ -17,11 +17,13 @@ class Task:
     commands: list[str]
     goal: str
     status: TaskStatus = "queued"
+    interrupt: bool = False
 
 
-_queues:     dict[str, asyncio.Queue] = {}   # bot_id → Queue[Task]
-_tasks:      dict[str, Task]          = {}   # task_id → Task (idempotency registry)
-_registered: set[str]                 = set()
+_queues:          dict[str, asyncio.Queue] = {}        # bot_id → Queue[Task]
+_tasks:           dict[str, Task]          = {}        # task_id → Task (idempotency registry)
+_registered:      set[str]                 = set()
+_interrupt_slots: dict[str, Task | None]   = {}        # bot_id → single pending interrupt task
 
 _CORS = {"Access-Control-Allow-Origin": "*"}
 
@@ -43,6 +45,7 @@ async def handle_register(request: web.Request) -> web.Response:
     _registered.add(bot_id)
     if bot_id not in _queues:
         _queues[bot_id] = asyncio.Queue()
+    _interrupt_slots[bot_id] = None
     print(f"[CoordinatorService] Registered: {bot_id}")
     return _json({"ok": True})
 
@@ -63,10 +66,15 @@ async def handle_enqueue(request: web.Request) -> web.Response:
     if bot_id not in _registered:
         return _json({"error": "bot not registered"}, 404)
 
-    task = Task(task_id=task_id, bot_id=bot_id, commands=commands, goal=goal)
+    interrupt = bool(body.get("interrupt", False))
+    task = Task(task_id=task_id, bot_id=bot_id, commands=commands, goal=goal, interrupt=interrupt)
     _tasks[task_id] = task
-    await _queues[bot_id].put(task)
-    print(f"[CoordinatorService] Enqueued {task_id} for {bot_id}: {goal}")
+    if interrupt:
+        _interrupt_slots[bot_id] = task
+        print(f"[CoordinatorService] Interrupt-slot {task_id} for {bot_id}: {goal}")
+    else:
+        await _queues[bot_id].put(task)
+        print(f"[CoordinatorService] Enqueued {task_id} for {bot_id}: {goal}")
     return _json({"ok": True, "task_id": task_id}, 201)
 
 
@@ -79,6 +87,16 @@ async def handle_next(request: web.Request) -> web.Response:
         task = queue.get_nowait()
     except asyncio.QueueEmpty:
         return _json({"task": None})
+    task.status = "running"
+    return _json({"task": {"task_id": task.task_id, "commands": task.commands, "goal": task.goal}})
+
+
+async def handle_peek_interrupt(request: web.Request) -> web.Response:
+    bot_id = request.match_info["id"]
+    task = _interrupt_slots.get(bot_id)
+    if task is None:
+        return _json({"task": None})
+    _interrupt_slots[bot_id] = None  # consume
     task.status = "running"
     return _json({"task": {"task_id": task.task_id, "commands": task.commands, "goal": task.goal}})
 
@@ -104,6 +122,7 @@ async def start(port: int | None = None) -> None:
         app.router.add_post("/bots/register", handle_register)
         app.router.add_post("/bots/{id}/tasks", handle_enqueue)
         app.router.add_get("/bots/{id}/tasks/next", handle_next)
+        app.router.add_get("/bots/{id}/tasks/interrupt", handle_peek_interrupt)
         app.router.add_patch("/bots/{id}/tasks/{task_id}", handle_update)
         runner = web.AppRunner(app)
         await runner.setup()

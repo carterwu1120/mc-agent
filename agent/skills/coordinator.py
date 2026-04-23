@@ -19,19 +19,30 @@ COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "http://localhost:3010")
 SYSTEM_PROMPT = """你是多機器人 Minecraft 任務調度員。
 玩家給你一個請求，你需要根據每個機器人的當前狀態（血量、飢餓、背包、當前任務、近期失敗）決定任務分配。
 
-每個機器人可以被分配獨立的 commands 序列。若機器人正在執行任務或狀態不佳，可不分配。
+每個機器人可以被分配獨立的 commands 序列。
 
 只能回覆以下 JSON（不加任何其他文字）：
-{"assignments": [{"bot_id": "bot0", "goal": "簡短目標", "commands": ["cmd1", "cmd2"]}, ...], "text": "給玩家的說明"}
+{"assignments": [{"bot_id": "bot0", "goal": "簡短目標", "commands": ["cmd1", "cmd2"], "interrupt": false}, ...], "text": "給玩家的說明"}
 
 【決策原則】
 - 優先讓空閒且狀態良好的機器人接任務
 - 若機器人 food < 8，優先讓他先 getfood count 8，或跳過分配
-- 若機器人已有進行中任務且狀態正常，可不打擾
 - commands 必須是合法指令（mine, chop, hunt, fish, explore, equip, smelt, getfood, idle 等）
 - 禁止使用 craft 指令，它不存在。需要工具時用 equip（會自動製作）；需要熟食時用 getfood
-- 可以把大任務拆成多個機器人並行的子任務（一個挖礦，一個補食物）
+- 可以把大任務拆成多個機器人並行的「不同」子任務（例：一個挖礦，一個補食物）
+- 絕對不可以把同一個任務指派給所有機器人。若玩家請求只需要一個機器人，只指派一個
+- 若所有機器人都正在執行任務（非 self_task），assignments 回傳空陣列，並在 text 告知玩家所有機器人正忙，無法接受新任務
 - assignments 可以是空陣列（若判斷所有機器人都不適合接任務）
+- text 欄位必須如實反映 assignments 內容，不可說「已指派 botX」如果 botX 不在 assignments 裡
+- text 只描述「現在正在做什麼」，不預測未來結果。不可說「總計已滿足需求」，因為任務尚未完成
+
+【中斷決策原則（interrupt 欄位）】
+- source=idle（無 current_task）：直接分配，interrupt=false
+- source=self_task：機器人閒置 60 秒後自主決定的任務，可設 interrupt=true 來搶佔
+- source=player：玩家明確指定的任務，interrupt 必須是 false
+- source=coordinator：協調員指派的任務，interrupt 必須是 false
+- source=unknown：保守處理，interrupt=false
+- 若所有機器人皆為 player/coordinator source，告知玩家目前無空閒機器人
 """
 
 
@@ -62,6 +73,7 @@ def _collect_all_bots_state() -> list[dict]:
                 "equipment": snap.get("equipment") or {},
                 "current_task": task.get("goal") if task else None,
                 "task_status": task.get("status") if task else None,
+                "task_source": task.get("source") if task else None,
                 "recent_failures": (task.get("recentFailures") or [])[:3] if task else [],
             })
         except Exception:
@@ -76,7 +88,7 @@ def _build_prompt(request: str, bots: list[dict]) -> str:
         bots_text += (
             f"\n【{b['bot_id']}】activity={b['activity']} health={b['health']} food={b['food']}\n"
             f"  inventory: {inv}\n"
-            f"  current_task: {b['current_task'] or '（無）'} ({b['task_status'] or '-'})\n"
+            f"  current_task: {b['current_task'] or '（無）'} ({b['task_status'] or '-'}, source={b.get('task_source') or 'unknown'})\n"
         )
         if b["recent_failures"]:
             fails = ", ".join(f.get("reason", "?") for f in b["recent_failures"])
@@ -118,12 +130,13 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
         bid = a.get("bot_id")
         cmds = a.get("commands") or []
         goal = a.get("goal", request)
+        interrupt = bool(a.get("interrupt", False))
         if not cmds:
             continue
         if bid == BOT_ID:
             own_assignment = {"action": "plan", "commands": cmds, "goal": goal}
         else:
-            await _dispatch_to_bot(bid, cmds, goal)
+            await _dispatch_to_bot(bid, cmds, goal, interrupt=interrupt)
 
     if own_assignment:
         result.append(own_assignment)
@@ -131,13 +144,13 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
     return result or None
 
 
-async def _dispatch_to_bot(bot_id: str, commands: list[str], goal: str) -> None:
+async def _dispatch_to_bot(bot_id: str, commands: list[str], goal: str, interrupt: bool = False) -> None:
     task_id = uuid.uuid4().hex[:12]
     try:
         async with aiohttp.ClientSession() as s:
             resp = await s.post(
                 f"{COORDINATOR_URL}/bots/{bot_id}/tasks",
-                json={"task_id": task_id, "commands": commands, "goal": goal},
+                json={"task_id": task_id, "commands": commands, "goal": goal, "interrupt": interrupt},
             )
             if resp.status not in (200, 201):
                 body = await resp.text()

@@ -20,11 +20,11 @@ FAILURE_TTL = timedelta(hours=6)
 
 _TASK_KEYS = {
     "id", "goal", "final_goal", "commands", "steps", "currentStep",
-    "context", "runtime", "status", "interruptedBy", "createdAt",
+    "context", "runtime", "status", "interruptedBy", "createdAt", "source",
 }
 
 
-def save(goal: str, commands: list, final_goal: str | None = None) -> dict:
+def save(goal: str, commands: list, final_goal: str | None = None, source: str | None = None) -> dict:
     commands = normalize_commands(commands)
     prev = _load_raw()
     if final_goal is None and prev:
@@ -41,6 +41,7 @@ def save(goal: str, commands: list, final_goal: str | None = None) -> dict:
         "status": "running",
         "interruptedBy": None,
         "createdAt": _now_iso(),
+        "source": source or "unknown",
         "interruptedTasks": list((prev or {}).get("interruptedTasks") or []),
         "recentTransitions": list((prev or {}).get("recentTransitions") or []),
         "recentEvents": list((prev or {}).get("recentEvents") or []),
