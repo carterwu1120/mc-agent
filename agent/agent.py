@@ -9,7 +9,7 @@ import aiohttp
 import websockets
 from dotenv import load_dotenv
 
-from agent.brain import LLMClient, GeminiClient, OllamaClient, OpenAIClient, VertexClient
+from agent.brain import LLMClient, GeminiClient, OllamaClient, OpenAIClient, VertexClient, RateLimitedLLMClient
 from agent.logger import init_logger, set_task_id
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
@@ -41,17 +41,20 @@ _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 # ── LLM provider 由 env var 控制，不需要 rebuild ──────────
 # LLM_PROVIDER=gemini|openai|ollama|vertex  (default: gemini)
 # LLM_MODEL=<model>                         (optional, overrides provider default)
+# LLM_RPM=<int>                             (requests per minute, default: 60)
 def _build_llm() -> LLMClient:
     provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
     model = os.environ.get("LLM_MODEL")
+    rpm = int(os.environ.get("LLM_RPM", "60"))
     if provider == "openai":
-        return OpenAIClient(model=model or "gpt-5.4-mini")
-    if provider == "ollama":
-        return OllamaClient(model=model or "qwen3:14b")
-    if provider == "vertex":
-        return VertexClient(model=model or "gemini-2.5-flash")
-    # default: gemini
-    return GeminiClient(model=model or "gemini-2.5-flash")
+        inner: LLMClient = OpenAIClient(model=model or "gpt-5.4-mini")
+    elif provider == "ollama":
+        inner = OllamaClient(model=model or "qwen3:14b")
+    elif provider == "vertex":
+        inner = VertexClient(model=model or "gemini-2.5-flash")
+    else:
+        inner = GeminiClient(model=model or "gemini-2.5-flash")
+    return RateLimitedLLMClient(inner, rpm=rpm, burst=5)
 
 llm: LLMClient = _build_llm()
 
@@ -1059,7 +1062,8 @@ async def run():
     _model         = os.environ.get("LLM_MODEL") or "default"
     print(
         f"[Agent] 啟動 BOT_ID={BOT_ID} | WS={WS_URL} | MC_USERNAME={_mc_username} | "
-        f"LLM={_provider}/{_model} | BOT_USERNAMES={_bot_usernames} | "
+        f"LLM={_provider}/{_model} | LLM_RPM={os.environ.get('LLM_RPM', '60')} | "
+        f"BOT_USERNAMES={_bot_usernames} | "
         f"STRICT_CHAT={_strict_chat} | COORDINATOR={_is_coord}"
     )
 

@@ -3,5 +3,6 @@ from .ollama import OllamaClient
 from .gemini import GeminiClient
 from .openai_client import OpenAIClient
 from .vertex import VertexClient
+from .rate_limiter import RateLimitedLLMClient
 
-__all__ = ["LLMClient", "OllamaClient", "GeminiClient", "OpenAIClient", "VertexClient"]
+__all__ = ["LLMClient", "OllamaClient", "GeminiClient", "OpenAIClient", "VertexClient", "RateLimitedLLMClient"]
