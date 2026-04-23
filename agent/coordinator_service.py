@@ -24,6 +24,7 @@ _queues:          dict[str, asyncio.Queue] = {}        # bot_id → Queue[Task]
 _tasks:           dict[str, Task]          = {}        # task_id → Task (idempotency registry)
 _registered:      set[str]                 = set()
 _interrupt_slots: dict[str, Task | None]   = {}        # bot_id → single pending interrupt task
+_abort_flags:     dict[str, bool]          = {}        # bot_id → force-abort pending
 
 _CORS = {"Access-Control-Allow-Origin": "*"}
 
@@ -46,6 +47,7 @@ async def handle_register(request: web.Request) -> web.Response:
     if bot_id not in _queues:
         _queues[bot_id] = asyncio.Queue()
     _interrupt_slots[bot_id] = None
+    _abort_flags[bot_id] = False
     print(f"[CoordinatorService] Registered: {bot_id}")
     return _json({"ok": True})
 
@@ -91,6 +93,23 @@ async def handle_next(request: web.Request) -> web.Response:
     return _json({"task": {"task_id": task.task_id, "commands": task.commands, "goal": task.goal}})
 
 
+async def handle_abort(request: web.Request) -> web.Response:
+    bot_id = request.match_info["id"]
+    if bot_id not in _registered:
+        return _json({"error": "bot not registered"}, 404)
+    _abort_flags[bot_id] = True
+    print(f"[CoordinatorService] Abort flag set for {bot_id}")
+    return _json({"ok": True})
+
+
+async def handle_check_abort(request: web.Request) -> web.Response:
+    bot_id = request.match_info["id"]
+    flagged = _abort_flags.get(bot_id, False)
+    if flagged:
+        _abort_flags[bot_id] = False  # consume
+    return _json({"abort": flagged})
+
+
 async def handle_peek_interrupt(request: web.Request) -> web.Response:
     bot_id = request.match_info["id"]
     task = _interrupt_slots.get(bot_id)
@@ -122,6 +141,8 @@ async def start(port: int | None = None) -> None:
         app.router.add_post("/bots/register", handle_register)
         app.router.add_post("/bots/{id}/tasks", handle_enqueue)
         app.router.add_get("/bots/{id}/tasks/next", handle_next)
+        app.router.add_post("/bots/{id}/abort", handle_abort)
+        app.router.add_get("/bots/{id}/abort", handle_check_abort)
         app.router.add_get("/bots/{id}/tasks/interrupt", handle_peek_interrupt)
         app.router.add_patch("/bots/{id}/tasks/{task_id}", handle_update)
         runner = web.AppRunner(app)

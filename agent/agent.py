@@ -602,6 +602,8 @@ async def _dispatch_result(item: dict, state: dict, ws) -> None:
             if executor.is_running():
                 executor.abort()
             _launch_plan(commands, ws, goal=goal, source="coordinator")
+    elif item.get("action") == "abort_self":
+        await _apply_manual_abort(state, ws)
     else:
         await ws.send(json.dumps(item))
 
@@ -675,8 +677,18 @@ def _is_stale_response(event_type: str, request_state: dict) -> bool:
 
 
 async def _check_coordinator_interrupt(state: dict, ws) -> None:
-    """On every tick, check coordinator interrupt slot. If found and current task
-    is source=self_task, abort it and execute the coordinator task instead."""
+    """On every tick, check abort flag then interrupt slot."""
+    try:
+        async with aiohttp.ClientSession() as s:
+            abort_resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/abort")
+            abort_data = await abort_resp.json()
+        if abort_data.get("abort"):
+            print(f"[Agent] coordinator abort: 強制停止所有任務")
+            await _apply_manual_abort(state, ws)
+            return
+    except Exception as e:
+        print(f"[Agent] coordinator abort check 失敗: {e}")
+
     try:
         async with aiohttp.ClientSession() as s:
             resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/interrupt")

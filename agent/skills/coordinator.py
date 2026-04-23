@@ -22,15 +22,20 @@ SYSTEM_PROMPT = """你是多機器人 Minecraft 任務調度員。
 每個機器人可以被分配獨立的 commands 序列。
 
 只能回覆以下 JSON（不加任何其他文字）：
-{"assignments": [{"bot_id": "bot0", "goal": "簡短目標", "commands": ["cmd1", "cmd2"], "interrupt": false}, ...], "text": "給玩家的說明"}
+{"assignments": [{"bot_id": "bot0", "goal": "簡短目標", "commands": ["cmd1", "cmd2"], "interrupt": false}, ...], "aborts": ["bot0", "bot1"], "text": "給玩家的說明"}
+
+- aborts：要強制停止的機器人 bot_id 列表。停止不需要 commands，直接列在 aborts 裡
+- 玩家說「停止」「暫停」「全部停止」「全部暫停」「abort」「pause」「stop」等明確停止/暫停指令時，使用 aborts 而非 assignments
+- 停止和暫停效果相同：中斷任務並保留進度，玩家之後可以用 !resume 恢復
 
 【決策原則】
 - 優先讓空閒且狀態良好的機器人接任務
 - 若機器人 food < 8，優先讓他先 getfood count 8，或跳過分配
 - commands 必須是合法指令（mine, chop, hunt, fish, explore, equip, smelt, getfood, idle 等）
 - 禁止使用 craft 指令，它不存在。需要工具時用 equip（會自動製作）；需要熟食時用 getfood
-- 可以把大任務拆成多個機器人並行的「不同」子任務（例：一個挖礦，一個補食物）
-- 絕對不可以把同一個任務指派給所有機器人。若玩家請求只需要一個機器人，只指派一個
+- 多機器人分工只在 command 類型真的不同時才適用（mine + chop = OK；hunt + hunt = 絕對不行；getfood + getfood = 絕對不行）
+- 同一個 command 類型（hunt、getfood、mine、chop、fish 等）只能分配給一個機器人，數量不同也算同一種類
+- 「兩組食物」「三組木頭」這類數量請求，只指派給一個機器人，讓那個機器人自己完成全部數量
 - 若所有機器人都正在執行任務（非 self_task），assignments 回傳空陣列，並在 text 告知玩家所有機器人正忙，無法接受新任務
 - assignments 可以是空陣列（若判斷所有機器人都不適合接任務）
 - text 欄位必須如實反映 assignments 內容，不可說「已指派 botX」如果 botX 不在 assignments 裡
@@ -119,11 +124,18 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
         return [{"command": "chat", "text": "調度決策失敗，請稍後再試。"}]
 
     assignments = decision.get("assignments") or []
+    aborts = decision.get("aborts") or []
     reply_text = decision.get("text", "")
     result = []
 
     if reply_text:
         result.append({"command": "chat", "text": reply_text})
+
+    for bid in aborts:
+        if bid == BOT_ID:
+            result.append({"action": "abort_self"})
+        else:
+            await _abort_bot(bid)
 
     own_assignment = None
     for a in assignments:
@@ -142,6 +154,20 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
         result.append(own_assignment)
 
     return result or None
+
+
+async def _abort_bot(bot_id: str) -> None:
+    try:
+        async with aiohttp.ClientSession() as s:
+            resp = await s.post(f"{COORDINATOR_URL}/bots/{bot_id}/abort")
+            if resp.status != 200:
+                body = await resp.text()
+                print(f"[Coordinator] abort {bot_id} 失敗: HTTP {resp.status} {body}")
+                return
+    except Exception as e:
+        print(f"[Coordinator] abort {bot_id} 失敗: {e}")
+        return
+    print(f"[Coordinator] 已發送 abort 至 {bot_id}")
 
 
 async def _dispatch_to_bot(bot_id: str, commands: list[str], goal: str, interrupt: bool = False) -> None:
