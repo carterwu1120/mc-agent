@@ -46,6 +46,11 @@ class _TeeStream:
                     "msg": msg,
                 }
                 self._file_handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                try:
+                    import agent.history_db as _hdb
+                    _hdb._fire_and_forget(_hdb.write_log, entry)
+                except Exception:
+                    pass
         self._file_handle.flush()
         return written
 

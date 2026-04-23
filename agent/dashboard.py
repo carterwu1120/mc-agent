@@ -270,6 +270,18 @@ async def handle_events(request: web.Request) -> web.Response:
                         content_type="application/json", headers=_CORS)
 
 
+async def handle_logs(request: web.Request) -> web.Response:
+    try:
+        limit   = min(int(request.rel_url.query.get("limit", 100)), 500)
+        task_id = request.rel_url.query.get("task_id") or None
+        rows    = await _run_sync(history_db.query_logs, task_id=task_id, limit=limit)
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=500,
+                            content_type="application/json", headers=_CORS)
+    return web.Response(text=json.dumps(rows, ensure_ascii=False, default=str),
+                        content_type="application/json", headers=_CORS)
+
+
 async def handle_state(request: web.Request) -> web.Response:
     try:
         data = _build_state()
@@ -306,6 +318,7 @@ async def start(port: int | None = None) -> None:
         app.router.add_get("/history", handle_history)
         app.router.add_get("/failures", handle_failures)
         app.router.add_get("/events", handle_events)
+        app.router.add_get("/logs", handle_logs)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", port)

@@ -81,6 +81,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_failures_task_id  ON failures(task_id);
         CREATE INDEX IF NOT EXISTS idx_failures_at       ON failures(at DESC);
         CREATE INDEX IF NOT EXISTS idx_failures_activity ON failures(activity);
+
+        CREATE TABLE IF NOT EXISTS logs (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            time    TEXT NOT NULL,
+            level   TEXT NOT NULL,
+            service TEXT NOT NULL,
+            bot_id  TEXT NOT NULL,
+            task_id TEXT,
+            msg     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_logs_task_id ON logs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_logs_time    ON logs(time DESC);
     """)
     conn.commit()
 
@@ -168,6 +180,20 @@ def write_failure(failure: dict, task_id: str | None) -> None:
         print(f"[HistoryDB] write_failure failed: {e}")
 
 
+def write_log(entry: dict) -> None:
+    try:
+        conn = _get_db()
+        conn.execute(
+            "INSERT INTO logs (time, level, service, bot_id, task_id, msg) VALUES (?,?,?,?,?,?)",
+            (entry.get("time", ""), entry.get("level", "INFO"),
+             entry.get("service", ""), entry.get("bot_id", ""),
+             entry.get("task_id"), entry.get("msg", "")),
+        )
+        conn.commit()
+    except Exception:
+        pass  # never let log writing crash the agent
+
+
 # ── Query functions ───────────────────────────────────────────────────────────
 
 def query_history(limit: int = 20, status: str | None = None) -> list[dict]:
@@ -220,4 +246,19 @@ def query_events(
         f"SELECT * FROM events {where} ORDER BY at DESC LIMIT ?",
         params,
     ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def query_logs(task_id: str | None = None, limit: int = 100) -> list[dict]:
+    conn = _get_db()
+    if task_id:
+        rows = conn.execute(
+            "SELECT * FROM logs WHERE task_id = ? ORDER BY time DESC LIMIT ?",
+            (task_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM logs ORDER BY time DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
     return [dict(r) for r in rows]
