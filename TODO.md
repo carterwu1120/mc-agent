@@ -30,11 +30,8 @@
   - [ ] 驗收失敗 → replan（優先 deterministic，不一定需要 LLM）
   - [ ] `task_memory` status `done` 改為區分 `completed`（goal 達成）vs `finished`（steps 跑完）
 
-- [ ] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]` `[從中期移入]`
-  - 為什麼需要：多個 bot 同時卡住時，可能在短時間打出大量 LLM request 超過 API quota。
-    Token bucket 讓系統在壓力下仍然穩定，超過限制時 queue 等待而不是直接報錯。
-  - [ ] LLM client 層加 token bucket rate limiter（每分鐘最多 N 次）
-  - [ ] 超過限制時 exponential backoff 等待，不拋例外
+- [x] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
+  - Token bucket + exponential backoff 已實作在 `agent/brain/rate_limiter.py`
 
 - [ ] **通用 tool acquisition policy**
   - 目標：`mining` / `woodcutting` / `combat` 不各自實作 `ensurePickaxe` / `ensureAxe` / `ensureSword`
