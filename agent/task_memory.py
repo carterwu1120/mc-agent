@@ -269,10 +269,12 @@ def interrupt(reason: str) -> None:
     history_db._fire_and_forget(history_db.archive_task, dict(t))
 
 
-def done() -> None:
-    _patch({"status": "done"})
+def done(goal_verified: bool = True) -> None:
     t = _load_raw()
     if t:
+        t["status"] = "done"
+        t["goalVerified"] = goal_verified
+        _write(t)
         history_db._fire_and_forget(history_db.archive_task, dict(t))
 
 

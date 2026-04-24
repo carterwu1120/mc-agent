@@ -8,6 +8,11 @@ HEARTBEAT_TIMEOUT = 30.0   # seconds without a tick before declaring JS unrespon
 POLL_INTERVAL    = 10.0   # how often to check heartbeat while waiting
 ACTIVITY_START_TIMEOUT = 90.0  # seconds before retrying if expected activity never started
 
+_CHOP_LOG_NAMES = frozenset({
+    'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
+    'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log',
+})
+
 
 def _inventory_counts(inventory: list) -> dict[str, int]:
     counts: dict[str, int] = {}
@@ -89,6 +94,127 @@ def _verify_step(cmd_str: str, before: dict | None, after: dict | None) -> str |
     return None
 
 
+_GOAL_ORE_TO_ITEM = {
+    'diamond': 'diamond', 'iron': 'raw_iron', 'gold': 'raw_gold',
+    'coal': 'coal', 'copper': 'raw_copper', 'emerald': 'emerald',
+    'stone': 'cobblestone', 'gravel': 'gravel', 'sand': 'sand',
+    'cobblestone': 'cobblestone',
+}
+_GOAL_SMELT_OUTPUT = {
+    'iron': 'iron_ingot', 'raw_iron': 'iron_ingot',
+    'gold': 'gold_ingot', 'raw_gold': 'gold_ingot',
+    'copper': 'copper_ingot', 'raw_copper': 'copper_ingot',
+    'sand': 'glass', 'cobblestone': 'stone',
+}
+
+
+def _verify_goal(commands: list, before: dict | None, after: dict | None) -> str | None:
+    """
+    After all plan steps complete, verify the overall goal was achieved.
+    Uses the last output-producing command as the goal proxy.
+    Stricter than _verify_step: checks against the full target count, not just > 0.
+    Returns a warning string if goal not met, else None.
+    """
+    if not before or not after:
+        return None
+    output_cmds = [c for c in commands if c.split()[0] in {'mine', 'smelt', 'chop', 'fish', 'hunt'}]
+    if not output_cmds:
+        return None
+
+    parts = output_cmds[-1].split()
+    verb = parts[0]
+    before_c = _inventory_counts(before.get('inventory', []))
+    after_c  = _inventory_counts(after.get('inventory', []))
+
+    if verb == 'mine' and len(parts) >= 3:
+        target = parts[1]
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        item = _GOAL_ORE_TO_ITEM.get(target, target)
+        gained = after_c.get(item, 0) - before_c.get(item, 0)
+        if gained < expected:
+            return f"目標採集 {expected} {target}，實際只有 {gained}"
+
+    elif verb == 'smelt' and len(parts) >= 3:
+        target_raw = parts[1]
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        output_item = _GOAL_SMELT_OUTPUT.get(target_raw, target_raw)
+        gained = after_c.get(output_item, 0) - before_c.get(output_item, 0)
+        if gained < expected:
+            return f"目標冶煉 {expected} {output_item}，實際只有 {gained}"
+
+    elif verb == 'chop' and len(parts) >= 3:
+        try:
+            expected = int(parts[2]) if parts[1] == 'logs' else int(parts[1])
+        except (ValueError, IndexError):
+            return None
+        gained = sum(after_c.get(log, 0) - before_c.get(log, 0) for log in _CHOP_LOG_NAMES)
+        if gained < expected:
+            return f"目標砍 {expected} 原木，實際只有 {gained}"
+
+    return None
+
+
+def _build_goal_remediation(commands: list, before: dict | None, after: dict | None) -> list | None:
+    """
+    Build minimal commands to close the deficit between goal and actual result.
+    Only handles mine/smelt/chop and only when the raw materials are available.
+    Returns command list, or None if deficit cannot be resolved deterministically.
+    """
+    if not before or not after:
+        return None
+    output_cmds = [c for c in commands if c.split()[0] in {'mine', 'smelt', 'chop'}]
+    if not output_cmds:
+        return None
+
+    parts = output_cmds[-1].split()
+    verb = parts[0]
+    before_c = _inventory_counts(before.get('inventory', []))
+    after_c  = _inventory_counts(after.get('inventory', []))
+
+    if verb == 'mine' and len(parts) >= 3:
+        target = parts[1]
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        item = _GOAL_ORE_TO_ITEM.get(target, target)
+        deficit = expected - (after_c.get(item, 0) - before_c.get(item, 0))
+        if deficit > 0:
+            return [f'mine {target} {deficit}']
+
+    elif verb == 'smelt' and len(parts) >= 3:
+        target_raw = parts[1]
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        output_item = _GOAL_SMELT_OUTPUT.get(target_raw, target_raw)
+        gained = after_c.get(output_item, 0) - before_c.get(output_item, 0)
+        deficit = expected - gained
+        if deficit > 0:
+            if after_c.get(target_raw, 0) >= deficit:
+                return [f'smelt {target_raw} {deficit}']
+            # Not enough raw material in inventory — can't remediate without mining first
+
+    elif verb == 'chop' and len(parts) >= 3:
+        try:
+            expected = int(parts[2]) if parts[1] == 'logs' else int(parts[1])
+        except (ValueError, IndexError):
+            return None
+        gained = sum(after_c.get(log, 0) - before_c.get(log, 0) for log in _CHOP_LOG_NAMES)
+        deficit = expected - gained
+        if deficit > 0:
+            return [f'chop logs {deficit}']
+
+    return None
+
+
 class PlanExecutor:
     def __init__(self):
         self._running = False
@@ -109,6 +235,7 @@ class PlanExecutor:
         self._after_state: dict = {}    # snapshot from action_done / activity_done
         self._command_sent_at: float = 0.0
         self._activity_retried: bool = False
+        self._plan_start_state: dict = {}   # snapshot before the first step of a plan
         # Optional callback set by agent.py: async (state, ws) → None
         # When set, verification failures trigger LLM intervention instead of just logging.
         self._verify_failed_callback = None
@@ -121,7 +248,7 @@ class PlanExecutor:
         """Called from agent.py on every state update so executor has current world state."""
         self._latest_state = state
 
-    async def execute(self, commands: list, ws, goal: str = "", final_goal: str | None = None, resume_task: bool = False, preserve_task: bool = False, source: str | None = None) -> None:
+    async def execute(self, commands: list, ws, goal: str = "", final_goal: str | None = None, resume_task: bool = False, preserve_task: bool = False, source: str | None = None, _goal_retry: bool = False) -> None:
         self._run_id += 1
         my_run_id = self._run_id
         self._running = True
@@ -129,6 +256,7 @@ class PlanExecutor:
         self._replan_commands = None
         self._step_results = []
         self._context = {}
+        self._plan_start_state = dict(self._latest_state)
 
         if resume_task:
             task_memory.resume_interrupted(commands if commands else None, goal=goal or None)
@@ -339,7 +467,26 @@ class PlanExecutor:
         if self._running and not preserve_task:
             task = task_memory.load()
             if task and task.get('status') == 'running':
-                task_memory.done()
+                goal_warning = _verify_goal(commands, self._plan_start_state, self._latest_state)
+                if goal_warning and not _goal_retry:
+                    remediation = _build_goal_remediation(commands, self._plan_start_state, self._latest_state)
+                    if remediation:
+                        print(f'[Executor] 目標驗收失敗 ({goal_warning})，自動補救: {remediation}')
+                        task_memory.record_event(
+                            'goal_verification_failed',
+                            reason=goal_warning,
+                            details={'remediation': remediation},
+                        )
+                        await self._send_summary(ws)
+                        await self.execute(remediation, ws, goal=f'補救: {goal}', source=source, _goal_retry=True)
+                        return
+                    else:
+                        print(f'[Executor] 目標驗收失敗（無法自動補救）: {goal_warning}')
+                        task_memory.record_event('goal_verification_failed', reason=goal_warning)
+                if goal_warning:
+                    task_memory.done(goal_verified=False)
+                else:
+                    task_memory.done(goal_verified=True)
             await self._send_summary(ws)
         self._running = False
         print('[Executor] 計畫執行完畢')
