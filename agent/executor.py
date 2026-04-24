@@ -6,6 +6,7 @@ from agent.plan_utils import normalize_commands
 
 HEARTBEAT_TIMEOUT = 30.0   # seconds without a tick before declaring JS unresponsive
 POLL_INTERVAL    = 10.0   # how often to check heartbeat while waiting
+ACTIVITY_START_TIMEOUT = 90.0  # seconds before retrying if expected activity never started
 
 
 def _inventory_counts(inventory: list) -> dict[str, int]:
@@ -106,6 +107,8 @@ class PlanExecutor:
         self._latest_state: dict = {}   # updated every tick from agent.py
         self._before_state: dict = {}   # snapshot before each command
         self._after_state: dict = {}    # snapshot from action_done / activity_done
+        self._command_sent_at: float = 0.0
+        self._activity_retried: bool = False
         # Optional callback set by agent.py: async (state, ws) → None
         # When set, verification failures trigger LLM intervention instead of just logging.
         self._verify_failed_callback = None
@@ -174,6 +177,8 @@ class PlanExecutor:
             self._after_state = {}
             print(f'[Executor] 執行步驟 {i}: {cmd_str}')
             await ws.send(json.dumps(msg))
+            self._command_sent_at = asyncio.get_event_loop().time()
+            self._activity_retried = False
 
             self._done.clear()
             self._stuck_event.clear()
@@ -208,6 +213,17 @@ class PlanExecutor:
                     elapsed = now - self._last_heartbeat
                     if elapsed > 10:
                         print(f'[Executor] 等待 "{cmd_str}" 中... (上次心跳 {elapsed:.0f}s 前)')
+
+                    # Detect activity command that JS never started (command was dropped)
+                    expected_activity = _cmd_to_activity(cmd_str)
+                    if expected_activity and not self._activity_retried:
+                        current_activity = self._latest_state.get('activity', 'idle')
+                        idle_secs = now - self._command_sent_at
+                        if current_activity == 'idle' and idle_secs > ACTIVITY_START_TIMEOUT:
+                            print(f'[Executor] {expected_activity} 送出後 {idle_secs:.0f}s 仍未啟動，重試指令: {cmd_str}')
+                            self._activity_retried = True
+                            self._command_sent_at = now
+                            await ws.send(json.dumps(msg))
 
                 if not timed_out:
                     done_task.cancel()

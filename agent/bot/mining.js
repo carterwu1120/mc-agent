@@ -1026,6 +1026,7 @@ async function _digStraightDown(bot, targetY) {
 // 挖 2×2 隧道往前，回傳是否有成功前進（挖到方塊 或 實際移動）
 async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expectedGen = -1) {
     let progressed = false
+    let noProgressSteps = 0
     const dx = Math.round(-Math.sin(yaw))
     const dz = Math.round(-Math.cos(yaw))
     // 垂直於前進方向的側邊偏移
@@ -1129,7 +1130,15 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
         const prevPos = bot.entity.position.clone()
         try {
             await _goto(bot, new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z), 5000)
-            if (bot.entity.position.distanceTo(prevPos) > 0.5) progressed = true
+            if (bot.entity.position.distanceTo(prevPos) > 0.5) {
+                progressed = true
+                noProgressSteps = 0
+            } else {
+                if (++noProgressSteps >= 3) {
+                    console.log('[Tunnel] 連續 3 步無法前進，放棄此方向')
+                    break
+                }
+            }
         } catch (e) {
             if (e.message.includes('goal was changed') || e.message.includes('goal changed')) {
                 // water/lava escape cancelled pathfinder — wait and retry once
