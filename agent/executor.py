@@ -12,6 +12,8 @@ _CHOP_LOG_NAMES = frozenset({
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
     'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log',
 })
+_FISH_ITEM_NAMES = frozenset({'cod', 'salmon', 'tropical_fish', 'pufferfish'})
+_HUNT_MEAT_NAMES = frozenset({'raw_beef', 'raw_porkchop', 'raw_chicken', 'raw_mutton', 'raw_rabbit'})
 
 
 def _inventory_counts(inventory: list) -> dict[str, int]:
@@ -91,6 +93,20 @@ def _verify_step(cmd_str: str, before: dict | None, after: dict | None) -> str |
         if after_slots >= before_slots:
             return f"deposit 後背包槽位未減少（{before_slots} → {after_slots}）"
 
+    elif verb == "fish":
+        before_counts = _inventory_counts(before.get("inventory", []))
+        after_counts  = _inventory_counts(after.get("inventory", []))
+        gained = sum(after_counts.get(f, 0) - before_counts.get(f, 0) for f in _FISH_ITEM_NAMES)
+        if gained <= 0:
+            return "fish 後魚類數量未增加，可能釣魚失敗"
+
+    elif verb == "hunt":
+        before_counts = _inventory_counts(before.get("inventory", []))
+        after_counts  = _inventory_counts(after.get("inventory", []))
+        gained = sum(after_counts.get(m, 0) - before_counts.get(m, 0) for m in _HUNT_MEAT_NAMES)
+        if gained <= 0:
+            return "hunt 後肉類數量未增加，可能狩獵失敗"
+
     return None
 
 
@@ -156,6 +172,24 @@ def _verify_goal(commands: list, before: dict | None, after: dict | None) -> str
         gained = sum(after_c.get(log, 0) - before_c.get(log, 0) for log in _CHOP_LOG_NAMES)
         if gained < expected:
             return f"目標砍 {expected} 原木，實際只有 {gained}"
+
+    elif verb == 'fish' and len(parts) >= 3 and parts[1] == 'catches':
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        gained = sum(after_c.get(f, 0) - before_c.get(f, 0) for f in _FISH_ITEM_NAMES)
+        if gained < expected:
+            return f"目標釣魚 {expected} 條，實際只有 {gained}"
+
+    elif verb == 'hunt' and len(parts) >= 3 and parts[1] == 'count':
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        gained = sum(after_c.get(m, 0) - before_c.get(m, 0) for m in _HUNT_MEAT_NAMES)
+        if gained < expected:
+            return f"目標狩獵 {expected} 個戰利品，實際只有 {gained}"
 
     return None
 
@@ -223,6 +257,26 @@ def _build_goal_remediation(commands: list, before: dict | None, after: dict | N
         deficit = expected - gained
         if deficit > 0:
             return [f'chop logs {deficit}']
+
+    elif verb == 'fish' and len(parts) >= 3 and parts[1] == 'catches':
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        gained = sum(after_c.get(f, 0) - before_c.get(f, 0) for f in _FISH_ITEM_NAMES)
+        deficit = expected - gained
+        if deficit > 0:
+            return [f'fish catches {deficit}']
+
+    elif verb == 'hunt' and len(parts) >= 3 and parts[1] == 'count':
+        try:
+            expected = int(parts[2])
+        except ValueError:
+            return None
+        gained = sum(after_c.get(m, 0) - before_c.get(m, 0) for m in _HUNT_MEAT_NAMES)
+        deficit = expected - gained
+        if deficit > 0:
+            return [f'hunt count {deficit}']
 
     return None
 
