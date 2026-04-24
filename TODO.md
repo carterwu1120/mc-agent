@@ -4,9 +4,9 @@
 
 ## 進行中 / 近期
 
-- [ ] **Multi-agent routing 收尾**（剩小項）
-  - [ ] 啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`，方便確認生效設定
-  - [ ] 統一 system chat / server announcement 過濾，避免 `Teleported ...` 被送進 planner
+- [x] **Multi-agent routing 收尾**
+  - [x] 啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`，方便確認生效設定
+  - [x] 統一 system chat / server announcement 過濾，避免 `Teleported ...` 被送進 planner
 
 - [ ] **Manual override / interrupt 機制**
   - [ ] 自然語言 interrupt / resume 分類（不只靠前綴）

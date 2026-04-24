@@ -502,6 +502,65 @@ async function _loop(bot, goal = {}, resumePos = null) {
             continue
         }
 
+        if (goal.target === 'cobblestone') {
+            const nearbyStone = bot.findBlocks({
+                matching: b => ['stone', 'cobblestone'].includes(b.name),
+                maxDistance: 6,
+                count: 20,
+            })
+                .filter(p => _isExposed(bot, p) && !_digFailed.has(p.toString()) && !_isNearWaterHazard(p))
+                .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))
+
+            if (nearbyStone.length > 0) {
+                const pos = nearbyStone[0]
+                const block = bot.blockAt(pos)
+                if (!block) continue
+                console.log(`[Mine] cobblestone 目標 ${block.name} at y=${pos.y}`)
+                try {
+                    await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 8000)
+                    if (_shouldAbort(_myGen)) return
+                    const fresh = bot.blockAt(pos)
+                    if (!fresh || !['stone', 'cobblestone'].includes(fresh.name)) {
+                        _digFailed.add(pos.toString())
+                        continue
+                    }
+                    activityStack.touch('mining', 'stone_target')
+                    const ok = await ensureToolFor(bot, 'stone')
+                    if (!ok) {
+                        isMining = false
+                        _sendNoToolsStuck(bot)
+                        break
+                    }
+                    await bot.dig(fresh)
+                    if (_shouldAbort(_myGen)) return
+                    _digFailed.delete(pos.toString())
+                    _targetCount++
+                    activityStack.touch('mining', 'dug_block')
+                    activityStack.updateProgress({ count: _targetCount })
+                    console.log(`[Mine] 挖下 ${fresh.name} (目標 ${_targetCount}/${goal.count})`)
+                    await _sleep(300)
+                    if (_shouldAbort(_myGen)) return
+                    await _collectNearby(bot, pos, 4)
+                    if (_shouldAbort(_myGen)) return
+                } catch (e) {
+                    console.log(`[Mine] cobblestone 挖石失敗: ${e.message}`)
+                    _digFailed.add(pos.toString())
+                }
+                continue
+            }
+
+            // 附近沒石頭，往下直挖到 Y=60
+            const cobbleCurrentY = Math.floor(bot.entity.position.y)
+            if (cobbleCurrentY > 40) {
+                if (!await _ensurePickaxeOrStuck(bot)) break
+                if (_shouldAbort(_myGen)) return
+                console.log(`[Mine] cobblestone: 直挖往下 Y=${cobbleCurrentY} → 40`)
+                await _digStraightDown(bot, 40)
+                if (_shouldAbort(_myGen)) return
+            }
+            continue
+        }
+
         const currentY = Math.floor(bot.entity.position.y)
         const needDescend = bestY !== null && currentY - bestY > 3
         const needAscend  = bestY !== null && bestY - currentY > 3
@@ -931,6 +990,37 @@ async function _stepDown(bot, targetY, yaw) {
     if (steps <= 0) return
     console.log(`[Mine] 下潛斜梯 ${steps} 格 → Y=${currentY - steps}`)
     await _stairDown(bot, yaw, steps)
+}
+
+async function _digStraightDown(bot, targetY) {
+    while (isMining) {
+        const feet = bot.entity.position.floored()
+        if (feet.y <= targetY) return
+
+        for (const dy of [-1, -2, -3]) {
+            const b = bot.blockAt(feet.offset(0, dy, 0))
+            if (!b) continue
+            if (_isLava(b) || _hasAdjacentLava(bot, b.position)) {
+                console.log('[Mine] 直挖：下方偵測到岩漿，中止')
+                return
+            }
+        }
+
+        const below = bot.blockAt(feet.offset(0, -1, 0))
+        if (below && below.boundingBox === 'block' && below.hardness >= 0) {
+            try { await _equipToolForDig(bot, below); await bot.dig(below) } catch (e) {
+                console.log(`[Mine] 直挖失敗: ${e.message}`)
+                return
+            }
+        }
+
+        _setMovements(bot)
+        try {
+            await _goto(bot, new goals.GoalBlock(feet.x, feet.y - 1, feet.z), 3000)
+        } catch (_) { return }
+        activityStack.touch('mining', 'descending')
+        await _sleep(150)
+    }
 }
 
 // 挖 2×2 隧道往前，回傳是否有成功前進（挖到方塊 或 實際移動）
