@@ -160,10 +160,17 @@ def _verify_goal(commands: list, before: dict | None, after: dict | None) -> str
     return None
 
 
+_SMELT_RAW_TO_ORE = {
+    'raw_iron': 'iron', 'iron': 'iron',
+    'raw_gold': 'gold', 'gold': 'gold',
+    'raw_copper': 'copper', 'copper': 'copper',
+}
+
+
 def _build_goal_remediation(commands: list, before: dict | None, after: dict | None) -> list | None:
     """
     Build minimal commands to close the deficit between goal and actual result.
-    Only handles mine/smelt/chop and only when the raw materials are available.
+    Dynamically computes how much to mine/smelt based on what's already in inventory.
     Returns command list, or None if deficit cannot be resolved deterministically.
     """
     if not before or not after:
@@ -197,10 +204,15 @@ def _build_goal_remediation(commands: list, before: dict | None, after: dict | N
         output_item = _GOAL_SMELT_OUTPUT.get(target_raw, target_raw)
         gained = after_c.get(output_item, 0) - before_c.get(output_item, 0)
         deficit = expected - gained
-        if deficit > 0:
-            if after_c.get(target_raw, 0) >= deficit:
-                return [f'smelt {target_raw} {deficit}']
-            # Not enough raw material in inventory — can't remediate without mining first
+        if deficit <= 0:
+            return None
+        available_raw = after_c.get(target_raw, 0)
+        need_to_mine = deficit - available_raw
+        ore_type = _SMELT_RAW_TO_ORE.get(target_raw)
+        if need_to_mine > 0 and ore_type:
+            return [f'mine {ore_type} {need_to_mine}', f'smelt {target_raw} {deficit}']
+        elif available_raw >= deficit:
+            return [f'smelt {target_raw} {deficit}']
 
     elif verb == 'chop' and len(parts) >= 3:
         try:
