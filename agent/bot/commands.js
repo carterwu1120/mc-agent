@@ -1,7 +1,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const bridge = require('./bridge')
 const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
-const { applyInventoryDecision, checkFull, handleFull } = require('./inventory')
+const { applyInventoryDecision, checkFull, handleFull, waitUntilIdle } = require('./inventory')
 const { startChopping, stopChopping } = require('./woodcutting')
 const { startMining, stopMining } = require('./mining')
 const { startSmelting, stopSmelting } = require('./smelting')
@@ -28,6 +28,7 @@ function handle(bot, msg) {
             ;(async () => {
                 try {
                     await handleFull(bot)
+                    await waitUntilIdle()
                     const slots = bot.inventory.items().length
                     if (slots < 34) {
                         console.log(`[Action] 背包整理完成，重試 ${msg.command}`)

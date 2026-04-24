@@ -205,9 +205,14 @@ function startMonitor(bot) {
     console.log('[Inv] 背包監控已啟動')
 }
 
+async function waitUntilIdle() {
+    while (_checking) await new Promise(r => setTimeout(r, 100))
+}
+
 module.exports = {
     startMonitor,
     checkFull,
+    waitUntilIdle,
     applyInventoryDecision,
     buryItems: _buryItems,
     tidyInventory: _tidyInventory,
