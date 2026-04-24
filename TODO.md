@@ -23,18 +23,6 @@
   - [ ] coordinator / agent / executor 的操作都帶同一個 `task_id`
   - [ ] dashboard `/events?task_id=xxx` 可查整條 trace
 
-- [x] **Goal-level verification（任務目標驗證）** `[從中期移入]`
-  - 目標：plan 全部 steps 跑完後，驗證是否真的達成 goal，而不只是 steps 跑完就算 done
-  - 現有的 `_verify_step` 是 step-level（equip/smelt/mine 個別確認），缺 goal-level
-  - [x] `PlanExecutor` plan 完成後，拿 `goal` + before/after inventory snapshot 做 goal 驗收
-    - `_verify_goal(commands, before, after)` in `executor.py`：用最後一個 output 指令（mine/smelt/chop）和 plan 開始/結束 inventory 比對
-    - `_plan_start_state` 在 `execute()` 開頭抓快照，`_latest_state` 作為結束 snapshot
-  - [x] 驗收失敗 → replan（優先 deterministic，不一定需要 LLM）
-    - `_build_goal_remediation(commands, before, after)` 計算 deficit，mine/smelt/chop 有足夠材料就補 command
-    - `_goal_retry=True` 參數防止無限遞迴（只補救一次）
-  - [x] `task_memory.done(goal_verified=bool)` 記錄目標是否達成（`goalVerified` 欄位）
-  - 剩餘：status `done` 改為 `completed`/`finished` 的字串區分（低優先級，需改所有呼叫端）
-
 - [x] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
   - Token bucket + exponential backoff 已實作在 `agent/brain/rate_limiter.py`
 
@@ -110,9 +98,23 @@
 - [x] **Dashboard**（agent observability）
   - `agent/dashboard.py` + `agent/dashboard.html`、SQLite history endpoint
 
+- [x] **Goal-level verification（任務目標驗證）**
+  - `_verify_goal()`：plan 全部 steps 跑完後，用 plan 開始/結束 inventory snapshot 驗收最後一個 output 指令
+  - 涵蓋：mine / smelt / chop / fish / hunt（嚴格比對目標數量，非只 > 0）
+  - `_build_goal_remediation()`：動態計算 deficit，能補的就補（smelt 不夠 → 先 mine 再 smelt）；只重試一次（`_goal_retry` 參數）
+  - `task_memory.done(goal_verified=bool)`：記錄 `goalVerified` 欄位
+  - 剩餘（低優先）：status `done` 改為 `completed` / `finished` 字串區分
+
 - [x] **Post-action verification loop**
-  - `_verify_step()`：equip/smelt/mine/deposit 完成後比對 before/after state
+  - `_verify_step()`：equip / smelt / mine / deposit / fish / hunt 完成後比對 before/after state
   - 驗證失敗 → LLM 決策（replan / skip / accept）
+
+- [x] **Stability fixes（overnight run 診斷）**
+  - cobblestone 改直挖（`_digStraightDown`），不走 tunnel 邏輯避免山地卡死
+  - `_digTunnel` 加 `noProgressSteps` 計數器，連續 3 步無前進即放棄
+  - inventory_full 與 activity 完成的 race condition（`waitUntilIdle` 防止 smelt 指令被丟棄）
+  - executor 加 90s idle 偵測：activity 指令送出後若 JS 仍未啟動，自動重送一次
+  - Dockerfile.agent 補 `2>>` stderr redirect，Python crash 可查 `agent/logs/stderr-*.log`
 
 - [x] **Deterministic rules 下沉到系統層**
   - `_enforce_pending_steps`、`_filter_done_steps_from_replan`、`_deduplicate_adjacent_cmds`、`_block_invalid_skip`

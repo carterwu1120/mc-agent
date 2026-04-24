@@ -151,9 +151,12 @@ This approach keeps LLM costs low and prevents the model from making structurall
 When the LLM returns a multi-step plan, `PlanExecutor` sequences the commands, waiting for `action_done` / `activity_done` signals between each step. It supports:
 
 - **Context substitution**: `{new_chest_id}` is filled in at runtime after `makechest` completes
-- **Post-action verification**: compares before/after state after equip/smelt/mine/deposit — if the action didn't take effect, routes back to the LLM for recovery
+- **Per-step verification** (`_verify_step`): compares before/after inventory after each equip / smelt / mine / deposit / fish / hunt — if the action didn't take effect, routes back to the LLM for recovery
+- **Goal-level verification** (`_verify_goal`): after *all* steps complete, compares inventory at plan-start vs. plan-end against the full target count of the last output command. Stricter than per-step: catches cases where individual steps appeared to succeed but the cumulative result fell short
+- **Deterministic remediation** (`_build_goal_remediation`): if goal verification fails, computes the deficit and emits the minimum fix (e.g. `smelt raw_iron 8` short by 3 with 1 in inventory → `['mine iron 2', 'smelt raw_iron 3']`). Retries once; further shortfalls are recorded as `goalVerified: false` for `self_task` to pick up
 - **Replan during execution**: the LLM can replace remaining steps mid-plan via `{"action": "replan", ...}`
 - **Step skip / abort**: granular control without losing the overall task context
+- **Dropped-command detection**: if a sent activity command never starts (JS stays idle for 90s), automatically retransmits once
 
 ### 4. Working Memory (`task_memory`)
 
@@ -166,6 +169,7 @@ When the LLM returns a multi-step plan, `PlanExecutor` sequences the commands, w
   "steps": [...],
   "currentStep": 2,
   "status": "running",
+  "goalVerified": true,        // set when task completes: true = goal confirmed, false = fell short
   "interruptedTasks": [...],   // up to 3 paused tasks with full context
   "recentEvents": [...],       // replans, skips, aborts — with timestamps
   "recentFailures": [...]      // per-command failure log
@@ -329,9 +333,9 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 ## Roadmap
 
 ### Near-term
-- **Resource-aware planning**: Coordinator tracks which bot has claimed which activity, preventing resource conflicts
-- **Context budget system**: Per-skill limits on how much history enters the LLM prompt
-- **Tool acquisition policy**: Shared `ensureTool` retry logic instead of per-activity reimplementation
+- **Manual override / interrupt**: Natural language interrupt/resume classification, not just prefix matching
+- **Context budget system**: Per-skill limits on how much history enters the LLM prompt (`context_builder` v2)
+- **Tool acquisition policy**: Shared `ensureTool` retry/cooldown logic instead of per-activity reimplementation
 
 ### Mid-term
 - **Pydantic AI integration**: Replace fragile `re.sub + json.loads` LLM response parsing with typed structured outputs — starting with `planner.py`
