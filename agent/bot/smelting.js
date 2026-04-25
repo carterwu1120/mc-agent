@@ -11,6 +11,7 @@ let _placedFurnacePos = null
 let _loopGen = 0
 let _lastOutcome = null
 let _gotoFurnaceFailures = 0
+let _coalBlockUncrackTried = false
 
 const SMELTABLE = {
     raw_iron: 'iron_ingot',         iron_ore: 'iron_ingot',         deepslate_iron_ore: 'iron_ingot',
@@ -34,15 +35,19 @@ Object.assign(SMELT_ALIAS, {
     copper: 'raw_copper',
 })
 
+const COAL_BLOCK_UNCRAFT_THRESHOLD = 16  // ops; if neededUnits < this, try to uncraft coal_block → coal first
+
 const FUEL_PRIORITY = [
     'coal', 'charcoal',
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log',
     'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks',
+    'coal_block',
 ]
 
 const FUEL_UNITS = {
     coal: 8,
     charcoal: 8,
+    coal_block: 80,
     oak_log: 1.5,
     spruce_log: 1.5,
     birch_log: 1.5,
@@ -83,13 +88,36 @@ function _setOutcome(status, extra = {}) {
     _lastOutcome = { status, at: Date.now(), ...extra }
 }
 
-function _getPreferredFuelItem(bot) {
+function _getPreferredFuelItem(bot, neededUnits = Infinity) {
     const inventory = bot.inventory.items()
     for (const fuelName of FUEL_PRIORITY) {
+        if (fuelName === 'coal_block' && neededUnits < COAL_BLOCK_UNCRAFT_THRESHOLD && !_coalBlockUncrackTried) continue
         const item = inventory.find(i => i.name === fuelName)
         if (item) return item
     }
     return null
+}
+
+async function _tryUncrackCoalBlock(bot) {
+    if (!bot.inventory.items().some(i => i.name === 'coal_block')) return false
+    const { ensureCraftingTable } = require('./crafting')
+    const table = await ensureCraftingTable(bot)
+    if (!table) return false
+    const coalItem = bot.registry.itemsByName['coal']
+    if (!coalItem) return false
+    const recipe = bot.recipesFor(coalItem.id, null, 1, table)[0]
+    if (!recipe) {
+        console.log('[Smelt] 找不到 coal_block → coal 配方')
+        return false
+    }
+    try {
+        await bot.craft(recipe, 1, table)
+        console.log('[Smelt] 解開 coal_block → 9 coal')
+        return true
+    } catch (e) {
+        console.log('[Smelt] 解開 coal_block 失敗:', e.message)
+        return false
+    }
 }
 
 function _estimateFuelCount(goal, smeltedCount, inputPending) {
@@ -134,6 +162,7 @@ async function startSmelting(bot, goal = {}) {
     _inputPending = false
     _lastOutcome = null
     _gotoFurnaceFailures = 0
+    _coalBlockUncrackTried = false
     activityStack.push(bot, 'smelting', goal, (b) => _resumeSmelting(b, goal))
     activityStack.markStarted('smelting', 'start')
     console.log(`[Smelt] 開始燒製 goal=${JSON.stringify(goal)}`)
@@ -305,7 +334,21 @@ async function _loop(bot, goal = {}) {
 
             // 加燃料（fuel 是進度值 0-1；為 0 且 slots[1] 無煤才補）
             if (!furnace.fuel && !furnace.slots[1]) {
-                const fuelItem = _getPreferredFuelItem(bot)
+                const neededUnits = _estimateFuelCount(goal, _smeltedCount, _inputPending)
+                let fuelItem = _getPreferredFuelItem(bot, neededUnits)
+
+                // 需求量小、無較精細燃料、但有 coal_block → 先嘗試解開成 coal
+                if (!fuelItem && neededUnits < COAL_BLOCK_UNCRAFT_THRESHOLD
+                        && !_coalBlockUncrackTried
+                        && bot.inventory.items().some(i => i.name === 'coal_block')) {
+                    furnace.close()
+                    if (_shouldAbort(_myGen)) return
+                    const uncrafted = await _tryUncrackCoalBlock(bot)
+                    _coalBlockUncrackTried = true  // 無論成敗，下次直接用 coal_block，避免迴圈
+                    if (_shouldAbort(_myGen)) return
+                    continue  // 重新走熔爐流程：成功 → 用 coal；失敗 → _getPreferredFuelItem 允許 coal_block
+                }
+
                 if (fuelItem) {
                     const fuelCount = _getFuelInsertCount(fuelItem, goal, _smeltedCount, _inputPending)
                     try {
