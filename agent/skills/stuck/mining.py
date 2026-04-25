@@ -9,11 +9,12 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的挖礦卡住處理助手。
 {{"action": "skip", "text": "...理由..."}}
 {{"command": "chop", "text": "...理由..."}}
 {{"command": "mine", "args": ["iron", "8"], "text": "...理由..."}}
+{{"command": "home", "text": "...理由..."}}
 {{"command": "chat", "text": "...需要玩家幫助的說明..."}}
 {{"command": "idle", "text": "...理由..."}}
 
 【可用指令】
-{command_list(["chop", "mine", "chat", "idle"])}
+{command_list(["chop", "mine", "home", "chat", "idle"])}
 
 決策原則：
 - 若存在未完成 plan，且目前步驟是挖礦時因 no_tools 卡住，優先回覆 replan 或 skip，不要只回單一步驟 chop
@@ -24,6 +25,9 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的挖礦卡住處理助手。
   - 背包缺木材 → replan 插入 chop logs <n>，之後接回「補剛好夠用的工具鏈」與原剩餘步驟
   - 有木材但缺石稿/鐵鎬 → replan 插入補工具步驟，再接回原剩餘步驟
   - 補工具時採缺多少補多少，不要預設固定輸出 mine iron 16 / smelt raw_iron 16
+- 若原因為 water_loop（礦道持續進水，機器人反覆掉入水中）或 trapped_in_water（連續多次完全無法逃脫水中）：
+  - 有未完成計畫 → replan，在剩餘步驟前插入 "home"，讓機器人先回到安全位置再繼續
+  - 無未完成計畫 → 回覆 home，讓機器人先撤離危險區域
 - 只有在沒有未完成 plan、或這只是局部臨時修復時，才可以回單一步驟 chop / mine
 - 若原因為「四個方向都被基岩或不可挖方塊阻擋，機器人可能被困住」→ 用 chat 告知玩家機器人被困，請玩家用 /tp 解救
 - 其他情況 → idle
@@ -31,11 +35,27 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的挖礦卡住處理助手。
 
 
 def should_prefer_replan(reason: str, plan_context: dict | None) -> bool:
-    return reason == "no_tools" and bool(plan_context)
+    return reason in ("no_tools", "water_loop", "trapped_in_water") and bool(plan_context)
 
 
 def deterministic_shortcut(state: dict, plan_context: dict | None) -> list[dict] | None:
     reason = state.get("reason")
+
+    if reason in ("water_loop", "trapped_in_water"):
+        pending_steps = (plan_context or {}).get("pending_steps", [])
+        current_cmd   = (plan_context or {}).get("current_cmd", "")
+        if plan_context:
+            cmds = ["home"]
+            if current_cmd:
+                cmds.append(current_cmd)
+            cmds.extend(pending_steps)
+            print(f"[Skill/activity_stuck] mining water_loop + plan → replan with home first: {cmds}")
+            return [
+                {"action": "replan", "commands": cmds, "text": "礦道持續進水，先回到安全位置再繼續計畫"},
+            ]
+        print("[Skill/activity_stuck] mining water_loop, no plan → home")
+        return [{"command": "home", "text": "礦道持續進水，先撤回安全位置"}]
+
     if reason != "no_tools":
         return None
     caps = state.get("capabilities") or {}

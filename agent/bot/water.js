@@ -2,6 +2,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { getActivity } = require('./activity')
 const hazards = require('./hazards')
 const { applyMovements } = require('./movement_prefs')
+const bridge = require('./bridge')
 
 let _escaping = false
 let _escapingLava = false
@@ -10,10 +11,12 @@ let _lastCheck = 0
 let _escapeCooldownUntil = 0
 let _inWaterSince = 0   // timestamp when bot first entered water this stretch
 let _lastWaterLoop = null
+let _escapeFailCount = 0
 const CHECK_INTERVAL = 500
 const WATER_DEBOUNCE = 1500  // ms in water before triggering escape
 const WATER_LOOP_WINDOW = 30000
 const WATER_LOOP_RADIUS = 8
+const WATER_LOOP_ESCALATE = 5  // escape attempts before notifying Python
 
 function _sleep(ms) {
     return new Promise(r => setTimeout(r, ms))
@@ -199,6 +202,78 @@ async function _tryClimbShore(bot) {
     return !bot.entity.isInWater
 }
 
+function _afterEscape(bot, loopCount) {
+    _escapeFailCount = 0
+    _rememberNearbyWater(bot)
+    if (loopCount >= WATER_LOOP_ESCALATE) {
+        console.log(`[Water] 同區域連續遇水 ${loopCount} 次，升級通知 Python`)
+        bridge.sendState(bot, 'activity_stuck', {
+            activity: getActivity(),
+            reason: 'water_loop',
+            detail: `同區域連續入水 ${loopCount} 次，礦道可能持續進水`,
+            escape_count: loopCount,
+            suggested_actions: ['back', 'home', 'idle'],
+        })
+    } else if (loopCount >= 2) {
+        console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
+        _retreatFromWater(bot)
+    }
+}
+
+async function _tryDigEscape(bot) {
+    const pos = bot.entity.position.floored()
+    const cardinalDirs = [[1,0,0],[-1,0,0],[0,0,1],[0,0,-1]]
+
+    function _dirHasWater(dx, dz) {
+        for (let dy = -1; dy <= 1; dy++) {
+            const b = bot.blockAt(pos.offset(dx, dy, dz))
+            if (b && _isLiquid(b.name)) return true
+        }
+        return false
+    }
+
+    const safeDirs = cardinalDirs.filter(([dx,,dz]) => !_dirHasWater(dx, dz))
+    const dirsToTry = safeDirs.length > 0 ? safeDirs : cardinalDirs
+
+    for (const [dx,,dz] of dirsToTry) {
+        let dug = 0
+        for (let depth = 1; depth <= 2; depth++) {
+            const beyond = bot.blockAt(pos.offset(dx*(depth+1), 0, dz*(depth+1)))
+            if (beyond && _isLiquid(beyond.name)) break
+
+            for (const dy of [0, 1]) {
+                const target = pos.offset(dx*depth, dy, dz*depth)
+                const block = bot.blockAt(target)
+                if (!block || block.name === 'air' || block.name === 'cave_air') continue
+                if (_isLiquid(block.name)) continue
+                if (block.hardness < 0) continue
+                try {
+                    const tool = bot.pathfinder.bestHarvestTool(block)
+                    if (tool) await bot.equip(tool, 'hand')
+                    await bot.dig(block, true)
+                    dug++
+                } catch (e) {
+                    console.log('[Water] dig escape 失敗:', e.message)
+                }
+            }
+        }
+
+        if (dug > 0) {
+            const dest = pos.offset(dx*2, 0, dz*2)
+            applyMovements(bot, { canDig: false, allowWater: true })
+            try {
+                await Promise.race([
+                    bot.pathfinder.goto(new goals.GoalNear(dest.x, dest.y, dest.z, 1)),
+                    _sleep(3000).then(() => bot.pathfinder.setGoal(null)),
+                ])
+            } catch (_) {}
+            finally { applyMovements(bot) }
+            if (!bot.entity.isInWater) return true
+        }
+    }
+    return false
+}
+
 async function _tryEscape(bot) {
     if (_escaping) return
     _escaping = true
@@ -210,12 +285,7 @@ async function _tryEscape(bot) {
     console.log('[Water] 掃描附近岸邊...')
     if (await _tryClimbShore(bot)) {
         console.log('[Water] 跳上岸成功')
-        _rememberNearbyWater(bot)
-        const loopCount = _registerWaterEscape(bot)
-        if (loopCount >= 2) {
-            console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
-            await _retreatFromWater(bot)
-        }
+        _afterEscape(bot, _registerWaterEscape(bot))
         _escapeCooldownUntil = Date.now() + 3000
         _escaping = false
         return
@@ -234,17 +304,22 @@ async function _tryEscape(bot) {
         await _sleep(800)
         if (_isOnDryGround(bot)) {
             console.log('[Water] 游上來成功')
-            _rememberNearbyWater(bot)
-            const loopCount = _registerWaterEscape(bot)
-            if (loopCount >= 2) {
-                console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
-                await _retreatFromWater(bot)
-            }
+            _afterEscape(bot, _registerWaterEscape(bot))
             _escapeCooldownUntil = Date.now() + 3000
             _escaping = false
             return
         }
         console.log('[Water] 仍未踩穩，繼續逃脫...')
+    }
+
+    // ── 第一階段半：往側面挖出逃脫通道 ──────────────────
+    console.log('[Water] 嘗試往側面挖出逃脫通道...')
+    if (await _tryDigEscape(bot)) {
+        console.log('[Water] 挖掘逃脫成功')
+        _afterEscape(bot, _registerWaterEscape(bot))
+        _escapeCooldownUntil = Date.now() + 3000
+        _escaping = false
+        return
     }
 
     // ── 第二階段：掃描周圍乾燥方塊，pathfind 過去 ────────
@@ -265,12 +340,7 @@ async function _tryEscape(bot) {
 
     if (!bot.entity.isInWater && _isOnDryGround(bot)) {
         console.log('[Water] 導航出水成功')
-        _rememberNearbyWater(bot)
-        const loopCount = _registerWaterEscape(bot)
-        if (loopCount >= 2) {
-            console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
-            await _retreatFromWater(bot)
-        }
+        _afterEscape(bot, _registerWaterEscape(bot))
         _escapeCooldownUntil = Date.now() + 3000
         _escaping = false
         return
@@ -290,16 +360,21 @@ async function _tryEscape(bot) {
     }
 
     if (bot.entity.isInWater) {
-        console.log('[Water] 無法逃脫水中，請求協助')
-        bot.chat('我被困在水裡了，請救我！')
+        _escapeFailCount++
+        console.log(`[Water] 無法逃脫水中（第 ${_escapeFailCount} 次）`)
+        if (_escapeFailCount >= 3) {
+            _escapeFailCount = 0
+            console.log('[Water] 連續 3 次無法逃脫，通知 Python 重整計畫')
+            bridge.sendState(bot, 'activity_stuck', {
+                activity: getActivity(),
+                reason: 'trapped_in_water',
+                detail: '連續多次無法從水中逃脫，需要回到安全位置重整',
+                suggested_actions: ['back', 'home', 'idle'],
+            })
+        }
     } else {
         console.log('[Water] 水平移動逃脫成功')
-        _rememberNearbyWater(bot)
-        const loopCount = _registerWaterEscape(bot)
-        if (loopCount >= 2) {
-            console.log(`[Water] 同區域連續遇水 ${loopCount} 次，嘗試先遠離水域`)
-            await _retreatFromWater(bot)
-        }
+        _afterEscape(bot, _registerWaterEscape(bot))
     }
 
     _escaping = false
