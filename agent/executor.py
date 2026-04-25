@@ -315,7 +315,7 @@ class PlanExecutor:
         """Called from agent.py on every state update so executor has current world state."""
         self._latest_state = state
 
-    async def execute(self, commands: list, ws, goal: str = "", final_goal: str | None = None, resume_task: bool = False, preserve_task: bool = False, source: str | None = None, _goal_retry: bool = False) -> None:
+    async def execute(self, commands: list, ws, goal: str = "", final_goal: str | None = None, resume_task: bool = False, preserve_task: bool = False, source: str | None = None, reason: str = "", _goal_retry: bool = False) -> None:
         self._run_id += 1
         my_run_id = self._run_id
         self._running = True
@@ -328,7 +328,7 @@ class PlanExecutor:
         if resume_task:
             task_memory.resume_interrupted(commands if commands else None, goal=goal or None)
         elif goal and not preserve_task:
-            task_memory.save(goal, commands, final_goal=final_goal, source=source)
+            task_memory.save(goal, commands, final_goal=final_goal, source=source, reason=reason)
 
         print(f'[Executor] 開始執行計畫：{commands}')
 

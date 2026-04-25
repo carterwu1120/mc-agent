@@ -19,12 +19,12 @@ EVENT_TTL = timedelta(hours=6)
 FAILURE_TTL = timedelta(hours=6)
 
 _TASK_KEYS = {
-    "id", "goal", "final_goal", "commands", "steps", "currentStep",
+    "id", "goal", "final_goal", "reason", "commands", "steps", "currentStep",
     "context", "runtime", "status", "interruptedBy", "createdAt", "source",
 }
 
 
-def save(goal: str, commands: list, final_goal: str | None = None, source: str | None = None) -> dict:
+def save(goal: str, commands: list, final_goal: str | None = None, source: str | None = None, reason: str = "") -> dict:
     commands = normalize_commands(commands)
     prev = _load_raw()
     if final_goal is None and prev:
@@ -33,6 +33,7 @@ def save(goal: str, commands: list, final_goal: str | None = None, source: str |
         "id": uuid.uuid4().hex[:8],
         "goal": goal,
         "final_goal": final_goal,
+        "reason": reason,
         "commands": commands,
         "steps": build_step_records(commands),
         "currentStep": 0,

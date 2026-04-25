@@ -886,6 +886,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         if isinstance(result, dict) and result.get('action') == 'plan':
             commands = result.get('commands', [])
             goal = result.get('goal', '')
+            reason = result.get('text', '')
             final_goal = result.get('final_goal')
             if final_goal:
                 task_memory.set_final_goal(final_goal)
@@ -900,7 +901,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     else:
                         print('[Agent] 計畫執行中，中止舊計畫')
                         executor.abort()
-                _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source)
+                _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source, reason=reason)
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
@@ -937,7 +938,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         else:
                             print('[Agent] 計畫執行中，中止舊計畫')
                             executor.abort()
-                    _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source)
+                    reason = a.get('text', '') or a.get('reasoning', '')
+                    _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source, reason=reason)
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
                 cmds = a.get("commands", [])
