@@ -743,6 +743,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                     if (!ok) {
                         console.log(`[Mine] 材料不足無法取得 ${required}，跳過需要它的礦`)
                         _unavailablePickaxe.add(required)
+                        _digFailed.add(pos.toString())
                         continue
                     }
                     _unavailablePickaxe.delete(required)  // 成功取得，解除跳過
@@ -817,12 +818,26 @@ async function _loop(bot, goal = {}, resumePos = null) {
                         continue
                     }
                 }
+                // 所有廣域礦石都因缺工具被跳過 → 主動通知 Python 補工具
+                const allToolBlocked = wideOres.length > 0
+                    && wideOres.every(p => _digFailed.has(p.toString()))
+                    && _unavailablePickaxe.size > 0
+                if (allToolBlocked) {
+                    console.log('[Mine] 附近礦石全部因缺工具被跳過，通知 Python 補工具')
+                    isMining = false
+                    bridge.sendState(bot, 'activity_stuck', {
+                        activity: 'mining',
+                        reason: 'no_tools',
+                        detail: `需要 ${[..._unavailablePickaxe].join('/')} 才能繼續挖礦`,
+                        suggested_actions: ['chop', 'mine', 'home'],
+                    })
+                    break
+                }
                 console.log('[Mine] 附近沒有礦石，挖隧道繼續')
                 if (!await _ensurePickaxeOrStuck(bot)) break
                 if (_shouldAbort(_myGen)) return
                 const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal, _myGen)
                 if (_shouldAbort(_myGen)) return
-                if (tunneled) _digFailed.clear()
                 if (!tunneled) {
                     if (!await _ensurePickaxeOrStuck(bot)) break
                     if (_shouldAbort(_myGen)) return
