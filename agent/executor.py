@@ -1,6 +1,7 @@
 import asyncio
 import json
 from agent import task_memory
+from agent.logger import get_task_id
 from agent.plan_utils import normalize_commands
 
 
@@ -366,6 +367,7 @@ class PlanExecutor:
             self._current_step_index = i
 
             msg = _parse(cmd_str)
+            msg['_task_id'] = get_task_id()
             self._current_command = msg
             self._before_state = dict(self._latest_state)
             self._after_state = {}

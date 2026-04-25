@@ -1,5 +1,6 @@
 const { goals } = require('mineflayer-pathfinder')
 const bridge = require('./bridge')
+const { setTaskId } = require('./logger')
 const { startFishing, stopFishing, applyLLMDecision } = require('./fishing')
 const { applyInventoryDecision, checkFull, handleFull, waitUntilIdle } = require('./inventory')
 const { startChopping, stopChopping } = require('./woodcutting')
@@ -21,7 +22,9 @@ const { setMode } = require('./mode')
 const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'smelt', 'combat', 'hunt', 'getfood', 'surface', 'explore'])
 
 function handle(bot, msg) {
-    console.log('[Action]', JSON.stringify(msg))
+    if (msg._task_id !== undefined) setTaskId(msg._task_id)
+    const { _task_id, ...logMsg } = msg
+    console.log('[Action]', JSON.stringify(logMsg))
     if (ACTIVITY_COMMANDS.has(msg.command) && checkFull(bot)) {
         console.log(`[Action] 背包已滿，拒絕執行 ${msg.command}`)
         if (!msg._inventoryRetry) {

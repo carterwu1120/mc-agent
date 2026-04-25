@@ -4,10 +4,6 @@
 
 ## 進行中 / 近期
 
-- [x] **Multi-agent routing 收尾**
-  - [x] 啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`，方便確認生效設定
-  - [x] 統一 system chat / server announcement 過濾，避免 `Teleported ...` 被送進 planner
-
 - [ ] **Manual override / interrupt 機制**
   - [ ] 自然語言 interrupt / resume 分類（不只靠前綴）
   - [ ] executor / stuck recovery 能接受人工覆蓋，避免舊流程在背景等待
@@ -15,13 +11,6 @@
 - [ ] **Python 側 context 清理機制 v2**
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
   - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
-
-- [ ] **Structured Logging** `[Backend: Observability]`
-  - 為什麼需要：現在 log 是純文字，跨 service 難以追蹤問題根源。加上 `task_id` 後，
-    一個任務從 coordinator 派出 → agent 接收 → bot 執行的整條流程都能串起來查。
-  - [ ] log 改成 JSON 格式（`{"time", "level", "task_id", "service", "msg"}`）
-  - [ ] coordinator / agent / executor 的操作都帶同一個 `task_id`
-  - [ ] dashboard `/events?task_id=xxx` 可查整條 trace
 
 - [x] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
   - Token bucket + exponential backoff 已實作在 `agent/brain/rate_limiter.py`
@@ -59,6 +48,17 @@
 ---
 
 ## 已完成
+
+- [x] **Structured Logging + Observability** `[Backend: Observability]`
+  - JS bot log 改成 JSONL（`{"time", "level", "service", "bot_id", "task_id", "msg"}`）
+  - executor 每條指令帶 `_task_id`，JS logger 同步更新，bot/brain log 可用 task_id 串接
+  - LLM call latency 記錄（`[LLM] ok latency=Xs`）
+  - `GET /metrics?hours=N`：task 成功率、stuck by reason/activity
+  - log 檔自動輪替（7 天後刪除）
+
+- [x] **Multi-agent routing 收尾**
+  - 啟動 log 印出 `MC_USERNAME` / `BOT_USERNAMES` / `STRICT_CHAT_ADDRESSING`
+  - 統一 system chat / server announcement 過濾，避免 `Teleported ...` 被送進 planner
 
 - [x] **Coordinator HTTP Service + Task Queue + Heartbeat** `[Backend: Service-to-service / REST / Async decoupling / Reliability]`
   - `agent/coordinator_service.py`：aiohttp service（port 3010）

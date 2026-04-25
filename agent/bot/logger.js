@@ -1,6 +1,11 @@
 const fs = require('fs')
 const path = require('path')
 
+let _currentTaskId = null
+let _botId = ''
+
+function setTaskId(id) { _currentTaskId = id || null }
+
 function _sanitizeLabel(value) {
     return String(value || '')
         .trim()
@@ -21,12 +26,6 @@ function _resolveLogLabel() {
     const mcUsername = String(process.env.MC_USERNAME || '').trim()
     if (/^Agent\d+$/i.test(mcUsername)) return _sanitizeLabel(mcUsername)
     return ''
-}
-
-function _timestamp() {
-    const now = new Date()
-    const pad = (n) => String(n).padStart(2, '0')
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
 }
 
 function _filenameStamp() {
@@ -64,7 +63,8 @@ function initLogger(name = 'bot') {
     fs.mkdirSync(logDir, { recursive: true })
     _cleanupOldLogs(logDir)
     const botLabel = _resolveLogLabel()
-    const filename = botLabel ? `${name}-${botLabel}-${_filenameStamp()}.txt` : `${name}-${_filenameStamp()}.txt`
+    _botId = botLabel || 'bot'
+    const filename = botLabel ? `${name}-${botLabel}-${_filenameStamp()}.jsonl` : `${name}-${_filenameStamp()}.jsonl`
     const logPath = path.join(logDir, filename)
 
     const original = {
@@ -74,8 +74,15 @@ function initLogger(name = 'bot') {
     }
 
     const write = (level, args) => {
-        const line = `[${_timestamp()}] [${level}] ${args.map(_formatArg).join(' ')}\n`
-        fs.appendFileSync(logPath, line, 'utf8')
+        const entry = {
+            time: new Date().toISOString(),
+            level,
+            service: name,
+            bot_id: _botId,
+            task_id: _currentTaskId,
+            msg: args.map(_formatArg).join(' '),
+        }
+        fs.appendFileSync(logPath, JSON.stringify(entry) + '\n', 'utf8')
     }
 
     console.log = (...args) => {
@@ -97,4 +104,4 @@ function initLogger(name = 'bot') {
     return logPath
 }
 
-module.exports = { initLogger }
+module.exports = { initLogger, setTaskId }
