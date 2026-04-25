@@ -249,6 +249,37 @@ def query_events(
     return [dict(r) for r in rows]
 
 
+def query_metrics(since_hours: int = 24) -> dict:
+    """Aggregate counters for the past N hours: task success rate, stuck by reason/activity."""
+    from datetime import timedelta
+    conn = _get_db()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat()
+
+    task_rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM tasks WHERE created_at >= ? GROUP BY status",
+        (cutoff,),
+    ).fetchall()
+    stuck_reason_rows = conn.execute(
+        "SELECT reason, COUNT(*) AS n FROM failures WHERE at >= ? AND reason != '' GROUP BY reason ORDER BY n DESC",
+        (cutoff,),
+    ).fetchall()
+    stuck_activity_rows = conn.execute(
+        "SELECT activity, COUNT(*) AS n FROM failures WHERE at >= ? AND activity IS NOT NULL GROUP BY activity ORDER BY n DESC",
+        (cutoff,),
+    ).fetchall()
+
+    task_counts  = {r["status"]: r["n"] for r in task_rows}
+    total_tasks  = sum(r["n"] for r in task_rows)
+    done_tasks   = task_counts.get("done", 0)
+    return {
+        "since_hours":       since_hours,
+        "tasks":             task_counts,
+        "task_success_rate": round(done_tasks / total_tasks * 100, 1) if total_tasks else None,
+        "stuck_by_reason":   {r["reason"]:   r["n"] for r in stuck_reason_rows},
+        "stuck_by_activity": {r["activity"]: r["n"] for r in stuck_activity_rows},
+    }
+
+
 def query_logs(task_id: str | None = None, limit: int = 100) -> list[dict]:
     conn = _get_db()
     if task_id:

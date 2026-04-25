@@ -42,12 +42,18 @@ class RateLimitedLLMClient(LLMClient):
     async def chat(self, messages: list[dict], system: str | None = None) -> str:
         await self._bucket.acquire()
         for attempt in range(1, self._max_retries + 1):
+            t0 = time.monotonic()
             try:
-                return await self._inner.chat(messages, system=system)
+                result = await self._inner.chat(messages, system=system)
+                elapsed = time.monotonic() - t0
+                print(f"[LLM] ok latency={elapsed:.1f}s")
+                return result
             except Exception as e:
+                elapsed = time.monotonic() - t0
                 msg = str(e).lower()
                 is_retryable = any(p in msg for p in _RETRYABLE_PATTERNS)
                 if not is_retryable or attempt == self._max_retries:
+                    print(f"[LLM] error latency={elapsed:.1f}s: {e}")
                     raise
                 delay = min(2 ** attempt, 60)  # 2s, 4s, 8s, 16s … capped at 60s
                 print(f"[RateLimiter] LLM 暫時不可用 (attempt {attempt}/{self._max_retries}), retry in {delay}s: {e}")

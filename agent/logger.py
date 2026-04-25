@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 
 _current_task_id: str | None = None
@@ -70,6 +71,7 @@ def init_logger(service: str = "agent") -> str:
     base_dir = os.path.dirname(__file__)
     log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
+    _cleanup_old_logs(log_dir)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     bot_label = _resolve_log_label()
     filename = f"{service}-{bot_label}-{stamp}.jsonl" if bot_label else f"{service}-{stamp}.jsonl"
@@ -103,6 +105,17 @@ def _resolve_log_label() -> str | None:
     if re.fullmatch(r"Agent\d+", mc_username, flags=re.IGNORECASE):
         return _sanitize_label(mc_username)
     return None
+
+
+def _cleanup_old_logs(log_dir: str, keep_days: int = 7) -> None:
+    cutoff = time.time() - keep_days * 86400
+    try:
+        for fname in os.listdir(log_dir):
+            fpath = os.path.join(log_dir, fname)
+            if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
+                os.remove(fpath)
+    except Exception:
+        pass
 
 
 def _sanitize_label(value: str) -> str:

@@ -45,11 +45,24 @@ function _formatArg(arg) {
     }
 }
 
+function _cleanupOldLogs(logDir, keepDays = 7) {
+    const cutoffMs = Date.now() - keepDays * 86400 * 1000
+    try {
+        for (const fname of fs.readdirSync(logDir)) {
+            const fpath = path.join(logDir, fname)
+            try {
+                if (fs.statSync(fpath).mtimeMs < cutoffMs) fs.unlinkSync(fpath)
+            } catch (_) {}
+        }
+    } catch (_) {}
+}
+
 function initLogger(name = 'bot') {
     if (global.__agentLoggerInitialized) return global.__agentLoggerPath
 
     const logDir = path.join(__dirname, '..', 'logs')
     fs.mkdirSync(logDir, { recursive: true })
+    _cleanupOldLogs(logDir)
     const botLabel = _resolveLogLabel()
     const filename = botLabel ? `${name}-${botLabel}-${_filenameStamp()}.txt` : `${name}-${_filenameStamp()}.txt`
     const logPath = path.join(logDir, filename)

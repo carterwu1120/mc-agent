@@ -270,6 +270,17 @@ async def handle_events(request: web.Request) -> web.Response:
                         content_type="application/json", headers=_CORS)
 
 
+async def handle_metrics(request: web.Request) -> web.Response:
+    try:
+        hours = min(int(request.rel_url.query.get("hours", 24)), 168)
+        data  = await _run_sync(history_db.query_metrics, since_hours=hours)
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=500,
+                            content_type="application/json", headers=_CORS)
+    return web.Response(text=json.dumps(data, ensure_ascii=False),
+                        content_type="application/json", headers=_CORS)
+
+
 async def handle_logs(request: web.Request) -> web.Response:
     try:
         limit   = min(int(request.rel_url.query.get("limit", 100)), 500)
@@ -319,6 +330,7 @@ async def start(port: int | None = None) -> None:
         app.router.add_get("/failures", handle_failures)
         app.router.add_get("/events", handle_events)
         app.router.add_get("/logs", handle_logs)
+        app.router.add_get("/metrics", handle_metrics)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", port)
