@@ -40,13 +40,12 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 - 缺木材（logs < 16）→ chop logs 32
 - 有大量原礦未冶煉（raw_iron > 16）→ smelt iron <count>
 
-【工具鏈批次原則】
-規劃包含多個 mine 步驟（如 mine diamond × N）的計畫時：
-- 先數整個計畫需要幾把新鐵鎬（每個 mine 步驟最多消耗 1 把）
-- 需要 N 把 → 需要 3N raw_iron（再扣背包已有的 iron_ingot）
-- 一次性 mine iron <缺口> → smelt raw_iron <缺口> → equip，放在所有 mine 步驟最前面
-- 計畫中途不要重複出現 smelt raw_iron
-- 最小 batch 規則：補工具用的中間材料（stone / iron）一次至少 16，不要因為精算只輸出 mine stone 2 或 mine iron 3 這類數量
+【中途補料原則】
+計畫執行到一半需要插入 smelt 或 craft 步驟時：
+- 查背包有多少該原料（raw_iron / raw_food / 任何 raw_*），一次燒完或燒合理大批次，不要只燒剛好夠這一次用的最小量
+- 多出來的中間材料（iron_ingot 等）下次可以直接用，減少未來再插入 smelt 的需要
+- 計畫裡不應出現多次相同 smelt 指令（代表沒有一次備足）
+- 數量由 LLM 根據背包庫存和實際需求決定，沒有固定數字
 
 【善用已知資源位置】
 若 prompt 中有「已知資源位置」段落，代表 bot 過去找到過這些資源：
