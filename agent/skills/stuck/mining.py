@@ -1,4 +1,5 @@
 from agent.skills.commands_ref import command_list
+from agent.skills.stuck import tool_acquisition
 
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的挖礦卡住處理助手。
@@ -58,31 +59,22 @@ def deterministic_shortcut(state: dict, plan_context: dict | None) -> list[dict]
 
     if reason != "no_tools":
         return None
-    caps = state.get("capabilities") or {}
-    pending_steps = (plan_context or {}).get("pending_steps", [])
-    current_cmd = (plan_context or {}).get("current_cmd", "")
 
-    if state.get("craft_issue_suspected"):
+    new_cmds = tool_acquisition.pickaxe_replan_commands(state, plan_context)
+    if not new_cmds:
+        return None
+
+    caps = state.get("capabilities") or {}
+    if not tool_acquisition.should_retry("pickaxe", "mining", state, new_cmds):
         return None
 
     if not caps.get("can_make_pickaxe"):
-        # No materials to craft any pickaxe — build full tool chain from scratch
-        if not plan_context:
-            return None
-        new_cmds = ["chop logs 3", "equip", "mine stone 3", "equip"]
-        if current_cmd:
-            new_cmds.append(current_cmd)
-        new_cmds.extend(pending_steps)
         print(f"[Skill/activity_stuck] mining no_tools + can_make_pickaxe=False → replan full tool chain: {new_cmds}")
         return [
             {"command": "chat", "text": "缺少合適的鎬，先砍木頭合成工具再繼續"},
             {"action": "replan", "commands": new_cmds},
         ]
 
-    new_cmds = ["equip"]
-    if current_cmd:
-        new_cmds.append(current_cmd)
-    new_cmds.extend(pending_steps)
     print(f"[Skill/activity_stuck] mining no_tools + can_make_pickaxe → replan craft then retry: {new_cmds}")
     return [
         {"command": "chat", "text": "我有材料可以合成石鎬，合成後繼續挖礦"},

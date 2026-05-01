@@ -99,6 +99,7 @@ For Python skill internals (skill pattern, LLM format, task_memory): see agent/s
 | `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
 | `commands_ref.py` | imported by skills | Canonical command registry — `command_list(keys)` helper. **Never duplicate command descriptions inline.** |
 | `state_summary.py` | imported by skills | `summary_json(state)`, `equipment_summary(state)` |
+| `stuck/tool_acquisition.py` | imported by stuck handlers | Shared tool-acquisition retry fingerprinting and replan helpers |
 
 ---
 

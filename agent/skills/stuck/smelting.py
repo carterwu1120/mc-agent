@@ -1,4 +1,5 @@
 from agent.skills.commands_ref import command_list
+from agent.skills.stuck import tool_acquisition
 
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的燒製卡住處理助手。
@@ -86,6 +87,8 @@ def _ore_no_input_shortcut(state: dict, plan_context: dict) -> list[dict] | None
         cmds = ["equip", mine_cmd, smelt_cmd, *pending_steps]
     else:
         cmds = ["chop logs 3", "equip", "mine stone 3", "equip", mine_cmd, smelt_cmd, *pending_steps]
+    if not tool_acquisition.should_retry("pickaxe", "smelting", state, cmds):
+        return None
 
     return [
         {"command": "chat", "text": f"背包沒有可冶煉的礦石，先去挖 {ore_target} 再冶煉"},

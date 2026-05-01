@@ -5,6 +5,23 @@ EQUIP_WORTHY_NEXT = {"mine", "combat", "hunt", "explore"}
 EQUIP_WORTHY_PREV = {"mine", "smelt", "withdraw"}
 EQUIPMENT_CHANGING = {"mine", "smelt", "withdraw", "makechest"}
 NON_PROGRESS = {"chat", "idle"}
+SMELT_ALIASES = {
+    "iron": "raw_iron",
+    "iron_ingot": "raw_iron",
+    "gold": "raw_gold",
+    "gold_ingot": "raw_gold",
+    "copper": "raw_copper",
+    "copper_ingot": "raw_copper",
+    "steak": "beef",
+    "cooked_beef": "beef",
+    "cooked_porkchop": "porkchop",
+    "cooked_chicken": "chicken",
+    "cooked_mutton": "mutton",
+    "cooked_rabbit": "rabbit",
+    "cooked_cod": "cod",
+    "cooked_salmon": "salmon",
+    "baked_potato": "potato",
+}
 
 
 def command_name(cmd: str) -> str:
@@ -12,12 +29,20 @@ def command_name(cmd: str) -> str:
     return parts[0] if parts else ""
 
 
+def _canonicalize_command(cmd: str) -> str:
+    parts = cmd.split()
+    if len(parts) >= 2 and parts[0] == "smelt":
+        target = SMELT_ALIASES.get(parts[1], parts[1])
+        return " ".join([parts[0], target, *parts[2:]])
+    return cmd
+
+
 def normalize_commands(commands: list[str], previous_command: str | None = None) -> list[str]:
     normalized: list[str] = []
     last_non_chat = command_name(previous_command or "")
 
     for idx, raw in enumerate(commands):
-        cmd = (raw or "").strip()
+        cmd = _canonicalize_command((raw or "").strip())
         if not cmd:
             continue
 

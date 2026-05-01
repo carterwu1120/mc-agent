@@ -79,6 +79,11 @@ activity_stuck event
   _deduplicate_adjacent_cmds()      — 移除連續重複指令（如 equip equip）
 ```
 
+Tool acquisition fixes shared by multiple stuck handlers live in `stuck/tool_acquisition.py`.
+Use its resource fingerprint before retrying the same craft/equip recovery path; if the
+inventory/tool resources have not changed, let the normal LLM path decide instead of
+deterministically emitting the same replan again.
+
 ### 擴充規則
 
 新增 skip 禁止規則只需在 `_CRITICAL_DEPENDENCY_PAIRS` 加一行：
