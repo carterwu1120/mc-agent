@@ -12,17 +12,18 @@
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
   - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
 
-- [x] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
-  - Token bucket + exponential backoff 已實作在 `agent/brain/rate_limiter.py`
-
 - [ ] **通用 tool acquisition policy**
   - 目標：`mining` / `woodcutting` / `combat` 不各自實作 `ensurePickaxe` / `ensureAxe` / `ensureSword`
-  - [ ] 共享 retry cooldown：上次 craft 失敗的 resource fingerprint，inventory 有哪些變化才允許重試
+  - [~] 共享 retry cooldown：resource fingerprint 防止 inventory 未變化時重複觸發同一 replan（`git stash`：`codex: tool_acquisition fingerprint + smelt alias canonicalization`）
   - [ ] 統一 fallback：可徒手繼續的先繼續；不可徒手才升級成 replan
 
 ---
 
 ## 中期
+
+- [ ] **Replay testing（regression tests）** `[Backend: Testing]`
+  - [ ] 從 production stuck state 建 unit test fixtures（state dict → expected commands）
+  - [ ] 至少涵蓋：mining no_tools、smelting no_input、chopping no_trees
 
 - [ ] **Plan reasoning 欄位推廣與驗證**
   - [ ] `reasoning` vs `commands` 一致性檢查（說要補鐵但 commands 沒有 smelt → 抓邏輯錯）
@@ -37,6 +38,7 @@
     - [ ] 記錄已知工作點（礦坑入口 / 熔爐位置 / 常用補給點）
   - [ ] **Task history**（SQLite 已有基礎）
     - `task.json` 只維持短期工作記憶；長期完整歷史已存 SQLite
+    - [ ] Goal completion rate：`activity_done` 時記錄實際完成量 vs 目標量，區分「程式跑完」vs「目標達成」
   - [ ] **Interaction memory**（玩家偏好、長期目標、open threads）
   - [ ] **Reflection memory**（failure patterns、有效策略、bot 主動建議）
 
@@ -48,6 +50,9 @@
 ---
 
 ## 已完成
+
+- [x] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
+  - Token bucket + exponential backoff 已實作在 `agent/brain/rate_limiter.py`
 
 - [x] **Structured Logging + Observability** `[Backend: Observability]`
   - JS bot log 改成 JSONL（`{"time", "level", "service", "bot_id", "task_id", "msg"}`）
@@ -115,6 +120,19 @@
   - inventory_full 與 activity 完成的 race condition（`waitUntilIdle` 防止 smelt 指令被丟棄）
   - executor 加 90s idle 偵測：activity 指令送出後若 JS 仍未啟動，自動重送一次
   - Dockerfile.agent 補 `2>>` stderr redirect，Python crash 可查 `agent/logs/stderr-*.log`
+
+- [x] **Stuck loop fixes（production log 診斷）** `[Backend: Observability / Agent reliability]`
+  - `mine iron` stuck `no_tools` + `can_make_pickaxe=False` → deterministic replan（chop → equip → mine stone → equip → retry）
+  - `smelt raw_iron` stuck `no_input` → deterministic replan（mine ore → smelt）
+  - `state_summary.py` `can_make_iron_pickaxe` 計入 `raw_iron`（equip 會自動冶煉）
+  - `activity_stuck.py` 補上 smelting `no_input` caller gate（dead code fix）
+
+- [x] **Eval metrics: stuck handler path tracking + LLM call logging** `[Backend: Observability]`
+  - `activity_stuck.py`：每個 return 標記 `_path = deterministic | llm`，LLM path 計時
+  - `agent.py`：提取 `_path` metadata，寫 `llm_call` event 到 DB；非 stuck handler 統一計時
+  - `executor.py`：`replan()` / `skip_step()` 傳遞 `path_taken`，寫入 `events.details`
+  - Replay testing：可用真實 stuck state 對 deterministic_shortcut 做 regression test
+  - README 補 Evaluation section（SQL queries）
 
 - [x] **Deterministic rules 下沉到系統層**
   - `_enforce_pending_steps`、`_filter_done_steps_from_replan`、`_deduplicate_adjacent_cmds`、`_block_invalid_skip`
