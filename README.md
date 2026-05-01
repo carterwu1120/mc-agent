@@ -349,6 +349,78 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 
 ---
 
+## Evaluation
+
+Each bot writes a SQLite database at `agent/data/<bot_id>/task_history.db` with four tables: `tasks`, `events`, `failures`, `logs`.
+
+### Metrics already queryable (no code needed)
+
+```sql
+-- Task success/failure rate
+SELECT status, COUNT(*) FROM tasks GROUP BY status;
+
+-- Average task duration (completed tasks)
+SELECT ROUND(AVG((julianday(finished_at)-julianday(created_at))*86400)) AS avg_sec
+FROM tasks WHERE status='completed';
+
+-- Stuck count per task
+SELECT t.goal, t.status, COUNT(f.id) AS stuck_count
+FROM tasks t LEFT JOIN failures f ON f.task_id=t.id
+GROUP BY t.id ORDER BY stuck_count DESC;
+
+-- Step failure rate by command type
+SELECT command, COUNT(*) AS failures
+FROM failures GROUP BY command ORDER BY failures DESC;
+
+-- Task interrupt rate by cause
+SELECT interrupted_by, COUNT(*) FROM tasks
+WHERE interrupted_by IS NOT NULL GROUP BY interrupted_by;
+```
+
+### Metrics requiring the eval instrumentation (added in 5f8d49c)
+
+Every `replan` and `skip` event in the `events` table now carries a `path_taken` field (`"deterministic"` or `"llm"`) and every LLM invocation writes an `event_type='llm_call'` row with `latency_ms`.
+
+```sql
+-- Deterministic shortcut vs LLM split for stuck recovery
+SELECT json_extract(details,'$.path_taken') AS path, COUNT(*) AS cnt
+FROM events WHERE event_type IN ('replan','skip')
+GROUP BY path;
+
+-- LLM calls per task
+SELECT t.goal, COUNT(e.id) AS llm_calls, t.status
+FROM tasks t
+LEFT JOIN events e ON e.task_id=t.id AND e.event_type='llm_call'
+GROUP BY t.id ORDER BY llm_calls DESC;
+
+-- Average LLM latency per skill
+SELECT json_extract(details,'$.skill') AS skill,
+       ROUND(AVG(json_extract(details,'$.latency_ms'))) AS avg_ms
+FROM events WHERE event_type='llm_call'
+GROUP BY skill ORDER BY avg_ms DESC;
+
+-- Stuck recovery time: deterministic vs LLM (ms)
+SELECT json_extract(e.details,'$.path_taken') AS path,
+       ROUND(AVG((julianday(e.at)-julianday(f.at))*86400*1000)) AS avg_recovery_ms
+FROM failures f
+JOIN events e ON e.task_id=f.task_id AND e.event_type IN ('replan','skip')
+  AND (julianday(e.at)-julianday(f.at))*86400 BETWEEN 0 AND 120
+GROUP BY path;
+
+-- Coverage gaps: which activity/reason still falls to LLM most often
+SELECT f.activity, f.reason,
+       SUM(CASE WHEN json_extract(e.details,'$.path_taken')='deterministic' THEN 1 ELSE 0 END) AS det,
+       SUM(CASE WHEN json_extract(e.details,'$.path_taken')='llm' THEN 1 ELSE 0 END) AS llm
+FROM failures f
+JOIN events e ON e.task_id=f.task_id AND e.event_type IN ('replan','skip')
+  AND (julianday(e.at)-julianday(f.at))*86400 BETWEEN 0 AND 120
+GROUP BY f.activity, f.reason ORDER BY llm DESC;
+```
+
+The coverage-gaps query is the most actionable: high `llm` counts for a given `activity/reason` pair indicate candidates for new deterministic shortcuts.
+
+---
+
 ## Tech Stack
 
 | Component | Technology |
