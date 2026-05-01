@@ -183,6 +183,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         if shortcut:
             return shortcut
 
+    if activity == "smelting" and reason == "no_input" and plan_context:
+        shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
+        if shortcut:
+            return shortcut
+
     if activity == "hunting" and reason == "no_weapon":
         shortcut = hunting_stuck.deterministic_shortcut_no_weapon(state, plan_context)
         if shortcut:

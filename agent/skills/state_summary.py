@@ -188,7 +188,7 @@ def _capabilities(resources: dict, equipment: dict) -> dict:
     planks = resources["wood"]["planks"]
     sticks = resources["wood"]["sticks"]
     cobblestone = resources["materials"]["cobblestone"]
-    iron_ingot = resources["materials"]["iron_ingot"]
+    iron_ingot = resources["materials"]["iron_ingot"] + resources["materials"]["raw_iron"]
     diamond = resources["materials"]["diamond"]
     furnace = resources["utility"]["furnace"]
     crafting_table = resources["utility"]["crafting_table"]
