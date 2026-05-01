@@ -1,4 +1,5 @@
 import re
+import time
 
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
@@ -20,6 +21,16 @@ ALLOWED_COMMANDS = decision_utils.ALLOWED_ACTIVITY_STUCK_COMMANDS
 # Skipping the child would make the parent's goal impossible to achieve.
 # Add pairs here when production logs reveal a skip actually broke a task.
 _CRITICAL_DEPENDENCY_PAIRS: frozenset[tuple[str, str]] = frozenset()
+
+
+def _tag_path(result: list[dict], path: str, latency_ms: int | None = None) -> list[dict]:
+    for item in result:
+        if 'action' in item or 'command' in item:
+            item['_path'] = path
+            if latency_ms is not None:
+                item['_latency_ms'] = latency_ms
+            break
+    return result
 
 
 def _compute_is_critical_subtask(activity: str, state: dict) -> bool:
@@ -181,36 +192,36 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     if _looks_like_getfood_subflow(activity, reason, plan_context):
         shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
         if shortcut:
-            return shortcut
+            return _tag_path(shortcut, 'deterministic')
 
     if activity == "smelting" and reason == "no_input" and plan_context:
         shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
         if shortcut:
-            return shortcut
+            return _tag_path(shortcut, 'deterministic')
 
     if activity == "hunting" and reason == "no_weapon":
         shortcut = hunting_stuck.deterministic_shortcut_no_weapon(state, plan_context)
         if shortcut:
             print("[Skill/activity_stuck] hunting/no_weapon 走 deterministic shortcut")
-            return shortcut
+            return _tag_path(shortcut, 'deterministic')
 
     if activity == "hunting" and reason == "no_animals" and plan_context:
         shortcut = _build_hunting_replan_no_animals(state, plan_context)
         if shortcut:
             print("[Skill/activity_stuck] hunting/no_animals，直接改走換區域或改釣魚的 replan")
-            return shortcut
+            return _tag_path(shortcut, 'deterministic')
 
     if activity == "getfood" and reason == "no_raw_food" and plan_context and _recent_hunting_no_animals(state):
         shortcut = _build_getfood_replan_after_failed_hunt(state, plan_context)
         if shortcut:
             print("[Skill/activity_stuck] getfood/no_raw_food 且最近剛 hunting/no_animals，直接改走換區域或改釣魚的 replan")
-            return shortcut
+            return _tag_path(shortcut, 'deterministic')
 
     if activity == "getfood" and reason == "no_raw_food":
         shortcut = getfood_stuck.deterministic_shortcut_no_raw_food_satisfied(state, plan_context)
         if shortcut:
             print("[Skill/activity_stuck] getfood/no_raw_food 但熟食已足夠，直接跳過補食流程")
-            return shortcut
+            return _tag_path(shortcut, 'deterministic')
 
     if activity == "chopping" and reason == "no_trees":
         nearby = state.get("nearby") or {}
@@ -223,15 +234,15 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                 commands = ["explore trees"] + pending_steps
                 msg = "附近已沒有樹，移動到新的區域尋找樹木。"
             print(f"[Skill/activity_stuck] chopping/no_trees deterministic: {commands}")
-            return [
+            return _tag_path([
                 {"command": "chat", "text": msg},
                 {"action": "replan", "commands": commands},
-            ]
+            ], 'deterministic')
 
     if activity == "mining" and reason == "no_tools":
         shortcut = mining_stuck.deterministic_shortcut(state, plan_context)
         if shortcut:
-            return shortcut
+            return _tag_path(shortcut, 'deterministic')
 
     if activity == "makechest":
         chests = state.get("chests") or []
@@ -241,10 +252,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             pending_steps = (plan_context or {}).get("pending_steps", [])
             new_cmds = [f"deposit {chest['id']}"] + pending_steps
             print(f"[Skill/activity_stuck] makechest 失敗但有現有箱子 id={chest['id']}，直接 deposit")
-            return [
+            return _tag_path([
                 {"command": "chat", "text": f"改用已有箱子 id={chest['id']} 整理背包"},
                 {"action": "replan", "commands": new_cmds},
-            ]
+            ], 'deterministic')
 
     if activity == "getfood" and reason == "has_raw_food":
         raw_food = state.get("raw_food")
@@ -257,10 +268,10 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             new_cmds.append(f"getfood count {after_smelt}")
         new_cmds.extend(pending_steps)
         print(f"[Skill/activity_stuck] getfood has_raw_food → deterministic replan: {new_cmds}")
-        return [
+        return _tag_path([
             {"command": "chat", "text": f"冶煉 {raw_food} x{raw_count}，完成後繼續補充食物"},
             {"action": "replan", "commands": new_cmds},
-        ]
+        ], 'deterministic')
 
     if activity == "fishing":
         prompt = prompt_builder.build_fishing_prompt(state, health, food)
@@ -296,12 +307,15 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         system = system + stuck_prompts.PLAN_CONTEXT_SUFFIX
 
     response = None
+    _latency_ms = None
     try:
         print(f"[Skill/activity_stuck] Prompt:\n{prompt}\n---")
+        t0 = time.monotonic()
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=system,
         )
+        _latency_ms = int((time.monotonic() - t0) * 1000)
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         decision = parse_llm_json(llm_utils.parse_json_with_repair(clean), "Skill/activity_stuck")
@@ -315,7 +329,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                 pending_steps,
             )
             if not repaired:
-                return llm_utils.replan_fallback("我需要先重新規劃剩餘步驟，這次先跳過目前卡住的修復。")
+                return _tag_path(
+                    llm_utils.replan_fallback("我需要先重新規劃剩餘步驟，這次先跳過目前卡住的修復。"),
+                    'llm',
+                    _latency_ms,
+                )
             decision = repaired
 
         if decision.get("action") == "replan" and decision.get("commands"):
@@ -332,7 +350,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                     errors=errors,
                 )
                 if not repaired:
-                    return llm_utils.replan_fallback("我剛剛重新規劃失敗，先跳過這一步繼續。")
+                    return _tag_path(
+                        llm_utils.replan_fallback("我剛剛重新規劃失敗，先跳過這一步繼續。"),
+                        'llm',
+                        _latency_ms,
+                    )
                 decision = repaired
             # ── Deterministic rules pipeline ───────────────────────────────
             decision = _apply_replan_pipeline(decision, plan_context)
@@ -340,7 +362,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             if decision.get("text"):
                 result.append({"command": "chat", "text": decision["text"]})
             result.append({"action": "replan", "commands": decision["commands"]})
-            return result
+            return _tag_path(result, 'llm', _latency_ms)
 
         if decision.get("action") == "skip":
             # ── Deterministic rule: 不可在必要的子任務 skip ─────────────────
@@ -354,12 +376,12 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                     if decision.get("text"):
                         result.append({"command": "chat", "text": decision["text"]})
                     result.append({"action": "replan", "commands": decision["commands"]})
-                    return result
+                    return _tag_path(result, 'llm', _latency_ms)
             result = []
             if decision.get("text"):
                 result.append({"command": "chat", "text": decision["text"]})
             result.append({"action": "skip"})
-            return result
+            return _tag_path(result, 'llm', _latency_ms)
 
         decision = decision_utils.normalize_decision(activity, reason, needed_for, missing, missing_count, decision)
         if not decision_utils.is_valid_decision(decision):
@@ -372,15 +394,19 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         if command == "chat":
             if text:
                 result.append({"command": "chat", "text": text})
-            return result or None
+            return _tag_path(result, 'llm', _latency_ms) if result else None
         if text:
             result.append({"command": "chat", "text": text})
         if command != "idle":
             cmd = {k: v for k, v in decision.items() if k != "text"}
             result.append(cmd)
-        return result if result else None
+        return _tag_path(result, 'llm', _latency_ms) if result else None
     except Exception as e:
         print(f"[Skill/activity_stuck] 解析失敗: {e}\n原始回應: {response!r}")
         if plan_context:
-            return llm_utils.replan_fallback("我剛剛重新規劃失敗，先跳過這一步繼續。")
+            return _tag_path(
+                llm_utils.replan_fallback("我剛剛重新規劃失敗，先跳過這一步繼續。"),
+                'llm',
+                _latency_ms,
+            )
         return None

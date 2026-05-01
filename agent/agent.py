@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import re
+import time
 import uuid
 from collections import deque
 import aiohttp
@@ -295,6 +296,9 @@ HANDLERS = {
     "chat":           planner_skill.handle,
 }
 
+_NO_LLM_HANDLERS = {"agent", "food"}
+_SELF_REPORTING_LLM = {"activity_stuck"}
+
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
 _last_self_task_at = 0.0
 SELF_TASK_COOLDOWN = 60.0
@@ -469,6 +473,13 @@ def _format_runtime_command(frame: dict | None) -> str | None:
 
 def _stack_activity_names(state: dict) -> list[str]:
     return [frame.get("activity") for frame in (state.get("stack") or []) if frame.get("activity")]
+
+
+def _extract_path_meta(result: list[dict]) -> tuple[str | None, int | None]:
+    for item in result:
+        if '_path' in item:
+            return item.pop('_path'), item.pop('_latency_ms', None)
+    return None, None
 
 
 def _sync_task_context(state: dict) -> None:
@@ -857,10 +868,31 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             state["recent_stuck"] = list(_recent_stuck_events)
             executor.notify_stuck()
 
-        _NO_LLM_HANDLERS = {"action_done", "activity_done", "task_started", "task_stopped"}
-        if event_type not in _NO_LLM_HANDLERS:
+        skill_name = handler.__module__.split('.')[-1]
+        if skill_name not in _NO_LLM_HANDLERS:
             print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
+        t0 = time.monotonic()
         result = await handler(state, llm)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        path_taken = None
+        path_latency_ms = None
+        if event_type == "activity_stuck" and result:
+            path_taken, path_latency_ms = _extract_path_meta(result if isinstance(result, list) else [result])
+            if path_taken == 'llm':
+                task_memory.record_event(
+                    'llm_call',
+                    reason=state.get('reason'),
+                    details={
+                        'skill': 'activity_stuck',
+                        'latency_ms': path_latency_ms,
+                        'activity': state.get('activity'),
+                    },
+                )
+        if skill_name not in _NO_LLM_HANDLERS and skill_name not in _SELF_REPORTING_LLM:
+            task_memory.record_event(
+                'llm_call',
+                details={'skill': skill_name, 'latency_ms': latency_ms},
+            )
         if not result:
             return
         if _is_stale_response(event_type, state):
@@ -953,9 +985,10 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         details={
                             "detail": state.get("detail"),
                             "new_commands": list(cmds),
+                            "path_taken": path_taken,
                         },
                     )
-                    executor.replan(cmds)
+                    executor.replan(cmds, path_taken=path_taken)
                 elif cmds:
                     print(f"[Agent] replan 但 executor 未執行，改為新計畫: {cmds}")
                     _launch_plan(cmds, ws)
@@ -968,9 +1001,9 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         reason=state.get("reason") or "activity_stuck",
                         command=(state.get("plan_context") or {}).get("current_cmd"),
                         step=(state.get("plan_context") or {}).get("current_step"),
-                        details={"detail": state.get("detail")},
+                        details={"detail": state.get("detail"), "path_taken": path_taken},
                     )
-                    executor.skip_step()
+                    executor.skip_step(path_taken=path_taken)
                 else:
                     print("[Agent] 收到 skip 但 executor 未執行，忽略")
                 continue

@@ -289,6 +289,8 @@ class PlanExecutor:
         self._stuck_event = asyncio.Event()
         self._skip_event = asyncio.Event()
         self._replan_commands: list | None = None
+        self._replan_path = None
+        self._skip_path = None
         self._in_stuck_recovery = False
         self._current_command = None
         self._current_step_index = 0
@@ -321,6 +323,8 @@ class PlanExecutor:
         self._running = True
         self._ws = ws
         self._replan_commands = None
+        self._replan_path = None
+        self._skip_path = None
         self._step_results = []
         self._context = {}
         self._plan_start_state = dict(self._latest_state)
@@ -451,8 +455,9 @@ class PlanExecutor:
                                 reason='activity_stuck_skip',
                                 command=cmd_str,
                                 step=i,
-                                details={'source': 'activity_stuck'},
+                                details={'source': 'activity_stuck', 'path_taken': self._skip_path},
                             )
+                        self._skip_path = None
                         self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "skipped"})
                         i += 1
                         self._current_command = None
@@ -469,8 +474,9 @@ class PlanExecutor:
                                 reason='activity_stuck_replan',
                                 command=cmd_str,
                                 step=i,
-                                details={'new_commands': list(new_cmds)},
+                                details={'new_commands': list(new_cmds), 'path_taken': self._replan_path},
                             )
+                        self._replan_path = None
                         self._step_results.append({"cmd": cmd_str, "status": "replanned", "error": "replanned"})
                         if not preserve_task:
                             task_memory.replace_remaining_steps(i, new_cmds)
@@ -636,7 +642,7 @@ class PlanExecutor:
             self._in_stuck_recovery = True
             self._stuck_event.set()
 
-    def replan(self, new_commands: list) -> None:
+    def replan(self, new_commands: list, path_taken: str | None = None) -> None:
         """Accept new plan from LLM. Unblocks the paused executor."""
         self._in_stuck_recovery = False
         previous_command = None
@@ -648,12 +654,14 @@ class PlanExecutor:
                 if current_index - 1 < len(steps):
                     previous_command = steps[current_index - 1].get("cmd")
         self._replan_commands = normalize_commands(new_commands, previous_command=previous_command)
+        self._replan_path = path_taken
         self._done.set()
 
-    def skip_step(self) -> None:
+    def skip_step(self, path_taken: str | None = None) -> None:
         """Skip the current stuck step and move to the next one."""
         if self._running and self._in_stuck_recovery:
             self._in_stuck_recovery = False
+            self._skip_path = path_taken
             self._skip_event.set()
             self._done.set()
 
@@ -732,6 +740,14 @@ class PlanExecutor:
         if self._skip_event.is_set():
             if not preserve_task:
                 task_memory.mark_step_failed(i, 'verify_failed_skipped')
+                task_memory.record_event(
+                    'skip',
+                    reason='activity_stuck_skip',
+                    command=cmd_str,
+                    step=i,
+                    details={'source': 'activity_stuck', 'path_taken': self._skip_path},
+                )
+            self._skip_path = None
             self._step_results.append({'cmd': cmd_str, 'status': 'failed', 'error': 'verify_failed_skipped'})
             return 'skip'
 
@@ -741,7 +757,15 @@ class PlanExecutor:
             print(f'[Executor] 驗證失敗後重新規劃 step {i}: 舊剩餘={commands[i:]} → 新={new_cmds}')
             if not preserve_task:
                 task_memory.mark_step_failed(i, 'verify_replanned')
+                task_memory.record_event(
+                    'replan',
+                    reason='activity_stuck_replan',
+                    command=cmd_str,
+                    step=i,
+                    details={'new_commands': list(new_cmds), 'path_taken': self._replan_path},
+                )
                 task_memory.replace_remaining_steps(i, new_cmds)
+            self._replan_path = None
             self._step_results.append({'cmd': cmd_str, 'status': 'replanned', 'error': 'verify_replanned'})
             return new_cmds
 
@@ -760,6 +784,8 @@ class PlanExecutor:
         self._running = False
         self._current_command = None
         self._replan_commands = None
+        self._replan_path = None
+        self._skip_path = None
         self._in_stuck_recovery = False
         self._done.set()
         self._stuck_event.set()
@@ -803,4 +829,3 @@ def _parse(cmd_str: str) -> dict:
     """Parse "mine diamond 41" → {"command": "mine", "args": ["diamond", "41"]}"""
     parts = cmd_str.split()
     return {'command': parts[0], 'args': parts[1:] if len(parts) > 1 else []}
-
