@@ -53,6 +53,13 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的燒製卡住處理助手。
 """
 
 
+_ORE_SMELT_MAP: dict[str, str] = {
+    "raw_iron": "iron", "iron": "iron",
+    "raw_gold": "gold", "gold": "gold",
+    "raw_copper": "copper", "copper": "copper",
+}
+
+
 def looks_like_getfood_subflow(reason: str, plan_context: dict | None) -> bool:
     if reason != "no_input" or not plan_context:
         return False
@@ -60,11 +67,45 @@ def looks_like_getfood_subflow(reason: str, plan_context: dict | None) -> bool:
     return current_cmd.startswith("getfood ")
 
 
+def _ore_no_input_shortcut(state: dict, plan_context: dict) -> list[dict] | None:
+    current_cmd = (plan_context.get("current_cmd") or "").strip()
+    parts = current_cmd.split()
+    if len(parts) < 2 or parts[0] != "smelt":
+        return None
+    ore_target = _ORE_SMELT_MAP.get(parts[1])
+    if not ore_target:
+        return None
+
+    count_str = parts[2] if len(parts) >= 3 and parts[2].isdigit() else None
+    pending_steps = plan_context.get("pending_steps", [])
+    caps = state.get("capabilities") or {}
+    smelt_cmd = f"smelt raw_{ore_target} {count_str}" if count_str else f"smelt raw_{ore_target}"
+    mine_cmd  = f"mine {ore_target} {count_str}" if count_str else f"mine {ore_target}"
+
+    if caps.get("can_make_pickaxe"):
+        cmds = ["equip", mine_cmd, smelt_cmd, *pending_steps]
+    else:
+        cmds = ["chop logs 3", "equip", "mine stone 3", "equip", mine_cmd, smelt_cmd, *pending_steps]
+
+    return [
+        {"command": "chat", "text": f"背包沒有可冶煉的礦石，先去挖 {ore_target} 再冶煉"},
+        {"action": "replan", "commands": cmds},
+    ]
+
+
 def deterministic_shortcut(state: dict, plan_context: dict | None, build_getfood_replan_from_smelting) -> list[dict] | None:
     reason = state.get("reason")
-    if not looks_like_getfood_subflow(reason, plan_context):
-        return None
-    shortcut = build_getfood_replan_from_smelting(state, plan_context or {})
-    if shortcut:
-        print("[Skill/activity_stuck] smelting/no_input 發生在 getfood 子流程，直接改走補食物 replan")
-    return shortcut
+
+    if looks_like_getfood_subflow(reason, plan_context):
+        shortcut = build_getfood_replan_from_smelting(state, plan_context or {})
+        if shortcut:
+            print("[Skill/activity_stuck] smelting/no_input 發生在 getfood 子流程，直接改走補食物 replan")
+        return shortcut
+
+    if reason == "no_input" and plan_context:
+        shortcut = _ore_no_input_shortcut(state, plan_context)
+        if shortcut:
+            print("[Skill/activity_stuck] smelting/no_input ore smelt — replan with mine first")
+            return shortcut
+
+    return None
