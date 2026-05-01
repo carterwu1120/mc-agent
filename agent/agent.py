@@ -887,11 +887,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         'latency_ms': path_latency_ms,
                         'activity': state.get('activity'),
                     },
+                    db_only=True,
                 )
         if skill_name not in _NO_LLM_HANDLERS and skill_name not in _SELF_REPORTING_LLM:
             task_memory.record_event(
                 'llm_call',
                 details={'skill': skill_name, 'latency_ms': latency_ms},
+                db_only=True,
             )
         if not result:
             return

@@ -324,8 +324,22 @@ def record_event(
     to_goal: str | None = None,
     command: str | None = None,
     step: int | None = None,
+    db_only: bool = False,
 ) -> None:
     t = _load_raw() or _normalize_root({})
+    if db_only:
+        event = {
+            "type": event_type,
+            "goal": t.get("goal"),
+            "toGoal": to_goal,
+            "reason": reason,
+            "command": command,
+            "step": step,
+            "details": dict(details or {}),
+            "at": _now_iso(),
+        }
+        history_db._fire_and_forget(history_db.write_event, event, t.get("id"))
+        return
     _append_event(
         t,
         event_type=event_type,
