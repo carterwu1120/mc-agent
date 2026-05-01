@@ -94,12 +94,7 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
             recovery_target = start_pos
             recovery_label = "舊 activity startPos"
     elif cause in dangerous_causes:
-        if task_work_pos:
-            recovery_target = task_work_pos
-            recovery_label = "中斷步驟工作位置"
-        elif start_pos:
-            recovery_target = start_pos
-            recovery_label = "舊 activity startPos"
+        pass  # Don't TP back — the location is likely still dangerous
     else:
         if task_work_pos:
             recovery_target = task_work_pos
@@ -115,7 +110,7 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
     tp_command = _tp_cmd(recovery_target)
     if tp_command:
         deterministic_commands.append(tp_command)
-    if cause == "other":
+    if cause == "other" or cause in dangerous_causes:
         deterministic_commands.append("equip")
 
     if deterministic_commands:
