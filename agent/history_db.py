@@ -12,11 +12,13 @@ import asyncio
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 _DATA_DIR = os.environ.get("BOT_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 _DB_FILE = os.path.join(_DATA_DIR, "task_history.db")
 _db_conn: sqlite3.Connection | None = None
+_db_lock = threading.Lock()
 
 
 def init(data_dir: str) -> None:
@@ -110,88 +112,108 @@ def _fire_and_forget(fn, *args) -> None:
 
 def archive_task(task: dict) -> None:
     """Archive a completed/failed/interrupted task snapshot to the tasks table."""
-    try:
-        conn = _get_db()
-        conn.execute(
-            """INSERT OR REPLACE INTO tasks
-               (id, goal, final_goal, commands, steps, status, interrupted_by, created_at, finished_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (
-                task.get("id"),
-                task.get("goal") or "",
-                task.get("final_goal"),
-                json.dumps(task.get("commands") or [], ensure_ascii=False),
-                json.dumps(task.get("steps") or [], ensure_ascii=False),
-                task.get("status") or "unknown",
-                task.get("interruptedBy"),
-                task.get("createdAt") or "",
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
-        conn.commit()
-    except Exception as e:
-        print(f"[HistoryDB] archive_task failed: {e}")
+    with _db_lock:
+        try:
+            conn = _get_db()
+            conn.execute(
+                """INSERT OR REPLACE INTO tasks
+                   (id, goal, final_goal, commands, steps, status, interrupted_by, created_at, finished_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    task.get("id"),
+                    task.get("goal") or "",
+                    task.get("final_goal"),
+                    json.dumps(task.get("commands") or [], ensure_ascii=False),
+                    json.dumps(task.get("steps") or [], ensure_ascii=False),
+                    task.get("status") or "unknown",
+                    task.get("interruptedBy"),
+                    task.get("createdAt") or "",
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[HistoryDB] archive_task failed: {e}")
 
 
 def write_event(event: dict, task_id: str | None) -> None:
     """Write an event record to the events table."""
-    try:
-        conn = _get_db()
-        conn.execute(
-            """INSERT INTO events
-               (task_id, event_type, goal, to_goal, reason, command, step, details, at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (
-                task_id,
-                event.get("type") or "",
-                event.get("goal"),
-                event.get("toGoal"),
-                event.get("reason"),
-                event.get("command"),
-                event.get("step"),
-                json.dumps(event.get("details") or {}, ensure_ascii=False),
-                event.get("at") or datetime.now(timezone.utc).isoformat(),
-            ),
-        )
-        conn.commit()
-    except Exception as e:
-        print(f"[HistoryDB] write_event failed: {e}")
+    with _db_lock:
+        try:
+            conn = _get_db()
+            conn.execute(
+                """INSERT INTO events
+                   (task_id, event_type, goal, to_goal, reason, command, step, details, at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    task_id,
+                    event.get("type") or "",
+                    event.get("goal"),
+                    event.get("toGoal"),
+                    event.get("reason"),
+                    event.get("command"),
+                    event.get("step"),
+                    json.dumps(event.get("details") or {}, ensure_ascii=False),
+                    event.get("at") or datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[HistoryDB] write_event failed: {e}")
 
 
 def write_failure(failure: dict, task_id: str | None) -> None:
     """Write a failure record to the failures table."""
-    try:
-        conn = _get_db()
-        conn.execute(
-            """INSERT INTO failures (task_id, goal, command, step, reason, activity, at)
-               VALUES (?,?,?,?,?,?,?)""",
-            (
-                task_id,
-                failure.get("goal"),
-                failure.get("command"),
-                failure.get("step"),
-                failure.get("reason") or "",
-                failure.get("activity"),
-                failure.get("at") or datetime.now(timezone.utc).isoformat(),
-            ),
-        )
-        conn.commit()
-    except Exception as e:
-        print(f"[HistoryDB] write_failure failed: {e}")
+    with _db_lock:
+        try:
+            conn = _get_db()
+            conn.execute(
+                """INSERT INTO failures (task_id, goal, command, step, reason, activity, at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    task_id,
+                    failure.get("goal"),
+                    failure.get("command"),
+                    failure.get("step"),
+                    failure.get("reason") or "",
+                    failure.get("activity"),
+                    failure.get("at") or datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[HistoryDB] write_failure failed: {e}")
 
 
 def write_log(entry: dict) -> None:
-    try:
-        conn = _get_db()
-        conn.execute(
-            "INSERT INTO logs (time, level, service, bot_id, task_id, msg) VALUES (?,?,?,?,?,?)",
-            (entry.get("time", ""), entry.get("level", "INFO"),
-             entry.get("service", ""), entry.get("bot_id", ""),
-             entry.get("task_id"), entry.get("msg", "")),
-        )
-        conn.commit()
-    except Exception:
-        pass  # never let log writing crash the agent
+    with _db_lock:
+        try:
+            conn = _get_db()
+            conn.execute(
+                "INSERT INTO logs (time, level, service, bot_id, task_id, msg) VALUES (?,?,?,?,?,?)",
+                (entry.get("time", ""), entry.get("level", "INFO"),
+                 entry.get("service", ""), entry.get("bot_id", ""),
+                 entry.get("task_id"), entry.get("msg", "")),
+            )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            pass  # never let log writing crash the agent
 
 
 # ── Query functions ───────────────────────────────────────────────────────────
