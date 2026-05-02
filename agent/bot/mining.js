@@ -368,6 +368,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
     let descentHardFails = 0
     let tunnelFailCount = 0
     let stoneSearchFails = 0
+    let stoneRotations = 0
 
     // 每次進入 loop（包含 resume 後）先嘗試合成稿子
     if (!_hasPickaxe(bot)) {
@@ -494,10 +495,20 @@ async function _loop(bot, goal = {}, resumePos = null) {
                 if (stoneSearchFails >= 2) {
                     tunnelYaw += Math.PI / 2
                     stoneSearchFails = 0
+                    stoneRotations++
                     console.log('[Mine] 下潛未成功，旋轉 90° 繼續找石頭')
+                    if (stoneRotations >= 4) {
+                        stoneRotations = 0
+                        if (!await _ensurePickaxeOrStuck(bot)) break
+                        if (_shouldAbort(_myGen)) return
+                        console.log('[Mine] 四方無石頭，強制往下直挖至 Y=40')
+                        await _digStraightDown(bot, 40)
+                        if (_shouldAbort(_myGen)) return
+                    }
                 }
             } else {
                 stoneSearchFails = 0
+                stoneRotations = 0
             }
             continue
         }
