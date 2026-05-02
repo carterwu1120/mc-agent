@@ -1135,12 +1135,22 @@ async def run():
             print(f"[Agent] Coordinator register gave up after 10 attempts")
         asyncio.create_task(_register_with_coordinator())
 
+    reconnect_delay = 3
     while True:
+        session_tasks: list[asyncio.Task] = []
         try:
             print(f"[Agent] 連線到 {WS_URL} ...")
-            async with websockets.connect(WS_URL) as ws:
+            async with websockets.connect(
+                WS_URL,
+                ping_interval=30,
+                ping_timeout=60,
+            ) as ws:
+                saw_state = False
                 print("[Agent] 已連線！等待 state...")
                 async for raw in ws:
+                    if not saw_state:
+                        saw_state = True
+                        reconnect_delay = 3
                     state = json.loads(raw)
                     _latest_state.clear()
                     _latest_state.update(state)
@@ -1165,7 +1175,7 @@ async def run():
                         queued_message = _queued_player_tasks.popleft()
                         print(f"[TaskArb] 取出排隊玩家任務: {queued_message}")
                         queued_state = _augment_state({**state, "type": "chat", "message": queued_message}, player_task=queued_message)
-                        asyncio.create_task(_handle_and_send(queued_state, planner_skill.handle, ws))
+                        session_tasks.append(asyncio.create_task(_handle_and_send(queued_state, planner_skill.handle, ws)))
                         continue
 
                     handler = HANDLERS.get(event_type)
@@ -1176,14 +1186,18 @@ async def run():
                         continue
 
                     if event_type == "chat":
-                        asyncio.create_task(_handle_player_chat(state, ws))
+                        session_tasks.append(asyncio.create_task(_handle_player_chat(state, ws)))
                         continue
 
-                    asyncio.create_task(_handle_and_send(state, handler, ws))
+                    session_tasks.append(asyncio.create_task(_handle_and_send(state, handler, ws)))
         except Exception as e:
-            print(f"[Agent] 連線中斷: {e}，3 秒後重連...")
+            print(f"[Agent] 連線中斷: {e}，{reconnect_delay:.0f} 秒後重連...")
             _thinking.clear()
-            await asyncio.sleep(3)
+            for t in session_tasks:
+                t.cancel()
+            await asyncio.gather(*session_tasks, return_exceptions=True)
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 60)
 
 
 if __name__ == "__main__":
