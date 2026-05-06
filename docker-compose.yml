@@ -46,6 +46,8 @@ services:
     ports:
       - "3002:3002"
       - "3010:3010"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   # ── Bot 1 ────────────────────────────────────────────────────────────────────
@@ -90,4 +92,6 @@ services:
       - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
     depends_on:
       - bot1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
