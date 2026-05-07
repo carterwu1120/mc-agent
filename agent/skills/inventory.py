@@ -1,6 +1,8 @@
 import json
 import re
+from agent import task_memory
 from agent.brain import LLMClient
+from agent.context_builder import build_for_skill
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import equipment_summary
 
@@ -186,6 +188,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"背包內容：\n{inv_summary}\n\n"
         f"已登記箱子：\n{chests_summary}\n\n"
         f"請根據活動規則決定處理方式。"
+        f"{build_for_skill('inventory', task_memory.recent_events(), task_memory.recent_failures())}"
     )
 
     response = None

@@ -1,6 +1,8 @@
 import json
 import re
+from agent import task_memory
 from agent.brain import LLMClient
+from agent.context_builder import build_for_skill
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import equipment_summary
 from agent.skills.commands_ref import command_list
@@ -152,6 +154,7 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
         f"背包內容：\n{inv_summary}\n\n"
         f"血量={health}/20，飢餓={food}/20\n\n"
         f"請決定機器人重生後要怎麼繼續。"
+        f"{build_for_skill('respawn', task_memory.recent_events(), task_memory.recent_failures(), task_memory.interrupted_tasks())}"
     )
 
     response = None

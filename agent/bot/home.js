@@ -42,11 +42,12 @@ function _resetPathfinder(bot) {
 }
 
 function goHome(bot) {
-    const home = _load()
+    let home = _load()
     if (!home) {
-        console.log('[Home] 尚未設定基地，請先用 !sethome')
-        bot.chat('尚未設定基地，請先用 !sethome')
-        return false
+        console.log('[Home] 尚未設定基地，在原地自動 sethome')
+        bot.chat('尚未設定基地，已將當前位置設為基地')
+        setHome(bot)
+        home = _load()
     }
     const pos = bot.entity.position
     _returnPos = { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }

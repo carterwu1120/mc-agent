@@ -9,6 +9,7 @@ SKILL_BUDGETS: dict[str, dict] = {
     "planner":        {"events": 6, "failures": 4, "interrupted": 2},
     "self_task":      {"events": 4, "failures": 3, "interrupted": 2},
     "inventory":      {"events": 3, "failures": 2, "interrupted": 0},
+    "tool_durability": {"events": 3, "failures": 2, "interrupted": 0},
     "respawn":        {"events": 4, "failures": 3, "interrupted": 1},
 }
 _DEFAULT_BUDGET: dict = {"events": 4, "failures": 3, "interrupted": 1}

@@ -1,6 +1,8 @@
 import json
 import re
+from agent import task_memory
 from agent.brain import LLMClient
+from agent.context_builder import build_for_skill
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json, equipment_summary
 from agent.skills.commands_ref import command_list
@@ -65,6 +67,7 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
         f"背包內容：\n{inv_summary}\n\n"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請決定機器人接下來要怎麼處理裝備耐久問題。"
+        f"{build_for_skill('tool_durability', task_memory.recent_events(), task_memory.recent_failures())}"
     )
 
     response = None
