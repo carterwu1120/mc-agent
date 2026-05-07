@@ -18,6 +18,7 @@ const { startSurfacing, stopSurfacing } = require('./surface')
 const { startExploring, stopExploring } = require('./explore')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
 const { setMode } = require('./mode')
+const activityStack = require('./activity')
 
 const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'smelt', 'combat', 'hunt', 'getfood', 'surface', 'explore'])
 
@@ -436,6 +437,20 @@ function handle(bot, msg) {
             })()
             break
         }
+
+        case 'stopall':
+            stopFishing(bot)
+            stopChopping(bot)
+            stopMining(bot)
+            stopSmelting(bot)
+            stopCombat(bot)
+            stopHunting(bot)
+            stopGetFood(bot)
+            stopSurfacing(bot)
+            stopExploring(bot)
+            activityStack.clearStack()
+            bridge.sendState(bot, 'action_done')
+            break
 
         default:
             console.warn('[Action] 未知指令:', msg.command)

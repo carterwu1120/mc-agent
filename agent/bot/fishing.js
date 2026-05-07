@@ -6,6 +6,7 @@ const activityStack = require('./activity')
 let isFishing = false
 let _isPaused = false
 let _catches = 0
+let _loopGen = 0
 let _savedPitch = null   // 目前使用的 pitch（同目標時沿用）
 let _lastWaterKey = null
 let _llmDecision = null  // 待處理的 LLM 決策（由 applyLLMDecision 設定）
@@ -63,12 +64,14 @@ function stopFishing(bot) {
     if (!isFishing) return
     isFishing = false
     _isPaused = false
+    _loopGen++
     if (bot.fishing) bot.activateItem()
     console.log('[Fish] 停止釣魚')
 }
 
 async function _loop(bot, goal = {}) {
     _isPaused = false
+    const _myGen = ++_loopGen
     let failStreak = 0
     let noBobberStreak = 0
     const startTime = Date.now()
@@ -196,7 +199,7 @@ async function _loop(bot, goal = {}) {
         }
     }
 
-    if (!_isPaused) activityStack.pop(bot)
+    if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
 

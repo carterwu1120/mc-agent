@@ -174,4 +174,12 @@ def deterministic_shortcut_no_weapon(state: dict, plan_context: dict | None) -> 
             {"command": "chat", "text": f"目前做不出武器，但背包有釣竿，先改用釣魚補足剩餘 {remaining} 份食物。"},
             {"action": "replan", "commands": commands},
         ]
+
+    if "wooden_sword_path" in info["candidate_routes"]:
+        commands = ["chop logs 2", f"hunt count {remaining}", *pending_steps]
+        return [
+            {"command": "chat", "text": f"附近有樹但缺木頭鏈，先砍 2 組木頭合成木劍，再繼續狩獵 {remaining} 份食物。"},
+            {"action": "replan", "commands": commands},
+        ]
+
     return None

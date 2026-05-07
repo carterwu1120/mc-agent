@@ -218,10 +218,19 @@ function getStack() {
     return _stack.map(({ resumeFn, ...rest }) => rest)
 }
 
+function clearStack() {
+    if (_stack.length === 0) return
+    while (_stack.length > 0) {
+        const frame = _stack.pop()
+        markStopped(frame.activity, 'clear_stack')
+    }
+    console.log('[Activity] clearStack -> idle')
+}
+
 module.exports = {
     register, push, pop, remove, pause, resumeCurrent,
     updateProgress, updateTopGoal, updateTopFrame, getTopFrame,
-    getActivity, getStack,
+    getActivity, getStack, clearStack,
     markStarted, markPaused, markStopped, touch,
     has,
     getRuntimeState, isTopActivity, isStale, forget, getActivityOptions,

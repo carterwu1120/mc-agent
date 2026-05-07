@@ -288,6 +288,7 @@ class PlanExecutor:
         self._done = asyncio.Event()
         self._stuck_event = asyncio.Event()
         self._skip_event = asyncio.Event()
+        self._pending_stopall = False
         self._replan_commands: list | None = None
         self._replan_path = None
         self._skip_path = None
@@ -376,6 +377,16 @@ class PlanExecutor:
             self._before_state = dict(self._latest_state)
             self._after_state = {}
             print(f'[Executor] 執行步驟 {i}: {cmd_str}')
+            if self._pending_stopall:
+                self._pending_stopall = False
+                print('[Executor] 重新規劃前先送 stopall 清空 JS activity stack，等待 action_done')
+                self._current_command = {'command': 'stopall'}
+                self._done.clear()
+                await ws.send(json.dumps({'command': 'stopall', '_task_id': get_task_id()}))
+                await self._done.wait()
+                if self._run_id != my_run_id:
+                    return
+                self._current_command = msg
             await ws.send(json.dumps(msg))
             self._command_sent_at = asyncio.get_event_loop().time()
             self._activity_retried = False
@@ -466,6 +477,7 @@ class PlanExecutor:
                     if self._replan_commands is not None:
                         new_cmds = self._replan_commands
                         self._replan_commands = None
+                        self._pending_stopall = True
                         print(f'[Executor] 接受重新規劃 step {i}: 舊剩餘={commands[i:]} → 新={new_cmds}')
                         if not preserve_task:
                             task_memory.mark_step_failed(i, "replanned")
@@ -581,6 +593,7 @@ class PlanExecutor:
 
         immediate_commands = {
             'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore',
+            'stopall',
             'home', 'back', 'sethome', 'equip', 'unequip', 'deposit', 'withdraw', 'readchest', 'setchest', 'labelchest',
             'makechest', 'chat', 'setmode', 'resumetask', 'tp',
         }

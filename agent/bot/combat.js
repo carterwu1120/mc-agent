@@ -29,6 +29,7 @@ const ARMOR_SLOTS = [
 
 let isCombating = false
 let _isPaused = false
+let _loopGen = 0
 
 activityStack.register('combat', _pause)
 
@@ -224,6 +225,7 @@ function stopCombat(_bot) {
     if (!isCombating) return
     isCombating = false
     _isPaused = false
+    _loopGen++
     console.log('[Combat] 停止戰鬥')
 }
 
@@ -233,6 +235,7 @@ function isActive() {
 
 async function _loop(bot, goal = {}) {
     _isPaused = false
+    const _myGen = ++_loopGen
     const startTime = Date.now()
     let noTargetTicks = 0
 
@@ -289,7 +292,7 @@ async function _loop(bot, goal = {}) {
     }
 
     isCombating = false
-    if (!_isPaused) {
+    if (!_isPaused && _loopGen === _myGen) {
         setTimeout(async () => { await craftMissingArmor(bot); await equipArmor(bot) }, 1000)
         activityStack.pop(bot)
     }

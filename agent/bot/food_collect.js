@@ -21,6 +21,7 @@ const RAW_TO_COOKED = {
 let isGettingFood = false
 let _isPaused = false
 let _startingCookedCount = 0
+let _loopGen = 0
 
 activityStack.register('getfood', _pause)
 
@@ -55,6 +56,7 @@ function stopGetFood(_bot) {
     isGettingFood = false
     _isPaused = false
     _startingCookedCount = 0
+    _loopGen++
     console.log('[Food] 停止蒐集食物')
 }
 
@@ -64,6 +66,7 @@ function isActive() {
 
 async function _loop(bot, goal = {}) {
     _isPaused = false
+    const _myGen = ++_loopGen
     const targetCooked = goal.count ?? 8
 
     while (isGettingFood) {
@@ -100,7 +103,7 @@ async function _loop(bot, goal = {}) {
         break
     }
 
-    if (!_isPaused && !isGettingFood) activityStack.pop(bot)
+    if (!_isPaused && !isGettingFood && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
 
