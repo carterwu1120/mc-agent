@@ -148,13 +148,19 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         return None
 
     # 所有模式：若有未完成任務，優先恢復（避免新計畫蓋掉舊任務）
+    # 只恢復可恢復原因的中斷（crash/death），玩家主動停止不自動恢復
+    _RESUMABLE_INTERRUPTIONS = {None, "restart", "death", "temporary_recovery"}
     task = task_memory.load()
     if task and task.get("status") == "interrupted":
-        steps = task.get("steps", [])
-        remaining = [s["cmd"] for s in steps if s.get("status") not in ("done", "failed")]
-        if remaining:
-            print(f"[SelfTask] 有未完成任務，自動恢復: {task['goal']}")
-            return {"action": "plan", "commands": remaining, "goal": task["goal"], "resume_task": True}
+        interrupted_by = task.get("interruptedBy")
+        if interrupted_by not in _RESUMABLE_INTERRUPTIONS:
+            print(f"[SelfTask] 跳過恢復：任務由 '{interrupted_by}' 中斷，需玩家明確指示")
+        else:
+            steps = task.get("steps", [])
+            remaining = [s["cmd"] for s in steps if s.get("status") not in ("done", "failed")]
+            if remaining:
+                print(f"[SelfTask] 有未完成任務，自動恢復: {task['goal']}")
+                return {"action": "plan", "commands": remaining, "goal": task["goal"], "resume_task": True}
 
 
     mem_summary = exploration_memory.summary_for_prompt()

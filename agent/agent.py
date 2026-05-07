@@ -71,12 +71,12 @@ def _launch_plan(commands: list, ws, **kwargs) -> None:
 async def _on_verify_failed(state: dict, ws) -> None:
     """Callback for executor post-action verification failures.
     Routes a synthetic activity_stuck state through the normal LLM pipeline.
-    If LLM only chats (no replan/skip/resume), auto-resume so executor doesn't hang."""
+    If LLM only chats (no replan/skip/resume), force-skip the failed step."""
     await _handle_and_send(state, activity_stuck_skill.handle, ws)
-    # If executor is still waiting (LLM sent chat but didn't replan/skip/resume), unblock it
+    # If executor is still waiting (LLM sent chat but didn't replan/skip/resume), fail closed
     if executor.is_in_stuck_recovery():
-        print('[Agent] 驗證失敗後 LLM 未明確回 replan/skip，自動接受步驟繼續')
-        executor.resume_after_stuck()
+        print('[Agent] 驗證失敗後 LLM 未明確回 replan/skip，強制 skip 此步驟')
+        executor.skip_step(path_taken='verify_fail_auto_skip')
 
 
 executor._verify_failed_callback = _on_verify_failed

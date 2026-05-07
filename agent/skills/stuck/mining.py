@@ -43,6 +43,10 @@ def deterministic_shortcut(state: dict, plan_context: dict | None) -> list[dict]
     reason = state.get("reason")
 
     if reason in ("water_loop", "trapped_in_water"):
+        if not tool_acquisition.should_retry("water_escape", "mining", state, ["home"]):
+            # same water trap with unchanged resources → let LLM decide a different strategy
+            print("[Skill/activity_stuck] mining water_loop retry budget exceeded → escalate to LLM")
+            return None
         pending_steps = (plan_context or {}).get("pending_steps", [])
         current_cmd   = (plan_context or {}).get("current_cmd", "")
         if plan_context:
