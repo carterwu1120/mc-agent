@@ -8,7 +8,7 @@ from agent.skills.state_summary import equipment_summary
 
 LABEL_PATTERNS = {
     "food": ["cooked_", "bread", "apple", "carrot", "potato", "beef", "pork", "chicken", "mutton", "rabbit", "salmon", "cod"],
-    "wood": ["_log", "_planks", "_sapling", "bamboo"],
+    "wood": ["_log", "_planks"],
     "stone": ["cobblestone", "deepslate", "gravel", "sand", "diorite", "andesite", "granite", "tuff", "calcite"],
     "ore": ["_ingot", "raw_iron", "raw_gold", "raw_copper", "lapis_lazuli", "quartz", "diamond", "emerald", "coal"],
 }
@@ -38,6 +38,9 @@ commands 裡的 chest id 從下方提供的箱子資訊取得。
 label 根據背包最多的材料類型選擇：wood / ore / stone / misc。
 
 ⚠ 若沒有設定基地（home 未設定），絕對不能在 plan 裡加入 home 指令，也不要嘗試 makechest + deposit 流程。
+⚠ 若目前活動是 smelting，絕對不能回傳 continue。
+  背包滿時 smelting 無法取出成品，continue 會造成永久死鎖。
+  必須選 drop（丟棄低價值物品）或 plan（存入箱子）。
   這種情況下應優先選 drop（丟棄低價值物品），若沒有可丟的才選 continue。
 
 resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
@@ -67,6 +70,10 @@ resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
 - stone_pickaxe、stone_axe、stone_shovel 等石製工具
 - 多餘的 crafting_table（留 1 個即可）
 - bone、rotten_flesh、spider_eye 等無用戰利品
+- clay_ball、clay — 無合成用途，全部丟棄
+- raw_copper、copper_ingot — 價值低，可全部丟棄
+- 各種樹苗（spruce_sapling、oak_sapling 等）— 全部丟棄
+- arrow 超過 16 支時超出部分可丟棄；
 - 背包裡耐久度 ≤ 10% 的工具或裝備（幾乎已損壞，可以丟棄換空間）
   - 例外：若背包沒有同類型備用，且裝備欄對應槽位也是損壞的，則保留
 
@@ -151,9 +158,14 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     planks_count = sum(i['count'] for i in inventory if i['name'].endswith('_planks'))
     # 1 chest = 8 planks, need 2 chests = 16 planks; logs convert 1:4 to planks
     wood_as_planks = planks_count + logs_count * 4
-    can_make_chest = wood_as_planks >= 16
+    chest_count = sum(i['count'] for i in inventory if i['name'] == 'chest')
+    can_make_chest = wood_as_planks + chest_count * 8 >= 16
     if not labeled_chests:
-        chests_summary += f"\n（背包中有木材：{logs_count} logs + {planks_count} planks = {wood_as_planks} planks 等效，{'足夠' if can_make_chest else '不足'}製作箱子（需要 16 planks））"
+        chests_summary += (
+            f"\n（背包中有木材：{logs_count} logs + {planks_count} planks = {wood_as_planks} planks 等效"
+            f"，現成 chest 物品：{chest_count} 個"
+            f"，{'足夠' if can_make_chest else '不足'}製作箱子（需要等效 16 planks 或 2 個 chest 物品））"
+        )
 
     has_home = bool(state.get("home"))
     if not labeled_chests and can_make_chest and has_home and _should_make_misc_chest(inventory):

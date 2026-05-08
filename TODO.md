@@ -30,6 +30,18 @@
   - [ ] reasoning 可選擇性 chat 給玩家看（透明度）
   - [ ] 評估 Gemini 2.5 Flash vs Ollama 小模型的 reasoning 品質差距
 
+- [ ] **SQLite → PostgreSQL 遷移** `[Backend: SQL / Schema Design]`
+  - 將現有 `task_history.db`（tasks / events / failures / logs）遷移至 PostgreSQL
+  - 設計正規化 schema，補上 index（task_id、bot_id、created_at、event_type）
+  - 多 bot 共用同一 DB，以 `bot_id` 做資料隔離，取代現在的 per-bot 檔案分離
+  - 可順便練習：migration script、connection pool（asyncpg）、transaction 管理
+
+- [ ] **RAG / Knowledge Base**
+  - 把 Minecraft 合成配方、生物分布、地形規則做成 vector store
+  - LLM 需要相關知識時查詢，而不是全部塞進 prompt
+  - 可先用 ChromaDB（embedded，無需另起服務）+ sentence-transformers
+  - 適用情境：activity_stuck prompt 查「這個 ore 在哪一層」、planner 查合成配方
+
 - [ ] **Memory roadmap**
   - [ ] **Spatial memory 強化**（`exploration_memory.json` 已有基礎）
     - [x] 記錄 ore_finds / forest_finds / animal_areas

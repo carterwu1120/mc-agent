@@ -96,8 +96,57 @@ def _ore_no_input_shortcut(state: dict, plan_context: dict) -> list[dict] | None
     ]
 
 
+_ALWAYS_DROPPABLE = {
+    "rotten_flesh", "bone", "spider_eye", "lily_pad", "tripwire_hook",
+    "pointed_dripstone", "diorite", "andesite", "granite", "tuff", "gravel", "flint",
+}
+_DROPPABLE_TOOLS = {
+    "wooden_pickaxe", "wooden_axe", "wooden_shovel",
+    "stone_pickaxe", "stone_axe", "stone_shovel",
+}
+
+
+def _find_droppable(inventory: list) -> list[str]:
+    names = {i["name"] for i in inventory if i.get("name")}
+    result = []
+    for name in names:
+        if name in _ALWAYS_DROPPABLE or name in _DROPPABLE_TOOLS:
+            result.append(name)
+        elif name == "cobblestone":
+            total = sum(i["count"] for i in inventory if i.get("name") == "cobblestone")
+            if total > 128:
+                result.append(name)
+    return result
+
+
 def deterministic_shortcut(state: dict, plan_context: dict | None, build_getfood_replan_from_smelting) -> list[dict] | None:
     reason = state.get("reason")
+
+    if reason == "no_progress":
+        slots = state.get("inventory_slots") or {}
+        free = int(slots.get("free", 36))
+        if free <= 2:
+            chests = state.get("chests") or []
+            usable = [c for c in chests if (c.get("freeSlots") or 0) > 0 and c.get("label")]
+            pending = list((plan_context or {}).get("pending_steps") or [])
+            current_cmd = ((plan_context or {}).get("current_cmd") or "").strip()
+            resume = ([current_cmd] if current_cmd else []) + pending
+            print("[Skill/activity_stuck] smelting/no_progress + inventory full → clear inventory first")
+            if usable:
+                cmds = [f"deposit {usable[0]['id']}", *resume]
+                return [
+                    {"command": "chat", "text": "背包已滿無法取出成品，先存入箱子再繼續燒製"},
+                    {"action": "replan", "commands": cmds},
+                ]
+            droppable = _find_droppable(state.get("inventory") or [])
+            if droppable:
+                return [
+                    {"command": "chat", "text": "背包已滿無法取出成品，先丟棄低價值物品再繼續"},
+                    {"command": "inventory_decision", "action": "drop", "items": droppable},
+                ]
+            return [
+                {"command": "chat", "text": "背包已滿且無可丟棄物品，請玩家手動清理背包"},
+            ]
 
     if looks_like_getfood_subflow(reason, plan_context):
         shortcut = build_getfood_replan_from_smelting(state, plan_context or {})
