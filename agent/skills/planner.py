@@ -282,8 +282,23 @@ async def _chat_with_retry(llm: LLMClient, prompt: str, system: str, attempts: i
 def _parse_decision_text(response: str) -> dict:
     clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
     clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-    raw = json.loads(clean)
-    return parse_llm_json(raw, "Planner")
+    try:
+        raw = json.loads(clean)
+        return parse_llm_json(raw, "Planner")
+    except json.JSONDecodeError:
+        pass
+    # fallback: extract last {...} JSON block from markdown-heavy responses
+    import re as _re
+    blocks = _re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", clean, flags=_re.DOTALL)
+    if blocks:
+        raw = json.loads(blocks[-1])
+        return parse_llm_json(raw, "Planner")
+    # last resort: find last { ... } in the text
+    last = clean.rfind("{")
+    if last != -1:
+        raw = json.loads(clean[last:clean.rfind("}") + 1])
+        return parse_llm_json(raw, "Planner")
+    raise json.JSONDecodeError("no JSON found", clean, 0)
 
 
 def _planner_failure_chat() -> dict:

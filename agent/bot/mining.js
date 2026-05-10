@@ -913,6 +913,13 @@ async function _loop(bot, goal = {}, resumePos = null) {
                         console.log('[Mine] 四個方向都無法繼續，向上挖掘逃脫...')
                         await _digEscape(bot, Math.floor(bot.entity.position.y) + 20)
                         if (_shouldAbort(_myGen)) return
+                        // if we escaped to open space, reset and retry mining
+                        if (_canMoveHorizontally(bot)) {
+                            console.log('[Mine] 逃脫成功，重試挖礦')
+                            tunnelFailCount = 0
+                            tunnelYaw = bot.entity.yaw
+                            continue
+                        }
                         isMining = false
                         bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
                         break
