@@ -15,7 +15,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的挖礦卡住處理助手。
 {{"command": "idle", "text": "...理由..."}}
 
 【可用指令】
-{command_list(["chop", "mine", "home", "chat", "idle"])}
+{command_list(["chop", "mine", "equip", "home", "chat", "idle"])}
 
 決策原則：
 - 若存在未完成 plan，且目前步驟是挖礦時因 no_tools 卡住，優先回覆 replan 或 skip，不要只回單一步驟 chop

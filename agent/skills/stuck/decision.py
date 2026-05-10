@@ -1,5 +1,6 @@
 ALLOWED_ACTIVITY_STUCK_COMMANDS = {
-    "chop", "mine", "chat", "idle", "home", "back", "surface", "explore", "withdraw", "fishing_decision"
+    "chop", "mine", "chat", "idle", "home", "back", "surface", "explore", "withdraw", "fishing_decision",
+    "equip", "getfood", "smelt", "deposit", "hunt", "fish",
 }
 
 

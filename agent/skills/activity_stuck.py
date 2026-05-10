@@ -282,14 +282,24 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     if activity == "makechest":
         chests = state.get("chests") or []
         usable = [c for c in chests if (c.get("freeSlots") or 0) > 0]
+        pending_steps = (plan_context or {}).get("pending_steps", [])
         if usable:
             chest = usable[0]
-            pending_steps = (plan_context or {}).get("pending_steps", [])
             new_cmds = [f"deposit {chest['id']}"] + pending_steps
             print(f"[Skill/activity_stuck] makechest 失敗但有現有箱子 id={chest['id']}，直接 deposit")
             return _tag_path([
                 {"command": "chat", "text": f"改用已有箱子 id={chest['id']} 整理背包"},
                 {"action": "replan", "commands": new_cmds},
+            ], 'deterministic')
+        # no usable chest and makechest keeps failing → drop junk to free space
+        from agent.skills.stuck.smelting import _find_droppable
+        inventory = state.get("inventory") or []
+        droppable = _find_droppable(inventory)
+        if droppable:
+            print("[Skill/activity_stuck] makechest 持續失敗且無可用箱子，改丟垃圾騰空間")
+            return _tag_path([
+                {"command": "chat", "text": "無法放置箱子，先丟棄低價值物品騰出空間"},
+                {"command": "inventory_decision", "action": "drop", "items": droppable},
             ], 'deterministic')
 
     if activity == "getfood" and reason == "has_raw_food":

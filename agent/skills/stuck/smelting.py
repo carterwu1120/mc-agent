@@ -16,7 +16,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的燒製卡住處理助手。
 {{"command": "idle", "text": "...理由..."}}
 
 【可用指令】
-{command_list(["mine", "chop", "home", "withdraw", "chat", "idle"])}
+{command_list(["mine", "chop", "equip", "home", "withdraw", "chat", "idle"])}
 
 【no_fuel 決策邏輯（背包沒有任何可用燃料）】
 先看整體計畫目標（plan_context.goal）和剩餘步驟（pending_steps）：
