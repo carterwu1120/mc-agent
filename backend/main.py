@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.models import (
     BotRuntimeTasksResponse,
@@ -33,10 +34,42 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="MC Agent Backend", version="0.1.0")
     resolved_data_root = Path(data_root or os.environ.get("AGENT_DATA_ROOT") or "/app/agent/data")
+    allowed_origins = [
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
+    ]
+    extra_origins = os.environ.get("BACKEND_CORS_ORIGINS", "").strip()
+    if extra_origins:
+        allowed_origins.extend(
+            origin.strip() for origin in extra_origins.split(",") if origin.strip()
+        )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     app.state.coordinator_client = coordinator_client or CoordinatorClient()
     app.state.state_repo = StateRepository(resolved_data_root)
     app.state.history_repo = HistoryRepository(resolved_data_root)
+
+    @app.get("/health")
+    async def health():
+        return {"ok": True, "service": "backend"}
+
+    @app.get("/ready")
+    async def ready():
+        try:
+            await app.state.coordinator_client.get_bots()
+        except CoordinatorClientError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"ok": False, "service": "backend", "coordinator": False, "reason": str(exc)},
+            ) from exc
+        return {"ok": True, "service": "backend", "coordinator": True}
 
     @app.get("/bots", response_model=list[BotSummaryResponse])
     async def list_bots():

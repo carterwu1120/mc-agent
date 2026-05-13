@@ -23,27 +23,28 @@
 
 #### 1.1 API / Service Boundary `[Backend: Service architecture]`
 
-- [ ] **FastAPI control/query layer（MVP）**
-  - [ ] 建立獨立 backend service，作為 client / dashboard 唯一入口
-  - [ ] `POST /bots/{bot_id}/tasks`
-  - [ ] `GET /bots`
-  - [ ] `GET /bots/{bot_id}/state`
-  - [ ] `GET /bots/{bot_id}/tasks`
-  - [ ] `GET /tasks/{task_id}`
-  - [ ] `GET /metrics/success-rate`
-  - [ ] `GET /metrics/stuck-count`
-  - [ ] `GET /metrics/llm-latency`
+- [x] **FastAPI control/query layer（MVP）**
+  - [x] 建立獨立 backend service，作為 public JSON API 入口
+  - [x] `POST /bots/{bot_id}/tasks`
+  - [x] `GET /bots`
+  - [x] `GET /bots/{bot_id}/state`
+  - [x] `GET /bots/{bot_id}/tasks`
+  - [x] `GET /tasks/{task_id}`
+  - [x] `GET /metrics/success-rate`
+  - [x] `GET /metrics/stuck-count`
+  - [x] `GET /metrics/llm-latency`
 
-- [ ] **統一 API ownership，避免重複 surface**
-  - [ ] 決定 `dashboard.py` 是被 FastAPI 吸收、代理，還是降級成 internal-only
-  - [ ] 決定 `coordinator_service.py` 是 internal service 還是逐步被 backend facade 包起來
-  - [ ] 對外只保留一套 API 命名與 response schema
+- [~] **統一 API ownership，避免重複 surface**
+  - [x] 決定 `dashboard.py` 先保留，backend 逐步吸收 query responsibility
+  - [x] 決定 `coordinator_service.py` 先作為 internal service，由 backend facade 包起來
+  - [ ] 對外只保留一套 API 命名與 response schema（dashboard HTML / legacy aiohttp query routes 之後再收斂）
 
-- [ ] **Bot / Task state schema 正規化**
-  - [ ] 定義 bot summary schema（id、status、activity、position、health、food、current_task）
-  - [ ] 定義 task schema（queued / running / done / failed / interrupted）
-  - [ ] 明確區分 runtime state、task history、aggregated metrics
-  - [ ] 補 task source / interrupt / abort / heartbeat 的 API model
+- [~] **Bot / Task state schema 正規化**
+  - [x] 定義 bot summary schema（id、status、activity、position、health、food、current_task）
+  - [x] 定義 task schema（queued / running / done / failed / interrupted）
+  - [x] 明確區分 runtime state、task history、aggregated metrics
+  - [x] 補 task source / interrupt / abort / heartbeat 的 API model
+  - [ ] 補文件化 schema / examples，避免 frontend 或 future client 猜欄位
 
 #### 1.2 Runtime Control / Reliability
 
@@ -52,10 +53,10 @@
   - [ ] executor / stuck recovery 能接受人工覆蓋，避免舊流程在背景等待
   - [ ] backend API 可觸發 abort / interrupt / resume
 
-- [ ] **Coordinator state 可查詢化**
-  - [ ] in-memory queue / running task / interrupt slot / abort flag 有明確 query path
-  - [ ] `GET /tasks/{task_id}` 可同時看見 queued / running / archived 狀態
-  - [ ] heartbeat / offline bot 狀態可從 API 查詢，不只看 log
+- [x] **Coordinator state 可查詢化**
+  - [x] in-memory queue / running task / interrupt slot / abort flag 有明確 query path
+  - [x] `GET /tasks/{task_id}` 可同時看見 queued / running / archived 狀態
+  - [x] heartbeat / offline bot 狀態可從 API 查詢，不只看 log
 
 - [ ] **通用 tool acquisition policy**
   - 目標：`mining` / `woodcutting` / `combat` 不各自實作 `ensurePickaxe` / `ensureAxe` / `ensureSword`
@@ -64,39 +65,40 @@
 
 #### 1.3 Data Layer `[Backend: SQL / Schema Design]`
 
-- [ ] **DB access layer**
-  - [ ] 把現在散在 dashboard / history query 的 DB 存取整理成 repository/service layer
-  - [ ] 把 metrics query 從 route handler 中抽離，讓 FastAPI 可直接重用
-  - [ ] 規劃 task / event / failure / logs 的 API-facing DTO
+- [x] **DB access layer**
+  - [x] 把現在散在 dashboard / history query 的 DB 存取整理成 repository/service layer
+  - [x] 把 metrics query 從 route handler 中抽離，讓 FastAPI 可直接重用
+  - [x] 規劃 task / event / failure / logs 的 API-facing DTO
 
-- [ ] **SQLite → PostgreSQL 遷移**
-  - [ ] 先完成 schema 抽象與 repository 介面，避免 route 直接綁 SQLite
+- [~] **SQLite → PostgreSQL 遷移**
+  - [x] 先完成 schema 抽象與 repository 介面，避免 route 直接綁 SQLite
   - [ ] 將現有 `task_history.db`（tasks / events / failures / logs）遷移至 PostgreSQL
   - [ ] 設計正規化 schema，補上 index（task_id、bot_id、created_at、event_type）
   - [ ] 多 bot 共用同一 DB，以 `bot_id` 做資料隔離，取代現在的 per-bot 檔案分離
   - [ ] 練習 migration script、connection pool（asyncpg）、transaction 管理
 
-- [ ] **Metrics 補齊**
-  - [ ] LLM latency API：從 `llm_call` event 聚合 avg / p95 / count
-  - [ ] stuck count API：可依 activity / reason / bot_id 過濾
-  - [ ] success rate API：區分 task done 與 goal verified
+- [~] **Metrics 補齊**
+  - [x] LLM latency API：從 `llm_call` event 聚合 avg / p95 / count
+  - [x] stuck count API：可依 activity / reason 聚合
+  - [x] success rate API：區分 task done 與 goal verified
+  - [ ] metrics query 補 bot_id filter / narrower query capability
   - [ ] Goal completion rate：`activity_done` 時記錄實際完成量 vs 目標量，區分「程式跑完」vs「目標達成」
 
 #### 1.4 Async / Deployment / Testing
 
-- [ ] **Docker / compose service layout**
-  - [ ] `backend` 服務獨立於 `agent0`
-  - [ ] backend 與 coordinator / agents 的 network / volume 邊界明確化
-  - [ ] 保持 MVP 為 1 到 2 個 long-running bots，不做動態 spawn container
+- [x] **Docker / compose service layout**
+  - [x] `backend` 服務獨立於 `agent0`
+  - [x] backend 與 coordinator / agents 的 network / volume 邊界明確化
+  - [x] 保持 MVP 為 1 到 2 個 long-running bots，不做動態 spawn container
 
 - [ ] **Python 側 context 清理機制 v2**
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
   - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
 
-- [ ] **Replay testing（regression tests）** `[Backend: Testing]`
+- [~] **Replay testing（regression tests）** `[Backend: Testing]`
   - [ ] 從 production stuck state 建 unit test fixtures（state dict → expected commands）
   - [ ] 至少涵蓋：mining no_tools、smelting no_input、chopping no_trees
-  - [ ] 為 FastAPI route / repository layer 補 API tests
+  - [x] 為 FastAPI route / repository layer 補 API tests
 
 - [ ] **Plan reasoning 欄位推廣與驗證**
   - [ ] `reasoning` vs `commands` 一致性檢查（說要補鐵但 commands 沒有 smelt → 抓邏輯錯）
@@ -207,6 +209,13 @@
   - [ ] 補 internal API docs / data model docs / runbook
 
 ## 已完成
+
+- [x] **FastAPI backend service facade** `[Backend: Service architecture]`
+  - 獨立 `backend` service + `Dockerfile.backend`
+  - public JSON API：bots / tasks / metrics
+  - coordinator internal read APIs：runtime task / queue / heartbeat visibility
+  - shared state/history readers，避免 dashboard/backend 重複 shaping logic
+  - coordinator task id 可一路查到 archived history
 
 - [x] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
   - Token bucket + exponential backoff 已實作在 `agent/brain/rate_limiter.py`

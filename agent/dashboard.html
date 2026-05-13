@@ -166,6 +166,10 @@
 
 <script>
 const POLL_MS = 2000;
+const API_BASE =
+  new URLSearchParams(window.location.search).get('api') ||
+  window.localStorage.getItem('mc_agent_api_base') ||
+  `${window.location.protocol}//${window.location.hostname}:8000`;
 
 function relTime(iso) {
   if (!iso) return '';
@@ -224,12 +228,12 @@ function renderAgent(agent) {
   const events = agent.recent_events || [];
   const failures = agent.recent_failures || [];
   const interrupted = agent.interrupted_tasks || [];
-  const internal = agent.internal || {};
+  const coordinator = agent.coordinator || {};
 
   // Bot Status card
   const pos = s.position ? `${Math.round(s.position.x)}, ${Math.round(s.position.y)}, ${Math.round(s.position.z)}` : '—';
   const homeStr = s.home ? `${Math.round(s.home.x)}, ${Math.round(s.home.y)}, ${Math.round(s.home.z)}` : '未設定';
-  const disconnectedBanner = !agent.ws_connected
+  const disconnectedBanner = !agent.online
     ? `<div style="background:#3a1a1a;border:1px solid var(--red);border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12px;color:var(--red)">⚠ JS Bot 尚未連線 — 等待 WebSocket tick...</div>`
     : '';
   const statusCard = `
@@ -238,7 +242,7 @@ function renderAgent(agent) {
       ${disconnectedBanner}
       ${barHtml('❤ 血量', s.health, 20, healthColor(s.health))}
       ${barHtml('🍗 飢餓', s.food, 20, '#d29922')}
-      <div class="stat-row"><span class="stat-key">活動</span><span class="stat-val">${s.activity || (agent.ws_connected ? 'idle' : '—')}</span></div>
+      <div class="stat-row"><span class="stat-key">活動</span><span class="stat-val">${s.activity || (agent.online ? 'idle' : '—')}</span></div>
       <div class="stat-row"><span class="stat-key">位置</span><span class="stat-val">${pos}</span></div>
       <div class="stat-row"><span class="stat-key">基地</span><span class="stat-val">${homeStr}</span></div>
     </div>`;
@@ -383,45 +387,41 @@ function renderAgent(agent) {
   }
   interruptedHtml += `</div>`;
 
-  // Internal state
-  const thinkingBadges = (internal.thinking || []).map(t =>
-    `<span class="thinking-badge">${t}</span>`
-  ).join('') || '<span class="empty">idle</span>';
-
-  const queuedHtml = (internal.queued_player_tasks || []).length
-    ? `<ul class="queue-list">${(internal.queued_player_tasks||[]).map(t=>`<li>${t}</li>`).join('')}</ul>`
-    : '<span class="empty">無排隊任務</span>';
-
-  const internalHtml = `
+  // Coordinator runtime
+  const runtimeHtml = `
     <div class="card">
-      <div class="card-title">內部狀態</div>
-      <div style="margin-bottom:8px">
-        <div style="color:var(--muted);font-size:11px;margin-bottom:4px">LLM 處理中</div>
-        <div class="thinking-badges">${thinkingBadges}</div>
-      </div>
-      <div>
-        <div style="color:var(--muted);font-size:11px;margin-bottom:4px">排隊中的玩家指令</div>
-        ${queuedHtml}
-      </div>
+      <div class="card-title">Coordinator Runtime</div>
+      <div class="stat-row"><span class="stat-key">online</span><span class="stat-val">${coordinator.online ? 'true' : 'false'}</span></div>
+      <div class="stat-row"><span class="stat-key">queued_count</span><span class="stat-val">${coordinator.queued_count ?? 0}</span></div>
+      <div class="stat-row"><span class="stat-key">running_task_ids</span><span class="stat-val">${(coordinator.running_task_ids || []).join(', ') || '—'}</span></div>
+      <div class="stat-row"><span class="stat-key">interrupt_task_id</span><span class="stat-val">${coordinator.interrupt_task_id || '—'}</span></div>
+      <div class="stat-row"><span class="stat-key">abort_flag</span><span class="stat-val">${coordinator.abort_flag ? 'true' : 'false'}</span></div>
     </div>`;
 
   return `
     <div style="margin-bottom:4px;padding:4px 0;font-size:12px;color:var(--muted)">
-      ${agent.name} <span style="color:var(--muted)">(${agent.id})</span>
+      ${agent.name} <span style="color:var(--muted)">(${agent.bot_id})</span>
     </div>
     <div class="row row-2">${statusCard}${taskCard}</div>
     <div class="row row-half">${equipCard}${invCard}</div>
     ${chestsHtml}
     <div class="row row-half">${eventsHtml}${failuresHtml}</div>
     ${interruptedHtml}
-    ${internalHtml}`;
+    ${runtimeHtml}`;
 }
 
 async function poll() {
   try {
-    const r = await fetch('/state');
-    if (!r.ok) throw new Error(r.status);
-    const data = await r.json();
+    const botsResp = await fetch(`${API_BASE}/bots`);
+    if (!botsResp.ok) throw new Error(botsResp.status);
+    const botSummaries = await botsResp.json();
+    const agents = await Promise.all(
+      botSummaries.map(async (bot) => {
+        const stateResp = await fetch(`${API_BASE}/bots/${encodeURIComponent(bot.bot_id)}/state`);
+        if (!stateResp.ok) throw new Error(stateResp.status);
+        return await stateResp.json();
+      })
+    );
 
     // Live indicator
     document.getElementById('live-dot').className = '';
@@ -429,24 +429,19 @@ async function poll() {
     document.getElementById('last-update').textContent = `· ${new Date().toLocaleTimeString()}`;
 
     // Mode badge from first agent
-    const firstAgent = (data.agents || [])[0];
+    const firstAgent = agents[0];
     const mode = firstAgent?.status?.mode || '—';
     const modeBadge = document.getElementById('mode-badge');
     modeBadge.textContent = mode;
     modeBadge.className = 'badge ' + ({workflow:'badge-green',survival:'badge-amber',companion:'badge-blue'}[mode] || 'badge-grey');
 
-    // Coordinator
+    // Coordinator aggregate is not served from dashboard-local APIs anymore.
     const coordSec = document.getElementById('coordinator-section');
-    if (data.coordinator) {
-      coordSec.style.display = 'block';
-      document.getElementById('coordinator-info').textContent = JSON.stringify(data.coordinator);
-    } else {
-      coordSec.style.display = 'none';
-    }
+    coordSec.style.display = 'none';
 
     // Render agents
     const container = document.getElementById('agent-container');
-    container.innerHTML = (data.agents || []).map(renderAgent).join('<hr style="border-color:var(--border);margin:16px 0">');
+    container.innerHTML = agents.map(renderAgent).join('<hr style="border-color:var(--border);margin:16px 0">');
   } catch (e) {
     document.getElementById('live-dot').className = 'offline';
     document.getElementById('live-label').textContent = 'OFFLINE';

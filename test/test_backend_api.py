@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from agent import history_db
 from backend.main import create_app
-from backend.services.coordinator_client import CoordinatorNotFoundError
+from backend.services.coordinator_client import CoordinatorClientError, CoordinatorNotFoundError
 
 
 class FakeCoordinatorClient:
@@ -72,6 +72,11 @@ class FakeCoordinatorClient:
 
     async def get_task(self, task_id: str):
         return self.runtime_tasks.get(task_id)
+
+
+class BrokenCoordinatorClient(FakeCoordinatorClient):
+    async def get_bots(self):
+        raise CoordinatorClientError("coordinator offline")
 
 
 def _write_bot_files(tmp_path):
@@ -237,6 +242,30 @@ def test_post_tasks_accepts_valid_payload(tmp_path):
     assert resp.status_code == 202
     assert resp.json()["bot_id"] == "bot0"
     assert resp.json()["status"] == "queued"
+
+
+def test_health_and_ready_endpoints(tmp_path):
+    client = _make_client(tmp_path)
+
+    health_resp = client.get("/health")
+    assert health_resp.status_code == 200
+    assert health_resp.json() == {"ok": True, "service": "backend"}
+
+    ready_resp = client.get("/ready")
+    assert ready_resp.status_code == 200
+    assert ready_resp.json() == {"ok": True, "service": "backend", "coordinator": True}
+
+
+def test_ready_returns_503_when_coordinator_unavailable(tmp_path):
+    _write_bot_files(tmp_path)
+    _write_history(tmp_path)
+    client = TestClient(create_app(coordinator_client=BrokenCoordinatorClient(), data_root=tmp_path))
+
+    resp = client.get("/ready")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["detail"]["ok"] is False
+    assert body["detail"]["coordinator"] is False
 
 
 def test_post_tasks_rejects_invalid_body(tmp_path):
