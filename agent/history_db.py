@@ -48,6 +48,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             commands       TEXT NOT NULL,
             steps          TEXT NOT NULL,
             status         TEXT NOT NULL,
+            goal_verified  INTEGER,
             interrupted_by TEXT,
             created_at     TEXT NOT NULL,
             finished_at    TEXT NOT NULL
@@ -96,7 +97,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_logs_task_id ON logs(task_id);
         CREATE INDEX IF NOT EXISTS idx_logs_time    ON logs(time DESC);
     """)
+    _ensure_column(conn, "tasks", "goal_verified", "INTEGER")
     conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def _fire_and_forget(fn, *args) -> None:
@@ -117,8 +125,8 @@ def archive_task(task: dict) -> None:
             conn = _get_db()
             conn.execute(
                 """INSERT OR REPLACE INTO tasks
-                   (id, goal, final_goal, commands, steps, status, interrupted_by, created_at, finished_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                   (id, goal, final_goal, commands, steps, status, goal_verified, interrupted_by, created_at, finished_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task.get("id"),
                     task.get("goal") or "",
@@ -126,6 +134,7 @@ def archive_task(task: dict) -> None:
                     json.dumps(task.get("commands") or [], ensure_ascii=False),
                     json.dumps(task.get("steps") or [], ensure_ascii=False),
                     task.get("status") or "unknown",
+                    None if task.get("goalVerified") is None else int(bool(task.get("goalVerified"))),
                     task.get("interruptedBy"),
                     task.get("createdAt") or "",
                     datetime.now(timezone.utc).isoformat(),

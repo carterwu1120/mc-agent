@@ -37,6 +37,8 @@ services:
       BOT_DATA_DIR:           /app/agent/data/bot0
       DASHBOARD_PORT:         3002
       COORDINATOR_PORT:       3010
+      COORDINATOR_URL: http://agent0:3010
+
     volumes:
       - ./agent/data:/app/agent/data
       - ./agent/logs:/app/agent/logs
@@ -50,48 +52,63 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  # ── Bot 1 ────────────────────────────────────────────────────────────────────
-  bot1:
-    build:
-      context: .
-      dockerfile: Dockerfile.bot
-    environment:
-      MC_HOST:     ${MC_HOST:-localhost}
-      MC_PORT:     ${MC_PORT:-25565}
-      MC_USERNAME: ${MC_USERNAME_1:-Agent1}
-      MC_VERSION:  ${MC_VERSION:-1.20.1}
-      MC_AUTH:     ${MC_AUTH:-offline}
-      BOT_WS_PORT: 3003
-      BOT_DATA_DIR: /app/agent/data/bot1
-      BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
-    volumes:
-      - ./agent/data:/app/agent/data
-      - ./agent/logs:/app/agent/logs
-    restart: unless-stopped
+  # # ── Bot 1 ────────────────────────────────────────────────────────────────────
+  # bot1:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.bot
+  #   environment:
+  #     MC_HOST:     ${MC_HOST:-localhost}
+  #     MC_PORT:     ${MC_PORT:-25565}
+  #     MC_USERNAME: ${MC_USERNAME_1:-Agent1}
+  #     MC_VERSION:  ${MC_VERSION:-1.20.1}
+  #     MC_AUTH:     ${MC_AUTH:-offline}
+  #     BOT_WS_PORT: 3003
+  #     BOT_DATA_DIR: /app/agent/data/bot1
+  #     BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
+  #   volumes:
+  #     - ./agent/data:/app/agent/data
+  #     - ./agent/logs:/app/agent/logs
+  #   restart: unless-stopped
 
-  agent1:
+  # agent1:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.agent
+  #   environment:
+  #     GOOGLE_API_KEY:         ${GOOGLE_API_KEY}
+  #     OPENAI_API_KEY:         ${OPENAI_API_KEY}
+  #     OLLAMA_BASE_URL:        ${OLLAMA_BASE_URL:-http://localhost:11434}
+  #     LLM_PROVIDER:           ${LLM_PROVIDER:-gemini}
+  #     LLM_MODEL:              ${LLM_MODEL}
+  #     GOOGLE_CLOUD_PROJECT:   ${GOOGLE_CLOUD_PROJECT}
+  #     GOOGLE_CLOUD_LOCATION:  ${GOOGLE_CLOUD_LOCATION:-us-central1}
+  #     BOT_WS_URL:             ws://bot1:3003
+  #     BOT_ID:                 bot1
+  #     BOT_DATA_DIR:           /app/agent/data/bot1
+  #     COORDINATOR_URL:        http://agent0:3010
+  #     # No DASHBOARD_PORT — agent1 does not run the dashboard
+  #   volumes:
+  #     - ./agent/data:/app/agent/data
+  #     - ./agent/logs:/app/agent/logs
+  #     - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+  #   depends_on:
+  #     - bot1
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   restart: unless-stopped
+
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile.agent
+      dockerfile: Dockerfile.backend
     environment:
-      GOOGLE_API_KEY:         ${GOOGLE_API_KEY}
-      OPENAI_API_KEY:         ${OPENAI_API_KEY}
-      OLLAMA_BASE_URL:        ${OLLAMA_BASE_URL:-http://localhost:11434}
-      LLM_PROVIDER:           ${LLM_PROVIDER:-gemini}
-      LLM_MODEL:              ${LLM_MODEL}
-      GOOGLE_CLOUD_PROJECT:   ${GOOGLE_CLOUD_PROJECT}
-      GOOGLE_CLOUD_LOCATION:  ${GOOGLE_CLOUD_LOCATION:-us-central1}
-      BOT_WS_URL:             ws://bot1:3003
-      BOT_ID:                 bot1
-      BOT_DATA_DIR:           /app/agent/data/bot1
-      COORDINATOR_URL:        http://agent0:3010
-      # No DASHBOARD_PORT — agent1 does not run the dashboard
+      COORDINATOR_URL: http://agent0:3010
+      AGENT_DATA_ROOT: /app/agent/data
     volumes:
-      - ./agent/data:/app/agent/data
-      - ./agent/logs:/app/agent/logs
-      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      - ./agent/data:/app/agent/data:ro
     depends_on:
-      - bot1
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - agent0
+    ports:
+      - "8000:8000"
     restart: unless-stopped

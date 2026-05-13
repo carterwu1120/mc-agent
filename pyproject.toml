@@ -11,6 +11,8 @@ dependencies = [
   "aiohttp>=3.13.5",
   "pydantic>=2.0",
   "openai>=1.0",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.32.0",
 ]
 
 [build-system]
@@ -25,6 +27,7 @@ package = false
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=9.0.3",
 ]
 

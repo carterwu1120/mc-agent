@@ -753,13 +753,13 @@ async def _check_coordinator_interrupt(state: dict, ws) -> None:
             return  # bot already idle — normal queue poll will handle it
 
         print(f"[Agent] 執行 coordinator interrupt 任務: {goal} → {cmds}")
-        task_memory.save(goal, cmds, source="coordinator")
+        task_memory.save(goal, cmds, source="coordinator", task_id=cid)
         set_task_id(uuid.uuid4().hex[:8])
         await ws.send(json.dumps({"command": "chat", "text": f"收到緊急指派任務：{goal}"}))
 
         async def _exec_interrupt(_cmds=cmds, _goal=goal, _cid=cid):
             global _idle_started_at
-            await executor.execute(_cmds, ws, goal=_goal, source="coordinator")
+            await executor.execute(_cmds, ws, goal=_goal, source="coordinator", task_id=_cid)
             _idle_started_at = None
             if _cid and COORDINATOR_URL:
                 try:
@@ -806,13 +806,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         cid = envelope.get("task_id")
                         if cmds:
                             print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
-                            task_memory.save(goal, cmds, source="coordinator")
+                            task_memory.save(goal, cmds, source="coordinator", task_id=cid)
                             await ws.send(json.dumps({"command": "chat", "text": f"收到指派任務：{goal}"}))
                             set_task_id(uuid.uuid4().hex[:8])
 
                             async def _exec_and_report(_cmds=cmds, _goal=goal, _cid=cid):
                                 global _idle_started_at
-                                await executor.execute(_cmds, ws, goal=_goal, source="coordinator")
+                                await executor.execute(_cmds, ws, goal=_goal, source="coordinator", task_id=_cid)
                                 _idle_started_at = None
                                 if _cid and COORDINATOR_URL:
                                     try:

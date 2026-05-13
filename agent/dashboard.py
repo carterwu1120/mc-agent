@@ -19,14 +19,19 @@ import collections
 import json
 import os
 import pathlib
-from collections import Counter
 
 from aiohttp import web
 
 from agent import task_memory
-from agent import history_db
+from agent import history_reader
+from agent.state_reader import (
+    build_bot_view,
+    format_task,
+    get_data_root,
+    load_bot_bundle,
+)
 
-DATA_ROOT = pathlib.Path(__file__).parent / "data"
+DATA_ROOT = get_data_root()
 HTML_FILE = pathlib.Path(__file__).parent / "dashboard.html"
 
 _CORS = {"Access-Control-Allow-Origin": "*"}
@@ -57,65 +62,6 @@ def init(
     _recent_stuck_events = stuck_events
 
 
-# ── Data helpers ──────────────────────────────────────────────────────────────
-
-def _load_json_file(path: pathlib.Path, default):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
-
-
-def _format_task(task: dict | None) -> dict | None:
-    if not task:
-        return None
-    steps = task.get("steps") or []
-    idx   = int(task.get("currentStep") or 0)
-    pending = [
-        s["cmd"] for s in steps[idx + 1:]
-        if s.get("status") in ("pending", "failed")
-    ]
-    return {
-        "id":           task.get("id"),
-        "goal":         task.get("goal"),
-        "final_goal":   task.get("final_goal"),
-        "status":       task.get("status"),
-        "interruptedBy":task.get("interruptedBy"),
-        "createdAt":    task.get("createdAt"),
-        "currentStep":  idx,
-        "totalSteps":   len(steps),
-        "currentCmd":   steps[idx]["cmd"] if 0 <= idx < len(steps) else None,
-        "pendingSteps": pending,
-        "progress_pct": round(idx / len(steps) * 100) if steps else 0,
-    }
-
-
-def _top_items(inventory: list, n: int = 12) -> list:
-    counts: Counter = Counter()
-    for item in inventory:
-        name = item.get("name")
-        if name:
-            counts[name] += int(item.get("count", 0))
-    return [{"name": k, "count": v} for k, v in counts.most_common(n)]
-
-
-def _format_chests(chests: list) -> list:
-    out = []
-    for c in chests:
-        contents = (c.get("contents") or [])[:8]
-        out.append({
-            "id":        c.get("id"),
-            "label":     c.get("label") or "misc",
-            "pos":       c.get("pos"),
-            "freeSlots": c.get("freeSlots"),
-            "totalSlots":c.get("totalSlots"),
-            "usedSlots": c.get("usedSlots"),
-            "contents":  contents,
-            "updatedAt": c.get("updatedAt"),
-        })
-    return out
-
-
 # ── Bot data builders ─────────────────────────────────────────────────────────
 
 def _build_own_bot_data() -> dict:
@@ -125,75 +71,38 @@ def _build_own_bot_data() -> dict:
     ws_connected = latest_state.get("health") is not None
 
     data_dir = DATA_ROOT / _own_bot_id
-    chests = _load_json_file(data_dir / "chests.json", [])
-
-    return {
-        "id":   _own_bot_id,
-        "name": latest_state.get("name", _own_bot_id),
+    chests = load_bot_bundle(_own_bot_id, DATA_ROOT)["chests"]
+    snapshot = {
+        **latest_state,
+        "bot_id": _own_bot_id,
         "ws_connected": ws_connected,
-        "state_updated_at": datetime.datetime.utcnow().isoformat() + "Z",
-        "status": {
-            "activity": latest_state.get("activity") if ws_connected else None,
-            "position": latest_state.get("pos"),
-            "health":   latest_state.get("health"),
-            "food":     latest_state.get("food"),
-            "mode":     latest_state.get("mode"),
-            "home":     latest_state.get("home"),
-        },
-        "current_task":      _format_task(task_memory.load_any()),
-        "interrupted_tasks": [_format_task(t) for t in task_memory.interrupted_tasks()[:3]],
-        "equipment":         latest_state.get("equipment") or {},
-        "inventory":         _top_items(latest_state.get("inventory") or [], n=12),
-        "inventory_slots":   latest_state.get("inventory_slots") or {},
-        "chests":            _format_chests(chests),
-        "recent_events":     task_memory.recent_events()[:5],
-        "recent_failures":   task_memory.recent_failures()[:5],
-        "internal": {
-            "thinking":            sorted(_thinking),
+        "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    return build_bot_view(
+        _own_bot_id,
+        snapshot=snapshot,
+        task=task_memory.load_any(),
+        chests=chests,
+        recent_events=task_memory.recent_events()[:5],
+        recent_failures=task_memory.recent_failures()[:5],
+        internal_detail={
+            "thinking": sorted(_thinking),
             "queued_player_tasks": list(_queued_player_tasks),
             "recent_stuck_events": list(_recent_stuck_events),
         },
-    }
+        expose_internal=True,
+    )
 
 
 def _build_remote_bot_data(bot_id: str, snapshot: dict) -> dict:
     """Build bot data for a remote bot, read from its live_state.json snapshot."""
-    data_dir = DATA_ROOT / bot_id
-    task   = _load_json_file(data_dir / "task.json", None)
-    chests = _load_json_file(data_dir / "chests.json", [])
-
-    # Reconstruct interrupted_tasks list from task.json's interruptedTasks field
-    interrupted_raw = task.get("interruptedTasks", []) if task else []
-    interrupted = [_format_task(t) for t in interrupted_raw[:3]]
-
-    # Recent events / failures from task.json
-    recent_events   = (task.get("recentEvents",   []) if task else [])[:5]
-    recent_failures = (task.get("recentFailures", []) if task else [])[:5]
-
-    ws_connected = snapshot.get("ws_connected", False)
-    return {
-        "id":   bot_id,
-        "name": snapshot.get("name", bot_id),
-        "ws_connected": ws_connected,
-        "state_updated_at": snapshot.get("updated_at"),
-        "status": {
-            "activity": snapshot.get("activity") if ws_connected else None,
-            "position": snapshot.get("pos"),
-            "health":   snapshot.get("health"),
-            "food":     snapshot.get("food"),
-            "mode":     snapshot.get("mode"),
-            "home":     snapshot.get("home"),
-        },
-        "current_task":      _format_task(task),
-        "interrupted_tasks": interrupted,
-        "equipment":         snapshot.get("equipment") or {},
-        "inventory":         _top_items(snapshot.get("inventory") or [], n=12),
-        "inventory_slots":   snapshot.get("inventory_slots") or {},
-        "chests":            _format_chests(chests),
-        "recent_events":     recent_events,
-        "recent_failures":   recent_failures,
-        "internal":          None,  # internal state not exposed for remote bots
-    }
+    bundle = load_bot_bundle(bot_id, DATA_ROOT)
+    return build_bot_view(
+        bot_id,
+        snapshot=snapshot,
+        task=bundle["task"],
+        chests=bundle["chests"],
+    )
 
 
 def _collect_all_bots() -> list[dict]:
@@ -236,7 +145,13 @@ async def handle_history(request: web.Request) -> web.Response:
     try:
         limit  = min(int(request.rel_url.query.get("limit", 20)), 100)
         status = request.rel_url.query.get("status") or None
-        rows   = await _run_sync(history_db.query_history, limit=limit, status=status)
+        rows   = await _run_sync(
+            history_reader.query_history_for_bot,
+            _own_bot_id,
+            data_root=DATA_ROOT,
+            limit=limit,
+            status=status,
+        )
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=500,
                             content_type="application/json", headers=_CORS)
@@ -248,7 +163,13 @@ async def handle_failures(request: web.Request) -> web.Response:
     try:
         limit    = min(int(request.rel_url.query.get("limit", 10)), 100)
         activity = request.rel_url.query.get("activity") or None
-        rows     = await _run_sync(history_db.query_failures, limit=limit, activity=activity)
+        rows     = await _run_sync(
+            history_reader.query_failures_for_bot,
+            _own_bot_id,
+            data_root=DATA_ROOT,
+            limit=limit,
+            activity=activity,
+        )
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=500,
                             content_type="application/json", headers=_CORS)
@@ -261,8 +182,14 @@ async def handle_events(request: web.Request) -> web.Response:
         limit      = min(int(request.rel_url.query.get("limit", 20)), 100)
         event_type = request.rel_url.query.get("type") or None
         task_id    = request.rel_url.query.get("task_id") or None
-        rows       = await _run_sync(history_db.query_events, limit=limit,
-                                     event_type=event_type, task_id=task_id)
+        rows       = await _run_sync(
+            history_reader.query_events_for_bot,
+            _own_bot_id,
+            data_root=DATA_ROOT,
+            limit=limit,
+            event_type=event_type,
+            task_id=task_id,
+        )
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=500,
                             content_type="application/json", headers=_CORS)
@@ -273,7 +200,7 @@ async def handle_events(request: web.Request) -> web.Response:
 async def handle_metrics(request: web.Request) -> web.Response:
     try:
         hours = min(int(request.rel_url.query.get("hours", 24)), 168)
-        data  = await _run_sync(history_db.query_metrics, since_hours=hours)
+        data  = await _run_sync(history_reader.query_metrics, data_root=DATA_ROOT, since_hours=hours)
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=500,
                             content_type="application/json", headers=_CORS)
@@ -285,7 +212,13 @@ async def handle_logs(request: web.Request) -> web.Response:
     try:
         limit   = min(int(request.rel_url.query.get("limit", 100)), 500)
         task_id = request.rel_url.query.get("task_id") or None
-        rows    = await _run_sync(history_db.query_logs, task_id=task_id, limit=limit)
+        rows    = await _run_sync(
+            history_reader.query_logs_for_bot,
+            _own_bot_id,
+            data_root=DATA_ROOT,
+            task_id=task_id,
+            limit=limit,
+        )
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=500,
                             content_type="application/json", headers=_CORS)

@@ -24,7 +24,14 @@ _TASK_KEYS = {
 }
 
 
-def save(goal: str, commands: list, final_goal: str | None = None, source: str | None = None, reason: str = "") -> dict:
+def save(
+    goal: str,
+    commands: list,
+    final_goal: str | None = None,
+    source: str | None = None,
+    reason: str = "",
+    task_id: str | None = None,
+) -> dict:
     commands = normalize_commands(commands)
     prev = _load_raw()
     if final_goal is None and prev:
@@ -48,6 +55,8 @@ def save(goal: str, commands: list, final_goal: str | None = None, source: str |
         "recentEvents": list((prev or {}).get("recentEvents") or []),
         "recentFailures": list((prev or {}).get("recentFailures") or []),
     }
+    if task_id:
+        task["id"] = task_id
     if prev and prev.get("status") in ("running", "interrupted") and prev.get("goal") != goal:
         _append_transition(
             task,

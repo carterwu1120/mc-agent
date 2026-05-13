@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from aiohttp import web
@@ -41,6 +41,46 @@ def _json(data: dict, status: int = 200) -> web.Response:
         content_type="application/json",
         headers=_CORS,
     )
+
+
+def _task_to_dict(task: Task | None) -> dict | None:
+    if task is None:
+        return None
+    return {
+        "task_id": task.task_id,
+        "bot_id": task.bot_id,
+        "commands": list(task.commands),
+        "goal": task.goal,
+        "status": task.status,
+        "interrupt": task.interrupt,
+    }
+
+
+def _is_online(bot_id: str, now: float | None = None) -> bool:
+    last = _bot_last_seen.get(bot_id, 0.0)
+    return ((now or time.time()) - last) <= _OFFLINE_THRESHOLD
+
+
+def _last_seen_iso(bot_id: str) -> str | None:
+    last = _bot_last_seen.get(bot_id)
+    if not last:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last))
+
+
+def _queued_tasks(bot_id: str) -> list[dict]:
+    queue = _queues.get(bot_id)
+    if queue is None:
+        return []
+    return [_task_to_dict(task) for task in list(getattr(queue, "_queue", []))]
+
+
+def _running_tasks(bot_id: str) -> list[dict]:
+    return [
+        _task_to_dict(task)
+        for task in _tasks.values()
+        if task.bot_id == bot_id and task.status == "running"
+    ]
 
 
 async def handle_register(request: web.Request) -> web.Response:
@@ -148,6 +188,53 @@ async def handle_heartbeat(request: web.Request) -> web.Response:
     return _json({"ok": True})
 
 
+async def handle_internal_bots(request: web.Request) -> web.Response:
+    now = time.time()
+    bots = []
+    for bot_id in sorted(_registered):
+        bots.append(
+            {
+                "bot_id": bot_id,
+                "registered": True,
+                "online": _is_online(bot_id, now),
+                "last_seen": _last_seen_iso(bot_id),
+                "queued_count": len(_queued_tasks(bot_id)),
+                "running_task_ids": [task["task_id"] for task in _running_tasks(bot_id)],
+                "interrupt_task_id": ((_task_to_dict(_interrupt_slots.get(bot_id)) or {}).get("task_id")),
+                "abort_flag": _abort_flags.get(bot_id, False),
+            }
+        )
+    return _json({"bots": bots})
+
+
+async def handle_internal_bot_tasks(request: web.Request) -> web.Response:
+    bot_id = request.match_info["id"]
+    if bot_id not in _registered:
+        return _json({"error": "bot not registered"}, 404)
+    return _json(
+        {
+            "bot_id": bot_id,
+            "online": _is_online(bot_id),
+            "last_seen": _last_seen_iso(bot_id),
+            "running": _running_tasks(bot_id),
+            "queued": _queued_tasks(bot_id),
+            "interrupt": _task_to_dict(_interrupt_slots.get(bot_id)),
+            "abort_flag": _abort_flags.get(bot_id, False),
+        }
+    )
+
+
+async def handle_internal_task(request: web.Request) -> web.Response:
+    task_id = request.match_info["task_id"]
+    task = _tasks.get(task_id)
+    if task is None:
+        return _json({"task": None}, 404)
+    payload = _task_to_dict(task)
+    payload["online"] = _is_online(task.bot_id)
+    payload["last_seen"] = _last_seen_iso(task.bot_id)
+    return _json({"task": payload})
+
+
 async def _monitor_bot_health() -> None:
     while True:
         await asyncio.sleep(_MONITOR_INTERVAL)
@@ -172,18 +259,26 @@ async def _monitor_bot_health() -> None:
             _bot_last_seen[bot_id] = now  # reset to suppress log spam until re-register
 
 
+def create_app() -> web.Application:
+    app = web.Application()
+    app.router.add_post("/bots/register", handle_register)
+    app.router.add_post("/bots/{id}/heartbeat", handle_heartbeat)
+    app.router.add_post("/bots/{id}/tasks", handle_enqueue)
+    app.router.add_get("/bots/{id}/tasks/next", handle_next)
+    app.router.add_post("/bots/{id}/abort", handle_abort)
+    app.router.add_get("/bots/{id}/abort", handle_check_abort)
+    app.router.add_get("/bots/{id}/tasks/interrupt", handle_peek_interrupt)
+    app.router.add_patch("/bots/{id}/tasks/{task_id}", handle_update)
+    app.router.add_get("/internal/bots", handle_internal_bots)
+    app.router.add_get("/internal/bots/{id}/tasks", handle_internal_bot_tasks)
+    app.router.add_get("/internal/tasks/{task_id}", handle_internal_task)
+    return app
+
+
 async def start(port: int | None = None) -> None:
     port = port or int(os.environ.get("COORDINATOR_PORT", 3010))
     try:
-        app = web.Application()
-        app.router.add_post("/bots/register", handle_register)
-        app.router.add_post("/bots/{id}/heartbeat", handle_heartbeat)
-        app.router.add_post("/bots/{id}/tasks", handle_enqueue)
-        app.router.add_get("/bots/{id}/tasks/next", handle_next)
-        app.router.add_post("/bots/{id}/abort", handle_abort)
-        app.router.add_get("/bots/{id}/abort", handle_check_abort)
-        app.router.add_get("/bots/{id}/tasks/interrupt", handle_peek_interrupt)
-        app.router.add_patch("/bots/{id}/tasks/{task_id}", handle_update)
+        app = create_app()
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", port)
