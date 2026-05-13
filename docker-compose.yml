@@ -1,5 +1,21 @@
 services:
 
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       mcagent
+      POSTGRES_USER:     mcagent
+      POSTGRES_PASSWORD: mcagent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mcagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   # ── Bot 0 ────────────────────────────────────────────────────────────────────
   bot0:
     build:
@@ -37,7 +53,8 @@ services:
       BOT_DATA_DIR:           /app/agent/data/bot0
       DASHBOARD_PORT:         3002
       COORDINATOR_PORT:       3010
-      COORDINATOR_URL: http://agent0:3010
+      COORDINATOR_URL:  http://agent0:3010
+      DATABASE_URL:     postgresql://mcagent:mcagent@postgres:5432/mcagent
 
     volumes:
       - ./agent/data:/app/agent/data
@@ -45,6 +62,7 @@ services:
       - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
     depends_on:
       - bot0
+      - postgres
     ports:
       - "3002:3002"
       - "3010:3010"
@@ -105,10 +123,12 @@ services:
     environment:
       COORDINATOR_URL: http://agent0:3010
       AGENT_DATA_ROOT: /app/agent/data
+      DATABASE_URL:    postgresql://mcagent:mcagent@postgres:5432/mcagent
     volumes:
       - ./agent/data:/app/agent/data:ro
     depends_on:
       - agent0
+      - postgres
     ports:
       - "8000:8000"
     healthcheck:
@@ -118,3 +138,6 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+
+volumes:
+  postgres_data:

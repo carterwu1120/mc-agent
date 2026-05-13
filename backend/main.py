@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+
+from agent.db import pool as db_pool
+from agent.db.schema import init_schema
 
 from backend.models import (
     BotRuntimeTasksResponse,
@@ -27,12 +31,20 @@ from backend.services.history_repo import HistoryRepository
 from backend.services.state_repo import StateRepository
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    pool = await db_pool.init_pool()  # raises clearly if DATABASE_URL is not set
+    await init_schema(pool)
+    yield
+    await db_pool.close_pool()
+
+
 def create_app(
     *,
     coordinator_client: CoordinatorClient | None = None,
     data_root: str | Path | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="MC Agent Backend", version="0.1.0")
+    app = FastAPI(title="MC Agent Backend", version="0.1.0", lifespan=_lifespan)
     resolved_data_root = Path(data_root or os.environ.get("AGENT_DATA_ROOT") or "/app/agent/data")
     allowed_origins = [
         "http://localhost:3002",
@@ -54,7 +66,7 @@ def create_app(
 
     app.state.coordinator_client = coordinator_client or CoordinatorClient()
     app.state.state_repo = StateRepository(resolved_data_root)
-    app.state.history_repo = HistoryRepository(resolved_data_root)
+    app.state.history_repo = HistoryRepository()
 
     @app.get("/health")
     async def health():
@@ -172,7 +184,7 @@ def create_app(
                 "source": "runtime",
             }
 
-        history_task = app.state.history_repo.find_task(task_id)
+        history_task = await app.state.history_repo.find_task(task_id)
         if history_task:
             return {
                 "task_id": history_task.get("id"),
@@ -186,7 +198,7 @@ def create_app(
 
     @app.get("/metrics/success-rate", response_model=SuccessRateResponse)
     async def get_success_rate(hours: int = Query(24, ge=1, le=168)):
-        metrics = app.state.history_repo.metrics(since_hours=hours)
+        metrics = await app.state.history_repo.metrics(since_hours=hours)
         return {
             "since_hours": hours,
             "task_success_rate": metrics.get("task_success_rate"),
@@ -196,7 +208,7 @@ def create_app(
 
     @app.get("/metrics/stuck-count", response_model=StuckCountResponse)
     async def get_stuck_count(hours: int = Query(24, ge=1, le=168)):
-        metrics = app.state.history_repo.metrics(since_hours=hours)
+        metrics = await app.state.history_repo.metrics(since_hours=hours)
         by_reason = metrics.get("stuck_by_reason") or {}
         return {
             "since_hours": hours,
@@ -207,7 +219,7 @@ def create_app(
 
     @app.get("/metrics/llm-latency", response_model=LlmLatencyResponse)
     async def get_llm_latency(hours: int = Query(24, ge=1, le=168)):
-        metrics = app.state.history_repo.metrics(since_hours=hours)
+        metrics = await app.state.history_repo.metrics(since_hours=hours)
         llm_latency = metrics.get("llm_latency") or {}
         return {
             "since_hours": hours,

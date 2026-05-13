@@ -1105,6 +1105,12 @@ async def run():
     )
 
     # 啟動時把任何殘留的 running 任務標記為 interrupted
+    # Initialize PostgreSQL if DATABASE_URL is set
+    from agent import history_db as _history_db
+    if _history_db.is_available():
+        await _history_db.init_db()
+        print(f"[Agent] PostgreSQL schema ready")
+
     # （表示上次 agent 異常終止，下次說「繼續」可以接回）
     _startup_task = task_memory._load_raw()
     if _startup_task and _startup_task.get("status") == "running":

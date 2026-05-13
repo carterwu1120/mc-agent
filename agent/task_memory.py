@@ -112,7 +112,7 @@ def mark_step_failed(step: int, error: str | None = None) -> None:
         _write(t)
         failures = t.get("recentFailures") or []
         if failures:
-            history_db._fire_and_forget(history_db.write_failure, dict(failures[0]), t.get("id"))
+            history_db.write_failure(dict(failures[0]), t.get("id"))
 
 
 def update_context(patch: dict) -> None:
@@ -276,7 +276,7 @@ def interrupt(reason: str) -> None:
         step=current_step,
     )
     _write(t)
-    history_db._fire_and_forget(history_db.archive_task, dict(t))
+    history_db.archive_task(dict(t))
 
 
 def done(goal_verified: bool = True) -> None:
@@ -285,14 +285,14 @@ def done(goal_verified: bool = True) -> None:
         t["status"] = "done"
         t["goalVerified"] = goal_verified
         _write(t)
-        history_db._fire_and_forget(history_db.archive_task, dict(t))
+        history_db.archive_task(dict(t))
 
 
 def failed() -> None:
     _patch({"status": "failed"})
     t = _load_raw()
     if t:
-        history_db._fire_and_forget(history_db.archive_task, dict(t))
+        history_db.archive_task(dict(t))
 
 
 def resume_interrupted(new_commands: list | None = None, goal: str | None = None) -> dict | None:
@@ -347,7 +347,7 @@ def record_event(
             "details": dict(details or {}),
             "at": _now_iso(),
         }
-        history_db._fire_and_forget(history_db.write_event, event, t.get("id"))
+        history_db.write_event(event, t.get("id"))
         return
     _append_event(
         t,
@@ -362,7 +362,7 @@ def record_event(
     _write(t)
     events = t.get("recentEvents") or []
     if events:
-        history_db._fire_and_forget(history_db.write_event, dict(events[0]), t.get("id"))
+        history_db.write_event(dict(events[0]), t.get("id"))
 
 
 def recent_events() -> list[dict]:
@@ -392,7 +392,7 @@ def record_failure(
     _write(t)
     failures = t.get("recentFailures") or []
     if failures:
-        history_db._fire_and_forget(history_db.write_failure, dict(failures[0]), t.get("id"))
+        history_db.write_failure(dict(failures[0]), t.get("id"))
 
 
 def recent_failures() -> list[dict]:

@@ -1,326 +1,80 @@
 """
-SQLite-backed task history store.
+Task history store — delegates to agent/db/ (PostgreSQL via asyncpg).
 
-Owns all DB logic — connection, schema, writes, queries.
-task_memory.py and dashboard.py import from here; they never touch SQLite directly.
+Keeps the same synchronous public API so task_memory.py and other callers
+don't need to change. Writes are fire-and-forget async tasks.
 
-DB file: {BOT_DATA_DIR}/task_history.db  (same directory as task.json)
+DB connection requires DATABASE_URL env var pointing at PostgreSQL.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import sqlite3
-import threading
-from datetime import datetime, timezone
 
-_DATA_DIR = os.environ.get("BOT_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
-_DB_FILE = os.path.join(_DATA_DIR, "task_history.db")
-_db_conn: sqlite3.Connection | None = None
-_db_lock = threading.Lock()
+from agent.db import pool as db_pool
+from agent.db import writer as db_writer
 
+# BOT_ID is used to tag every write so rows can be filtered per-bot in the shared DB.
+_BOT_ID = os.environ.get("BOT_ID", "bot0")
 
-def init(data_dir: str) -> None:
-    """Override the data directory. Call before any DB operations (e.g. in tests)."""
-    global _DATA_DIR, _DB_FILE, _db_conn
-    _DATA_DIR = data_dir
-    _DB_FILE = os.path.join(data_dir, "task_history.db")
-    _db_conn = None  # reset so _get_db() recreates with new path
+# Writes that arrive before init_db() completes are buffered here and flushed afterward.
+_pending: list[tuple] = []
 
 
-def _get_db() -> sqlite3.Connection:
-    global _db_conn
-    if _db_conn is None:
-        os.makedirs(_DATA_DIR, exist_ok=True)
-        _db_conn = sqlite3.connect(_DB_FILE, check_same_thread=False)
-        _db_conn.row_factory = sqlite3.Row
-        _init_schema(_db_conn)
-    return _db_conn
-
-
-def _init_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id             TEXT PRIMARY KEY,
-            goal           TEXT NOT NULL,
-            final_goal     TEXT,
-            commands       TEXT NOT NULL,
-            steps          TEXT NOT NULL,
-            status         TEXT NOT NULL,
-            goal_verified  INTEGER,
-            interrupted_by TEXT,
-            created_at     TEXT NOT NULL,
-            finished_at    TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
-        CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
-
-        CREATE TABLE IF NOT EXISTS events (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id    TEXT,
-            event_type TEXT NOT NULL,
-            goal       TEXT,
-            to_goal    TEXT,
-            reason     TEXT,
-            command    TEXT,
-            step       INTEGER,
-            details    TEXT,
-            at         TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id);
-        CREATE INDEX IF NOT EXISTS idx_events_at      ON events(at DESC);
-
-        CREATE TABLE IF NOT EXISTS failures (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id  TEXT,
-            goal     TEXT,
-            command  TEXT,
-            step     INTEGER,
-            reason   TEXT NOT NULL,
-            activity TEXT,
-            at       TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_failures_task_id  ON failures(task_id);
-        CREATE INDEX IF NOT EXISTS idx_failures_at       ON failures(at DESC);
-        CREATE INDEX IF NOT EXISTS idx_failures_activity ON failures(activity);
-
-        CREATE TABLE IF NOT EXISTS logs (
-            id      INTEGER PRIMARY KEY AUTOINCREMENT,
-            time    TEXT NOT NULL,
-            level   TEXT NOT NULL,
-            service TEXT NOT NULL,
-            bot_id  TEXT NOT NULL,
-            task_id TEXT,
-            msg     TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_logs_task_id ON logs(task_id);
-        CREATE INDEX IF NOT EXISTS idx_logs_time    ON logs(time DESC);
-    """)
-    _ensure_column(conn, "tasks", "goal_verified", "INTEGER")
-    conn.commit()
-
-
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
-    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
-
-
-def _fire_and_forget(fn, *args) -> None:
-    """Run a synchronous DB function in the thread pool without blocking the event loop."""
+def _fire(coro) -> None:
+    """Schedule a coroutine on the running event loop. Drops if pool not ready."""
+    if not db_pool.is_ready():
+        coro.close()
+        return
     try:
-        loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, fn, *args)
+        asyncio.ensure_future(coro)
     except RuntimeError:
-        fn(*args)  # fallback: no running loop (tests, sync context)
+        coro.close()
 
 
-# ── Write functions ───────────────────────────────────────────────────────────
+def _fire_or_buffer(make_coro, *args) -> None:
+    """Schedule immediately if pool is ready, otherwise buffer for flush after init."""
+    if db_pool.is_ready():
+        try:
+            asyncio.ensure_future(make_coro(*args))
+        except RuntimeError:
+            pass
+    else:
+        _pending.append((make_coro, args))
+
+
+# ── Write functions (sync wrappers) ──────────────────────────────────────────
 
 def archive_task(task: dict) -> None:
-    """Archive a completed/failed/interrupted task snapshot to the tasks table."""
-    with _db_lock:
-        try:
-            conn = _get_db()
-            conn.execute(
-                """INSERT OR REPLACE INTO tasks
-                   (id, goal, final_goal, commands, steps, status, goal_verified, interrupted_by, created_at, finished_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    task.get("id"),
-                    task.get("goal") or "",
-                    task.get("final_goal"),
-                    json.dumps(task.get("commands") or [], ensure_ascii=False),
-                    json.dumps(task.get("steps") or [], ensure_ascii=False),
-                    task.get("status") or "unknown",
-                    None if task.get("goalVerified") is None else int(bool(task.get("goalVerified"))),
-                    task.get("interruptedBy"),
-                    task.get("createdAt") or "",
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-            conn.commit()
-        except Exception as e:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            print(f"[HistoryDB] archive_task failed: {e}")
+    _fire(db_writer.archive_task(task, _BOT_ID))
 
 
 def write_event(event: dict, task_id: str | None) -> None:
-    """Write an event record to the events table."""
-    with _db_lock:
-        try:
-            conn = _get_db()
-            conn.execute(
-                """INSERT INTO events
-                   (task_id, event_type, goal, to_goal, reason, command, step, details, at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (
-                    task_id,
-                    event.get("type") or "",
-                    event.get("goal"),
-                    event.get("toGoal"),
-                    event.get("reason"),
-                    event.get("command"),
-                    event.get("step"),
-                    json.dumps(event.get("details") or {}, ensure_ascii=False),
-                    event.get("at") or datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-            conn.commit()
-        except Exception as e:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            print(f"[HistoryDB] write_event failed: {e}")
+    _fire(db_writer.write_event(event, task_id, _BOT_ID))
 
 
 def write_failure(failure: dict, task_id: str | None) -> None:
-    """Write a failure record to the failures table."""
-    with _db_lock:
-        try:
-            conn = _get_db()
-            conn.execute(
-                """INSERT INTO failures (task_id, goal, command, step, reason, activity, at)
-                   VALUES (?,?,?,?,?,?,?)""",
-                (
-                    task_id,
-                    failure.get("goal"),
-                    failure.get("command"),
-                    failure.get("step"),
-                    failure.get("reason") or "",
-                    failure.get("activity"),
-                    failure.get("at") or datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-            conn.commit()
-        except Exception as e:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            print(f"[HistoryDB] write_failure failed: {e}")
+    _fire(db_writer.write_failure(failure, task_id, _BOT_ID))
 
 
 def write_log(entry: dict) -> None:
-    with _db_lock:
-        try:
-            conn = _get_db()
-            conn.execute(
-                "INSERT INTO logs (time, level, service, bot_id, task_id, msg) VALUES (?,?,?,?,?,?)",
-                (entry.get("time", ""), entry.get("level", "INFO"),
-                 entry.get("service", ""), entry.get("bot_id", ""),
-                 entry.get("task_id"), entry.get("msg", "")),
-            )
-            conn.commit()
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            pass  # never let log writing crash the agent
+    # write_log fires before init_db() (logger is installed at module import time),
+    # so it buffers instead of dropping.
+    _fire_or_buffer(db_writer.write_log, entry)
 
 
-# ── Query functions ───────────────────────────────────────────────────────────
+# ── Init ─────────────────────────────────────────────────────────────────────
 
-def query_history(limit: int = 20, status: str | None = None) -> list[dict]:
-    conn = _get_db()
-    if status:
-        rows = conn.execute(
-            "SELECT * FROM tasks WHERE status = ? ORDER BY finished_at DESC LIMIT ?",
-            (status, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM tasks ORDER BY finished_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+async def init_db() -> None:
+    """Initialize the PostgreSQL schema. Call once at agent startup."""
+    from agent.db.schema import init_schema
+    pool = await db_pool.init_pool()
+    await init_schema(pool)
+    # Flush log entries that were written before the pool was ready.
+    for make_coro, args in _pending:
+        asyncio.ensure_future(make_coro(*args))
+    _pending.clear()
 
 
-def query_failures(limit: int = 10, activity: str | None = None) -> list[dict]:
-    conn = _get_db()
-    if activity:
-        rows = conn.execute(
-            "SELECT * FROM failures WHERE activity = ? ORDER BY at DESC LIMIT ?",
-            (activity, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM failures ORDER BY at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def query_events(
-    limit: int = 20,
-    event_type: str | None = None,
-    task_id: str | None = None,
-) -> list[dict]:
-    conn = _get_db()
-    clauses: list[str] = []
-    params: list = []
-    if event_type:
-        clauses.append("event_type = ?")
-        params.append(event_type)
-    if task_id:
-        clauses.append("task_id = ?")
-        params.append(task_id)
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    params.append(limit)
-    rows = conn.execute(
-        f"SELECT * FROM events {where} ORDER BY at DESC LIMIT ?",
-        params,
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def query_metrics(since_hours: int = 24) -> dict:
-    """Aggregate counters for the past N hours: task success rate, stuck by reason/activity."""
-    from datetime import timedelta
-    conn = _get_db()
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat()
-
-    task_rows = conn.execute(
-        "SELECT status, COUNT(*) AS n FROM tasks WHERE created_at >= ? GROUP BY status",
-        (cutoff,),
-    ).fetchall()
-    stuck_reason_rows = conn.execute(
-        "SELECT reason, COUNT(*) AS n FROM failures WHERE at >= ? AND reason != '' GROUP BY reason ORDER BY n DESC",
-        (cutoff,),
-    ).fetchall()
-    stuck_activity_rows = conn.execute(
-        "SELECT activity, COUNT(*) AS n FROM failures WHERE at >= ? AND activity IS NOT NULL GROUP BY activity ORDER BY n DESC",
-        (cutoff,),
-    ).fetchall()
-
-    task_counts  = {r["status"]: r["n"] for r in task_rows}
-    total_tasks  = sum(r["n"] for r in task_rows)
-    done_tasks   = task_counts.get("done", 0)
-    return {
-        "since_hours":       since_hours,
-        "tasks":             task_counts,
-        "task_success_rate": round(done_tasks / total_tasks * 100, 1) if total_tasks else None,
-        "stuck_by_reason":   {r["reason"]:   r["n"] for r in stuck_reason_rows},
-        "stuck_by_activity": {r["activity"]: r["n"] for r in stuck_activity_rows},
-    }
-
-
-def query_logs(task_id: str | None = None, limit: int = 100) -> list[dict]:
-    conn = _get_db()
-    if task_id:
-        rows = conn.execute(
-            "SELECT * FROM logs WHERE task_id = ? ORDER BY time DESC LIMIT ?",
-            (task_id, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM logs ORDER BY time DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+def is_available() -> bool:
+    return db_pool.is_available()

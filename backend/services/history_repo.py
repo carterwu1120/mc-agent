@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from agent import history_reader
+from agent.db import reader as db_reader
 
 
 class HistoryRepository:
-    def __init__(self, data_root: str | Path):
-        self.data_root = Path(data_root)
+    async def find_task(self, task_id: str) -> dict | None:
+        return await db_reader.find_task(task_id)
 
-    def find_task(self, task_id: str) -> dict | None:
-        return history_reader.find_task(task_id, data_root=self.data_root)
-
-    def metrics(self, since_hours: int = 24) -> dict:
-        return history_reader.query_metrics(data_root=self.data_root, since_hours=since_hours)
+    async def metrics(self, since_hours: int = 24, bot_id: str | None = None) -> dict:
+        return await db_reader.query_metrics(since_hours=since_hours, bot_id=bot_id)
