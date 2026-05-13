@@ -707,6 +707,57 @@ async def _send_heartbeat() -> None:
         print(f"[Agent] heartbeat 失敗: {e}")
 
 
+async def _run_coordinator_task(envelope: dict, state: dict, ws) -> None:
+    cmds = envelope.get("commands") or []
+    goal = envelope.get("goal", "coordinator task")
+    cid = envelope.get("task_id")
+
+    async def _patch_status(status: str) -> None:
+        if not cid or not COORDINATOR_URL:
+            return
+        try:
+            async with aiohttp.ClientSession() as s:
+                await s.patch(
+                    f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{cid}",
+                    json={"status": status},
+                )
+        except Exception as e:
+            print(f"[Agent] coordinator PATCH 失敗: {e}")
+
+    if not cmds:
+        planner_state = _augment_state({**state, "message": goal})
+        decision = await planner_skill.handle(planner_state, llm)
+        if isinstance(decision, dict) and decision.get("action") == "plan":
+            cmds = decision.get("commands") or []
+
+    if not cmds:
+        print(f"[Agent] coordinator 任務無可執行指令，標記失敗: {goal}")
+        await _patch_status("failed")
+        return
+
+    print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
+    task_memory.save(goal, cmds, source="coordinator", task_id=cid)
+    await ws.send(json.dumps({"command": "chat", "text": f"收到指派任務：{goal}"}))
+    set_task_id(uuid.uuid4().hex[:8])
+
+    async def _exec_and_report(_cmds=cmds, _goal=goal, _cid=cid):
+        global _idle_started_at
+        status = "failed"
+        try:
+            await executor.execute(_cmds, ws, goal=_goal, source="coordinator", task_id=_cid)
+            task = task_memory.load_any() or {}
+            if task.get("status") == "done":
+                status = "done"
+        except Exception as e:
+            print(f"[Agent] coordinator execute 失敗: {e}")
+            task_memory.failed()
+        finally:
+            _idle_started_at = None
+            await _patch_status(status)
+
+    asyncio.create_task(_exec_and_report())
+
+
 async def _check_coordinator_interrupt(state: dict, ws) -> None:
     """On every tick, check abort flag then interrupt slot."""
     try:
@@ -727,11 +778,7 @@ async def _check_coordinator_interrupt(state: dict, ws) -> None:
         envelope = data.get("task")
         if not envelope:
             return
-        cmds = envelope.get("commands") or []
         goal = envelope.get("goal", "coordinator interrupt task")
-        cid = envelope.get("task_id")
-        if not cmds:
-            return
 
         current_task = task_memory.load()
         current_source = (current_task or {}).get("source", "unknown")
@@ -752,26 +799,7 @@ async def _check_coordinator_interrupt(state: dict, ws) -> None:
         else:
             return  # bot already idle — normal queue poll will handle it
 
-        print(f"[Agent] 執行 coordinator interrupt 任務: {goal} → {cmds}")
-        task_memory.save(goal, cmds, source="coordinator", task_id=cid)
-        set_task_id(uuid.uuid4().hex[:8])
-        await ws.send(json.dumps({"command": "chat", "text": f"收到緊急指派任務：{goal}"}))
-
-        async def _exec_interrupt(_cmds=cmds, _goal=goal, _cid=cid):
-            global _idle_started_at
-            await executor.execute(_cmds, ws, goal=_goal, source="coordinator", task_id=_cid)
-            _idle_started_at = None
-            if _cid and COORDINATOR_URL:
-                try:
-                    async with aiohttp.ClientSession() as _s:
-                        await _s.patch(
-                            f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_cid}",
-                            json={"status": "done"},
-                        )
-                except Exception as _e:
-                    print(f"[Agent] coordinator interrupt PATCH 失敗: {_e}")
-
-        asyncio.create_task(_exec_interrupt())
+        await _run_coordinator_task(envelope, state, ws)
     except Exception as e:
         print(f"[Agent] coordinator interrupt poll 失敗: {e}")
 
@@ -801,31 +829,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         data = await resp.json()
                     envelope = data.get("task")
                     if envelope:
-                        cmds = envelope.get("commands") or []
-                        goal = envelope.get("goal", "coordinator task")
-                        cid = envelope.get("task_id")
-                        if cmds:
-                            print(f"[Agent] 執行協調指派任務: {goal} → {cmds}")
-                            task_memory.save(goal, cmds, source="coordinator", task_id=cid)
-                            await ws.send(json.dumps({"command": "chat", "text": f"收到指派任務：{goal}"}))
-                            set_task_id(uuid.uuid4().hex[:8])
-
-                            async def _exec_and_report(_cmds=cmds, _goal=goal, _cid=cid):
-                                global _idle_started_at
-                                await executor.execute(_cmds, ws, goal=_goal, source="coordinator", task_id=_cid)
-                                _idle_started_at = None
-                                if _cid and COORDINATOR_URL:
-                                    try:
-                                        async with aiohttp.ClientSession() as _s:
-                                            await _s.patch(
-                                                f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_cid}",
-                                                json={"status": "done"},
-                                            )
-                                    except Exception as _e:
-                                        print(f"[Agent] coordinator PATCH 失敗: {_e}")
-
-                            asyncio.create_task(_exec_and_report())
-                            return
+                        await _run_coordinator_task(envelope, state, ws)
+                        return
                 except Exception as e:
                     print(f"[Agent] coordinator poll 失敗: {e}")
             if _idle_started_at is None:

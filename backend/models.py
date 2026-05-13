@@ -7,23 +7,25 @@ from pydantic import BaseModel, Field, field_validator
 
 class SubmitTaskRequest(BaseModel):
     goal: str = Field(min_length=1)
-    commands: list[str] = Field(min_length=1)
+    commands: list[str] = Field(default_factory=list)
     interrupt: bool = False
     task_id: str | None = None
 
     @field_validator("commands")
     @classmethod
     def _validate_commands(cls, value: list[str]) -> list[str]:
-        cleaned = [item.strip() for item in value if item and item.strip()]
-        if not cleaned:
-            raise ValueError("commands must contain at least one non-empty command")
-        return cleaned
+        return [item.strip() for item in value if item and item.strip()]
 
 
 class SubmitTaskResponse(BaseModel):
     task_id: str
     bot_id: str
     status: Literal["queued", "already_queued"]
+
+
+class AbortResponse(BaseModel):
+    bot_id: str
+    ok: bool
 
 
 class BotSummaryResponse(BaseModel):

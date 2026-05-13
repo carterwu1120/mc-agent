@@ -12,6 +12,7 @@ from agent.db import pool as db_pool
 from agent.db.schema import init_schema
 
 from backend.models import (
+    AbortResponse,
     BotRuntimeTasksResponse,
     BotStateResponse,
     BotSummaryResponse,
@@ -167,6 +168,33 @@ def create_app(
             response.status_code = 200
             return SubmitTaskResponse(**payload_out)
         return SubmitTaskResponse(**payload_out)
+
+    @app.post("/bots/{bot_id}/abort", response_model=AbortResponse)
+    async def abort_bot(bot_id: str):
+        try:
+            await app.state.coordinator_client.abort(bot_id)
+        except CoordinatorNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="bot not registered") from exc
+        except CoordinatorClientError as exc:
+            raise HTTPException(status_code=502, detail=f"coordinator unavailable: {exc}") from exc
+        return {"bot_id": bot_id, "ok": True}
+
+    @app.post("/bots/{bot_id}/resume", response_model=SubmitTaskResponse, status_code=202)
+    async def resume_bot(bot_id: str):
+        task_id = uuid.uuid4().hex[:12]
+        try:
+            payload = await app.state.coordinator_client.submit_task(
+                bot_id,
+                task_id=task_id,
+                goal="resume",
+                commands=["resumetask"],
+                interrupt=True,
+            )
+        except CoordinatorNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="bot not registered") from exc
+        except CoordinatorClientError as exc:
+            raise HTTPException(status_code=502, detail=f"coordinator unavailable: {exc}") from exc
+        return SubmitTaskResponse(task_id=task_id, bot_id=bot_id, status=payload.get("status", "queued"))
 
     @app.get("/tasks/{task_id}", response_model=PublicTaskLookupResponse)
     async def get_task(task_id: str):

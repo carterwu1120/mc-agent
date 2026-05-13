@@ -51,6 +51,9 @@ class CoordinatorClient:
             return None
         return payload.get("task")
 
+    async def abort(self, bot_id: str) -> dict:
+        return await self._request("POST", f"/bots/{bot_id}/abort")
+
     async def _request(self, method: str, path: str, **kwargs) -> dict:
         url = f"{self.base_url}{path}"
         try:

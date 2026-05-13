@@ -105,8 +105,8 @@ async def handle_enqueue(request: web.Request) -> web.Response:
     commands = body.get("commands") or []
     goal = body.get("goal", "")
 
-    if not task_id or not commands:
-        return _json({"error": "task_id and commands required"}, 400)
+    if not task_id:
+        return _json({"error": "task_id required"}, 400)
 
     if task_id in _tasks:
         return _json({"ok": True, "status": "already_queued"})
