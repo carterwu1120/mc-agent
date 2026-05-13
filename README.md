@@ -21,45 +21,49 @@ The bot autonomously decomposes a high-level goal into a sequence of steps, exec
 
 ## Architecture
 
-### Three-Layer Design
+### Service Design
 
 ```
-┌─────────────────────────────────────────────────┐
-│  JS Bot (Node.js + mineflayer)                  │
-│  Real-time game control: movement, digging,     │
-│  fishing, crafting, inventory management        │
-│                                                 │
-│  Activity Stack (LIFO)                          │
-│  Watchdog (no-progress detection)               │
-└─────────────────┬───────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Client / Dashboard UI                              │
+│  Browser dashboard, curl, future external tooling   │
+└─────────────────┬───────────────────────────────────┘
+                  │ HTTP :8000
+                  │ public JSON API
+┌─────────────────▼───────────────────────────────────┐
+│  FastAPI Backend                                    │
+│  Public control/query facade                        │
+│                                                     │
+│  GET  /health                                       │
+│  GET  /ready                                        │
+│  POST /bots/{id}/tasks                              │
+│  GET  /bots                                         │
+│  GET  /bots/{id}/state                              │
+│  GET  /tasks/{id}                                   │
+└─────────────────┬───────────────────────────────────┘
+                  │ internal HTTP + shared data
+┌─────────────────▼───────────────────────────────────┐
+│  Python Agent + Coordinator (bot0)                 │
+│  LLM planning, task execution, multi-bot queueing   │
+│                                                     │
+│  Dashboard page server (:3002, UI only)            │
+│  Coordinator service (:3010, internal only)        │
+└─────────────────┬───────────────────────────────────┘
                   │ WebSocket :3001
-                  │ (JSON events + commands)
-┌─────────────────▼───────────────────────────────┐
-│  Python Agent                                   │
-│  Intelligence layer: LLM planning, skill        │
-│  routing, task memory, executor                 │
-│                                                 │
-│  Dashboard HTTP server (:3002)                  │
-└─────────────────┬───────────────────────────────┘
-                  │ HTTP :3010
-                  │ (task assignment between bots)
-┌─────────────────▼───────────────────────────────┐
-│  Coordinator Service (bot0 only)                │
-│  Multi-bot task queue — per-bot FIFO queues,    │
-│  bot registration, task lifecycle tracking      │
-│                                                 │
-│  POST /bots/register        (bot announces ready)│
-│  POST /bots/{id}/tasks      (assign task to bot) │
-│  GET  /bots/{id}/tasks/next (bot polls for work) │
-│  PATCH /bots/{id}/tasks/{id} (report done/fail)  │
-└─────────────────────────────────────────────────┘
+                  │ JSON events + commands
+┌─────────────────▼───────────────────────────────────┐
+│  JS Bot (Node.js + mineflayer)                      │
+│  Real-time game control: movement, digging,         │
+│  fishing, crafting, inventory management            │
+└─────────────────────────────────────────────────────┘
 ```
 
-**Why three layers?**
+**Why this split?**
 - JS (mineflayer) has the best ecosystem for real-time Minecraft control
 - Python has the best ecosystem for LLM integration, async orchestration, and data persistence
 - Coordinator decouples multi-bot task assignment from individual bot logic — bots only need to know the coordinator's URL, not each other's addresses
-- Clear boundaries: JS reports what happened → Python decides what to do → Coordinator distributes work across bots
+- Backend provides one public API instead of exposing dashboard and coordinator query surfaces directly
+- Clear boundaries: JS reports what happened → Python decides what to do → Coordinator distributes work across bots → Backend exposes stable APIs
 
 ### Example: Player says "mine 10 diamonds"
 
@@ -108,7 +112,8 @@ Python agent marks task complete
 |-----------|---------|
 | WebSocket | All JS bot ↔ Python agent messages (events and commands) |
 | HTTPS | Python agent → Gemini API (LLM calls) |
-| HTTP :3010 | Python agent ↔ Coordinator (multi-bot task assignment only) |
+| HTTP :3010 | Python agent ↔ Coordinator (internal multi-bot task assignment only) |
+| HTTP :8000 | Client / dashboard UI ↔ Backend public API |
 
 ---
 
@@ -194,19 +199,20 @@ The LLM is only called for strategic decisions. Mechanical issues are resolved i
 
 ### 6. Observability Dashboard
 
-A live HTTP dashboard (aiohttp, port 3002) shows all agent state in real time:
+A live HTTP dashboard page is served on port `3002`, and it now reads data from the backend public API on port `8000`.
+
+The UI shows:
 
 - Health / food bars, position, activity
 - Current task with step-by-step progress bar
 - Equipment durability, inventory, chest contents
 - Recent events and failure log
-- Internal state (thinking, queued tasks, stuck events)
+- Coordinator runtime state (queue depth, running task ids, abort flag)
 
-The `/state` endpoint returns a **multi-agent ready schema**:
-```json
-{ "coordinator": null, "agents": [{ "id": "bot0", ... }, { "id": "bot1", ... }] }
-```
-The frontend iterates over `agents[]` — adding a new bot requires no frontend changes.
+The dashboard server is now **UI-only**:
+- `GET /` serves the HTML page
+- data comes from backend APIs such as `GET /bots` and `GET /bots/{id}/state`
+- old dashboard query routes are no longer the public API surface
 
 ---
 
@@ -216,9 +222,10 @@ Multiple bots can run simultaneously, each with isolated data and independent LL
 
 ```
 docker compose up
-→ Agent0 (port 3001) + Agent1 (port 3003) join the server
-→ Agent0's Python process serves the dashboard and coordinator
-→ Agent1 writes live_state.json every tick; Agent0's dashboard reads it
+→ Agent0 (port 3001) joins the server
+→ Agent0's Python process serves the dashboard page (:3002) and coordinator (:3010)
+→ Backend service starts on :8000 and exposes the public API
+→ Additional agents can register with the coordinator when enabled
 ```
 
 **Chat addressing** prevents interference:
@@ -228,7 +235,7 @@ docker compose up
 @all sethome            → both bots respond
 ```
 
-Each bot's Python process writes `live_state.json` on every WebSocket tick. The dashboard aggregates own-bot state (from memory) with remote bots (from files) — no shared database required.
+Each bot's Python process writes `live_state.json` on every WebSocket tick. The backend aggregates bot state from coordinator runtime data plus per-bot files/SQLite history.
 
 **Bot-to-bot isolation**: Bots ignore each other's Minecraft chat (configurable via `BOT_USERNAMES`). Coordination between bots goes through the HTTP coordinator service, not the game chat channel.
 
@@ -256,11 +263,56 @@ This is a **pull model** — bot1 asks for work rather than bot0 pushing to bot1
 echo "GOOGLE_API_KEY=your_key" > .env
 echo "MC_HOST=your_server" >> .env
 
-# Start both bots
+# Start the stack
 docker compose up --build
 ```
 
-Services: `bot0`, `agent0` (with dashboard on :3002), `bot1`, `agent1`.
+Default services in the current MVP:
+- `bot0`
+- `agent0` (dashboard page on `:3002`, coordinator on `:3010`)
+- `backend` (public API on `:8000`)
+
+The `backend` service includes a Docker healthcheck that probes `GET /ready`.
+
+### Backend API
+
+The backend is the **only public API surface** for clients, dashboard UI, and future external tooling.
+
+Health and readiness:
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/ready
+```
+
+Bot/task APIs:
+
+```bash
+curl http://localhost:8000/bots
+curl http://localhost:8000/bots/bot0/state
+curl http://localhost:8000/bots/bot0/tasks
+curl http://localhost:8000/tasks/<task_id>
+```
+
+Submit a structured task:
+
+```bash
+curl -X POST http://localhost:8000/bots/bot0/tasks \
+  -H 'content-type: application/json' \
+  -d '{
+    "goal": "mine iron 8",
+    "commands": ["mine iron 8"],
+    "interrupt": false
+  }'
+```
+
+Metrics:
+
+```bash
+curl http://localhost:8000/metrics/success-rate
+curl http://localhost:8000/metrics/stuck-count
+curl http://localhost:8000/metrics/llm-latency
+```
 
 ### Local Development
 
@@ -281,9 +333,10 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 | `BOT_WS_PORT` | `3001` | JS bot WebSocket port |
 | `BOT_WS_URL` | `ws://localhost:3001` | Python agent connects here |
 | `BOT_USERNAMES` | `` | Comma-separated bot usernames to ignore in chat |
-| `DASHBOARD_PORT` | `3002` | Dashboard HTTP port |
+| `DASHBOARD_PORT` | `3002` | Dashboard page HTTP port (UI only) |
 | `COORDINATOR_PORT` | `` | Set on bot0 to start the coordinator service on this port |
-| `COORDINATOR_URL` | `` | Set on bot1+ to point to bot0's coordinator (e.g. `http://agent0:3010`) |
+| `COORDINATOR_URL` | `` | Set on every agent that should register/poll against the coordinator |
+| `BACKEND_CORS_ORIGINS` | `` | Extra comma-separated origins allowed to call backend APIs |
 | `GOOGLE_API_KEY` | — | Gemini API key |
 
 ---

@@ -34,10 +34,10 @@
   - [x] `GET /metrics/stuck-count`
   - [x] `GET /metrics/llm-latency`
 
-- [~] **統一 API ownership，避免重複 surface**
+- [x] **統一 API ownership，避免重複 surface**
   - [x] 決定 `dashboard.py` 先保留，backend 逐步吸收 query responsibility
   - [x] 決定 `coordinator_service.py` 先作為 internal service，由 backend facade 包起來
-  - [ ] 對外只保留一套 API 命名與 response schema（dashboard HTML / legacy aiohttp query routes 之後再收斂）
+  - [x] 對外只保留一套 public API 命名與 response schema（dashboard query routes 已收掉，dashboard 改走 backend）
 
 - [~] **Bot / Task state schema 正規化**
   - [x] 定義 bot summary schema（id、status、activity、position、health、food、current_task）
@@ -52,6 +52,7 @@
   - [ ] 自然語言 interrupt / resume 分類（不只靠前綴）
   - [ ] executor / stuck recovery 能接受人工覆蓋，避免舊流程在背景等待
   - [ ] backend API 可觸發 abort / interrupt / resume
+  - [ ] 明確定義 public control endpoints（例如 `/abort`、`/interrupt`、`/resume`）與權限邊界
 
 - [x] **Coordinator state 可查詢化**
   - [x] in-memory queue / running task / interrupt slot / abort flag 有明確 query path
@@ -90,6 +91,7 @@
   - [x] `backend` 服務獨立於 `agent0`
   - [x] backend 與 coordinator / agents 的 network / volume 邊界明確化
   - [x] 保持 MVP 為 1 到 2 個 long-running bots，不做動態 spawn container
+  - [ ] compose 補 service healthcheck（backend `/health` / `/ready`）
 
 - [ ] **Python 側 context 清理機制 v2**
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
@@ -216,6 +218,13 @@
   - coordinator internal read APIs：runtime task / queue / heartbeat visibility
   - shared state/history readers，避免 dashboard/backend 重複 shaping logic
   - coordinator task id 可一路查到 archived history
+
+- [x] **Dashboard ownership cleanup**
+  - dashboard server 降級成 UI-only，保留 `GET /`
+  - dashboard frontend 改從 backend `:8000` 取資料
+  - 移除 dashboard 舊 query surface（`/state`、`/history`、`/metrics` 等）
+  - backend 補 CORS，支援 dashboard cross-origin fetch
+  - backend 補 `/health`、`/ready`
 
 - [x] **Rate Limiting（LLM 請求流量控制）** `[Backend: API stability / token bucket]`
   - Token bucket + exponential backoff 已實作在 `agent/brain/rate_limiter.py`
