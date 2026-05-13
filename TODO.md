@@ -48,11 +48,12 @@
 
 #### 1.2 Runtime Control / Reliability
 
-- [ ] **Manual override / interrupt 機制**
+- [x] **Manual override / interrupt 機制**
   - [ ] 自然語言 interrupt / resume 分類（不只靠前綴）
   - [ ] executor / stuck recovery 能接受人工覆蓋，避免舊流程在背景等待
-  - [ ] backend API 可觸發 abort / interrupt / resume
-  - [ ] 明確定義 public control endpoints（例如 `/abort`、`/interrupt`、`/resume`）與權限邊界
+  - [x] backend API 可觸發 abort / interrupt / resume
+  - [x] 明確定義 public control endpoints（`POST /bots/{id}/abort`、`POST /bots/{id}/resume`、`POST /bots/{id}/tasks` with goal-only）
+  - [x] POST /bots/{id}/tasks 支援純自然語言 goal（agent planner 自動規劃 commands）
 
 - [x] **Coordinator state 可查詢化**
   - [x] in-memory queue / running task / interrupt slot / abort flag 有明確 query path
