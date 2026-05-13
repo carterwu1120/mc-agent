@@ -37,7 +37,12 @@ commands 裡的 chest id 從下方提供的箱子資訊取得。
 {new_chest_id} 是佔位符，makechest 完成後會自動填入實際 id，不要替換成數字。
 label 根據背包最多的材料類型選擇：wood / ore / stone / misc。
 
-⚠ 若沒有設定基地（home 未設定），絕對不能在 plan 裡加入 home 指令，也不要嘗試 makechest + deposit 流程。
+③ 沒有設定基地（home 未設定）且背包有足夠木材可做箱子（wood_as_planks ≥ 16）：
+先前往地表、設定基地、再放箱子存放。
+{"action": "plan", "commands": ["stop指令", "surface", "sethome", "makechest", "labelchest {new_chest_id} <label>", "deposit {new_chest_id}", "back", "resume指令"]}
+注意：此路徑不需要 home 指令（sethome 才是設定，home 是前往已設定的基地）。
+
+⚠ 若沒有設定基地（home 未設定）且木材不足，絕對不能在 plan 裡加入 home 指令，不要嘗試 makechest + deposit 流程，只能選 drop 或 continue。
 ⚠ 若目前活動是 smelting，絕對不能回傳 continue。
   背包滿時 smelting 無法取出成品，continue 會造成永久死鎖。
   必須選 drop（丟棄低價值物品）或 plan（存入箱子）。
@@ -168,17 +173,30 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         )
 
     has_home = bool(state.get("home"))
-    if not labeled_chests and can_make_chest and has_home and _should_make_misc_chest(inventory):
-        return {
-            "action": "plan",
-            "commands": [
-                "home",
-                "makechest",
-                "labelchest {new_chest_id} misc",
-                "deposit {new_chest_id}",
-                "back",
-            ],
-        }
+    if not labeled_chests and can_make_chest and _should_make_misc_chest(inventory):
+        if has_home:
+            return {
+                "action": "plan",
+                "commands": [
+                    "home",
+                    "makechest",
+                    "labelchest {new_chest_id} misc",
+                    "deposit {new_chest_id}",
+                    "back",
+                ],
+            }
+        else:
+            return {
+                "action": "plan",
+                "commands": [
+                    "surface",
+                    "sethome",
+                    "makechest",
+                    "labelchest {new_chest_id} misc",
+                    "deposit {new_chest_id}",
+                    "back",
+                ],
+            }
 
     # Current goal/progress from stack for mine remaining calculation
     top = stack[-1] if stack else {}

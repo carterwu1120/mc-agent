@@ -13,7 +13,7 @@ const { startCombat, stopCombat } = require('./combat')
 const { startHunting, stopHunting } = require('./hunting')
 const { startGetFood, stopGetFood } = require('./food_collect')
 const { findNearestPlayer } = require('./world')
-const { setHome, goHome, back } = require('./home')
+const { setHome, goHome, back, recordReturnPos } = require('./home')
 const { startSurfacing, stopSurfacing } = require('./surface')
 const { startExploring, stopExploring } = require('./explore')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
@@ -191,6 +191,7 @@ function handle(bot, msg) {
 
         case 'surface': {
             const surfaceGoal = msg.goal ?? {}
+            recordReturnPos(bot)
             startSurfacing(bot, surfaceGoal)
             bridge.sendState(bot, 'task_started', { activityName: 'surface', goal: surfaceGoal })
             break

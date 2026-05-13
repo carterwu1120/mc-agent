@@ -62,6 +62,12 @@ function getHome() {
     return _load()
 }
 
+function recordReturnPos(bot) {
+    const pos = bot.entity.position
+    _returnPos = { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }
+    console.log(`[Home] 記錄返回點 (${_returnPos.x}, ${_returnPos.y}, ${_returnPos.z})`)
+}
+
 function back(bot) {
     const stack = activityStack.getStack()
     const top = stack[stack.length - 1]
@@ -90,4 +96,4 @@ function back(bot) {
     return true
 }
 
-module.exports = { setHome, goHome, getHome, back }
+module.exports = { setHome, goHome, getHome, back, recordReturnPos }

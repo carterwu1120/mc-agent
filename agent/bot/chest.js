@@ -180,37 +180,78 @@ function _checkSpot(bot, ground) {
     return _isAir(chestSpace) && _isAir(lidSpace)
 }
 
+// Returns set of {x,y,z} strings for all registered chest positions (to avoid digging them)
+function _registeredChestPositions() {
+    const chests = _load()
+    const set = new Set()
+    for (const c of chests) {
+        if (c.pos) set.add(`${c.pos.x},${c.pos.y},${c.pos.z}`)
+    }
+    return set
+}
+
+// Only plain terrain blocks are safe to dig — never touch infrastructure or containers.
+const _DIGGABLE_TERRAIN = new Set([
+    'stone', 'cobblestone', 'cobbled_deepslate', 'deepslate', 'granite', 'diorite', 'andesite',
+    'tuff', 'calcite', 'dirt', 'gravel', 'sand', 'sandstone', 'netherrack', 'soul_sand', 'soul_soil',
+    'basalt', 'blackstone', 'end_stone',
+])
+
+// Dig away terrain blocks obstructing a spot (chestSpace and lidSpace).
+// Returns true if the spot is clear after digging, false if any non-terrain block is in the way.
+async function _clearSpot(bot, ground, protectedPositions) {
+    for (const dy of [1, 2]) {
+        const b = bot.blockAt(ground.position.offset(0, dy, 0))
+        if (!b || _isAir(b)) continue
+        const key = `${b.position.x},${b.position.y},${b.position.z}`
+        if (protectedPositions.has(key) || !_DIGGABLE_TERRAIN.has(b.name)) {
+            return false  // not safe to dig — reject this spot
+        }
+        try {
+            await bot.dig(b)
+            await _sleep(150)
+        } catch (e) {
+            console.log('[Chest] 無法清理障礙物:', e.message)
+            return false
+        }
+    }
+    const cs = bot.blockAt(ground.position.offset(0, 1, 0))
+    const ls = bot.blockAt(ground.position.offset(0, 2, 0))
+    return _isAir(cs) && _isAir(ls)
+}
+
 // First chest: directly in front of agent
 // Second chest: to the left OR right of the first (side by side, both facing agent → merge)
-function _findLargeChestSpot(bot) {
-    // Snap to nearest cardinal direction (N/S/E/W) to avoid diagonal placement
+// If a spot has non-chest solid blocks in the way, dig them out first.
+async function _findOrClearLargeChestSpot(bot) {
     const snapped = Math.round(bot.entity.yaw / (Math.PI / 2)) * (Math.PI / 2)
     const fdx = Math.round(-Math.sin(snapped))
     const fdz = Math.round(-Math.cos(snapped))
-    // Right of forward: rotate 90° clockwise
     const rdx = -fdz
     const rdz = fdx
+    const protected = _registeredChestPositions()
 
-    // Try 2 and 3 blocks in front (need space between bot and chest)
     for (const dist of [2, 3]) {
         const g1 = _findGround(bot, fdx * dist, fdz * dist)
-        if (!g1 || !_checkSpot(bot, g1)) continue
+        if (!g1) continue
+        const spot1Ready = _checkSpot(bot, g1) || await _clearSpot(bot, g1, protected)
+        if (!spot1Ready) continue
 
-        // Try right side first, then left
         for (const sign of [1, -1]) {
             const g2 = _findGround(bot, fdx * dist + sign * rdx, fdz * dist + sign * rdz)
-            if (!g2 || !_checkSpot(bot, g2)) continue
-            // 兩個箱子必須同高且水平直接相鄰（XZ Manhattan distance = 1），否則無法合併成大箱子
+            if (!g2) continue
             const c1 = g1.position.offset(0, 1, 0)
             const c2 = g2.position.offset(0, 1, 0)
-            if (c1.y === c2.y && Math.abs(c1.x - c2.x) + Math.abs(c1.z - c2.z) === 1) return [g1, g2]
+            if (c1.y !== c2.y || Math.abs(c1.x - c2.x) + Math.abs(c1.z - c2.z) !== 1) continue
+            const spot2Ready = _checkSpot(bot, g2) || await _clearSpot(bot, g2, protected)
+            if (spot2Ready) return [g1, g2]
         }
     }
     return null
 }
 
 async function _placeChest(bot) {
-    const spot = _findLargeChestSpot(bot)
+    const spot = await _findOrClearLargeChestSpot(bot)
     if (!spot) { bot.chat('找不到放置大箱子的位置（需要兩格相鄰空地）'); return false }
 
     const placed = []
