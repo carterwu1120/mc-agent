@@ -44,7 +44,7 @@
   - [x] 定義 task schema（queued / running / done / failed / interrupted）
   - [x] 明確區分 runtime state、task history、aggregated metrics
   - [x] 補 task source / interrupt / abort / heartbeat 的 API model
-  - [ ] 補文件化 schema / examples，避免 frontend 或 future client 猜欄位
+  - [x] 補一份 canonical API schema 文件（欄位表 + example payload），固定 `GET /bots`、`GET /bots/{bot_id}/state`、`GET /tasks/{task_id}` 的 response contract
 
 #### 1.2 Runtime Control / Reliability
 

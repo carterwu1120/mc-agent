@@ -278,6 +278,9 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 
 The backend is the **only public API surface** for clients, dashboard UI, and future external tooling.
 
+Canonical schema reference:
+- [docs/backend-api.md](docs/backend-api.md)
+
 Health and readiness:
 
 ```bash
