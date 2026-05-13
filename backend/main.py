@@ -197,8 +197,11 @@ def create_app(
         raise HTTPException(status_code=404, detail="task not found")
 
     @app.get("/metrics/success-rate", response_model=SuccessRateResponse)
-    async def get_success_rate(hours: int = Query(24, ge=1, le=168)):
-        metrics = await app.state.history_repo.metrics(since_hours=hours)
+    async def get_success_rate(
+        hours: int = Query(24, ge=1, le=168),
+        bot_id: str | None = Query(None),
+    ):
+        metrics = await app.state.history_repo.metrics(since_hours=hours, bot_id=bot_id)
         return {
             "since_hours": hours,
             "task_success_rate": metrics.get("task_success_rate"),
@@ -207,8 +210,11 @@ def create_app(
         }
 
     @app.get("/metrics/stuck-count", response_model=StuckCountResponse)
-    async def get_stuck_count(hours: int = Query(24, ge=1, le=168)):
-        metrics = await app.state.history_repo.metrics(since_hours=hours)
+    async def get_stuck_count(
+        hours: int = Query(24, ge=1, le=168),
+        bot_id: str | None = Query(None),
+    ):
+        metrics = await app.state.history_repo.metrics(since_hours=hours, bot_id=bot_id)
         by_reason = metrics.get("stuck_by_reason") or {}
         return {
             "since_hours": hours,
@@ -218,8 +224,11 @@ def create_app(
         }
 
     @app.get("/metrics/llm-latency", response_model=LlmLatencyResponse)
-    async def get_llm_latency(hours: int = Query(24, ge=1, le=168)):
-        metrics = await app.state.history_repo.metrics(since_hours=hours)
+    async def get_llm_latency(
+        hours: int = Query(24, ge=1, le=168),
+        bot_id: str | None = Query(None),
+    ):
+        metrics = await app.state.history_repo.metrics(since_hours=hours, bot_id=bot_id)
         llm_latency = metrics.get("llm_latency") or {}
         return {
             "since_hours": hours,
