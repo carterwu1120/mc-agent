@@ -71,12 +71,12 @@
   - [x] 把 metrics query 從 route handler 中抽離，讓 FastAPI 可直接重用
   - [x] 規劃 task / event / failure / logs 的 API-facing DTO
 
-- [~] **SQLite → PostgreSQL 遷移**
+- [x] **SQLite → PostgreSQL 遷移**
   - [x] 先完成 schema 抽象與 repository 介面，避免 route 直接綁 SQLite
-  - [ ] 將現有 `task_history.db`（tasks / events / failures / logs）遷移至 PostgreSQL
-  - [ ] 設計正規化 schema，補上 index（task_id、bot_id、created_at、event_type）
-  - [ ] 多 bot 共用同一 DB，以 `bot_id` 做資料隔離，取代現在的 per-bot 檔案分離
-  - [ ] 練習 migration script、connection pool（asyncpg）、transaction 管理
+  - [x] 將現有 `task_history.db`（tasks / events / failures / logs）遷移至 PostgreSQL
+  - [x] 設計正規化 schema，補上 index（task_id、bot_id、created_at、event_type）
+  - [x] 多 bot 共用同一 DB，以 `bot_id` 做資料隔離，取代現在的 per-bot 檔案分離
+  - [x] 練習 migration script、connection pool（asyncpg）、transaction 管理
 
 - [~] **Metrics 補齊**
   - [x] LLM latency API：從 `llm_call` event 聚合 avg / p95 / count
