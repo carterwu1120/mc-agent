@@ -319,7 +319,6 @@ _coordinator_poll_running: bool = False  # serializes coordinator interactions �
 _last_self_task_at = 0.0
 SELF_TASK_COOLDOWN = 60.0
 _idle_started_at: float | None = None
-_queued_player_tasks: deque[str] = deque()
 _recent_stuck_events: deque[dict] = deque(maxlen=8)
 _latest_state: dict = {}
 
@@ -424,7 +423,7 @@ def _save_current_task_to_memory(state: dict) -> None:
 
 def _augment_state(state: dict, player_task: str | None = None) -> dict:
     copied = dict(state)
-    copied["queued_tasks"] = list(_queued_player_tasks)
+    copied["queued_tasks"] = []  # queued player tasks now live in coordinator queue
     copied["player_task"] = player_task
     return copied
 
@@ -632,6 +631,27 @@ async def _send_chat(ws, text: str) -> None:
     await ws.send(json.dumps({"command": "chat", "text": text}))
 
 
+async def _enqueue_player_task(goal: str, interrupt: bool, ws) -> None:
+    """Submit a player task to the coordinator queue.
+    Falls back to direct planner execution if COORDINATOR_URL is not set."""
+    if not COORDINATOR_URL:
+        state = _augment_state({"type": "chat", "message": goal}, player_task=goal)
+        await _handle_and_send(state, planner_skill.handle, ws)
+        return
+    task_id = f"player_{uuid.uuid4().hex[:8]}"
+    try:
+        async with aiohttp.ClientSession() as s:
+            await s.post(
+                f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks",
+                json={"task_id": task_id, "goal": goal, "commands": [], "interrupt": interrupt},
+            )
+        print(f"[Agent] player task enqueued: {goal!r} interrupt={interrupt}")
+    except Exception as e:
+        print(f"[Agent] player task enqueue 失敗，fallback 直接執行: {e}")
+        state = _augment_state({"type": "chat", "message": goal}, player_task=goal)
+        await _handle_and_send(state, planner_skill.handle, ws)
+
+
 async def _dispatch_result(item: dict, state: dict, ws) -> None:
     """Dispatch a single action item — used by coordinator and other direct-dispatch paths."""
     if item.get("action") == "plan":
@@ -662,17 +682,6 @@ async def _apply_manual_abort(state: dict, ws) -> None:
     else:
         await _send_chat(ws, "已停止目前任務。")
 
-
-async def _apply_manual_interrupt(state: dict, ws, planner_message: str) -> None:
-    if executor.is_running():
-        print("[TaskArb] 手動 interrupt：暫停目前計畫，切換到玩家要求")
-        executor.abort(preserve_task=True, reason="manual_interrupt")
-    elif state.get("activity") != "idle":
-        print("[TaskArb] 手動 interrupt：保存目前活動，切換到玩家要求")
-        _save_current_task_to_memory(state)
-
-    planner_state = _augment_state({**state, "message": planner_message}, player_task=planner_message)
-    await _handle_and_send(planner_state, planner_skill.handle, ws)
 
 
 def _distance_sq(a: dict | None, b: dict | None) -> float:
@@ -1157,8 +1166,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             nonlocal _lock_acquired
             if commands:
                 if not _lock_acquired:
-                    # Non-tick path: acquire lock before touching executor
-                    if _planner_lock is not None and not _planner_lock.locked():
+                    # Non-tick path: wait for lock before touching executor
+                    if _planner_lock is not None:
                         await _planner_lock.acquire()
                         _lock_acquired = True
                 if executor.is_running():
@@ -1280,56 +1289,43 @@ async def _handle_player_chat(state: dict, ws) -> None:
             await _apply_manual_abort(state, ws)
             return
         if kind == "resume":
-            planner_state = _augment_state(state, player_task=message)
-            await _handle_and_send(planner_state, planner_skill.handle, ws)
+            await _enqueue_player_task(message, interrupt=False, ws=ws)
             return
         if kind == "interrupt":
             planner_message = override.get("message", "").strip()
             if not planner_message:
                 await _send_chat(ws, "你要我改做什麼？")
                 return
-            await _apply_manual_interrupt(state, ws, planner_message)
+            await _enqueue_player_task(planner_message, interrupt=True, ws=ws)
             return
 
-    # Resume commands are meta-commands — skip arbitration entirely
     if any(re.search(p, message, re.IGNORECASE) for p in planner_skill.RESUME_PATTERNS):
-        planner_state = _augment_state(state, player_task=message)
-        await _handle_and_send(planner_state, planner_skill.handle, ws)
+        await _enqueue_player_task(message, interrupt=False, ws=ws)
         return
 
     activity = state.get("activity", "idle")
     busy = activity != "idle" or executor.is_running()
 
     if busy:
-        arb_state = _augment_state(state, player_task=state.get("message"))
+        arb_state = _augment_state(state, player_task=message)
         decision = await task_arbitration_skill.handle(arb_state, llm)
         if decision:
             text = decision.get("text", "").strip()
             choice = decision.get("decision")
+            if text:
+                await ws.send(json.dumps({"command": "chat", "text": text}))
             if choice == "queue":
-                _queued_player_tasks.append(state.get("message", ""))
-                print(f"[TaskArb] 玩家任務已排隊: {state.get('message')}")
+                print(f"[TaskArb] 玩家任務已排隊: {message}")
+                await _enqueue_player_task(message, interrupt=False, ws=ws)
                 return
             if choice == "defer":
-                if text:
-                    await ws.send(json.dumps({"command": "chat", "text": text}))
-                print(f"[TaskArb] 暫緩玩家任務: {state.get('message')}")
+                print(f"[TaskArb] 暫緩玩家任務: {message}")
                 return
             if choice == "interrupt":
-                if text:
-                    await ws.send(json.dumps({"command": "chat", "text": text}))
-                if executor.is_running():
-                    print("[TaskArb] 中止目前計畫，改執行玩家任務")
-                    executor.abort()
-                # 儲存目前任務（不管 executor 是否在跑）
-                _save_current_task_to_memory(state)
-                # Don't send stop directly — planner includes stop as first plan step
-                # so the executor waits for action_done before issuing new commands.
-                # Sending stop outside executor caused the old activity to remain on
-                # the JS stack when the next command arrived.
+                await _enqueue_player_task(message, interrupt=True, ws=ws)
+                return
 
-    planner_state = _augment_state(state, player_task=state.get("message"))
-    await _handle_and_send(planner_state, planner_skill.handle, ws)
+    await _enqueue_player_task(message, interrupt=False, ws=ws)
 
 
 async def run():
@@ -1413,21 +1409,6 @@ async def run():
                     print(f"[State] type={event_type}  "
                           f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})  "
                           f"hp={state.get('health')}  food={state.get('food')}")
-
-                    if (
-                        event_type == "tick"
-                        and state.get("activity") == "idle"
-                        and not executor.is_running()
-                        and _queued_player_tasks
-                        and "chat" not in _thinking
-                        and not (_planner_lock and _planner_lock.locked())
-                    ):
-                        queued_message = _queued_player_tasks.popleft()
-                        print(f"[TaskArb] 取出排隊玩家任務: {queued_message}")
-                        queued_state = _augment_state({**state, "type": "chat", "message": queued_message}, player_task=queued_message)
-                        _thinking.add("chat")
-                        session_tasks.append(asyncio.create_task(_handle_and_send(queued_state, planner_skill.handle, ws)))
-                        continue
 
                     handler = HANDLERS.get(event_type)
                     if event_type in {"task_started", "task_stopped", "activity_done", "player_died", "player_respawned"}:
