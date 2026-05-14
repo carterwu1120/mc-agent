@@ -331,13 +331,10 @@ _STOP_COMMAND_FOR_ACTIVITY = {
     "getfood": "stopgetfood",
 }
 
+# Only unambiguous stop-now prefixes bypass LLM arbitration; everything else goes to task_arbitration
 _NATURAL_INTERRUPT_PATTERNS = (
-    r"^\s*你先",
-    r"^\s*先去",
-    r"^\s*先來",
-    r"^\s*先回",
-    r"^\s*先別",
     r"^\s*先停",
+    r"^\s*先別",
 )
 
 

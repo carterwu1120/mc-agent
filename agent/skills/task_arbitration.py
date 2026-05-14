@@ -21,6 +21,11 @@ SYSTEM_PROMPT = """你是 Minecraft 陪玩型 agent 的玩家任務仲裁助手�
 - 若目前任務很短且快完成，可 queue
 - 若目前只是一般自主任務，通常 interrupt
 - text 必須是繁體中文一句話
+
+英文輸入判斷：
+- "stop", "stop that", "stop what you're doing", "cancel", "abort" → interrupt
+- "go do X", "can you X", "help me X", "go get X" → 依情況 interrupt 或 queue
+- 純問句（"how much iron do you have?", "where are you?"）→ defer（先回答，不需要中斷任務）
 """
 
 ALLOWED_DECISIONS = {"interrupt", "queue", "defer"}
