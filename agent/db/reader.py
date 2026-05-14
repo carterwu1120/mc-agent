@@ -156,7 +156,7 @@ async def query_goal_completion(
                 COUNT(*) FILTER (WHERE goal_count IS NOT NULL)                          AS tasks_with_goal,
                 COUNT(*) FILTER (WHERE goal_count IS NOT NULL AND actual_count >= goal_count) AS fully_met,
                 COUNT(*) FILTER (WHERE goal_count IS NOT NULL AND actual_count < goal_count)  AS partial,
-                ROUND(AVG(actual_count::float / NULLIF(goal_count, 0)) * 100, 1)        AS avg_pct
+                ROUND((AVG(actual_count::float / NULLIF(goal_count, 0)) * 100)::numeric, 1) AS avg_pct
             FROM tasks
             WHERE created_at >= $1 AND status = 'done'{bot_filter}
             """,

@@ -312,6 +312,7 @@ _NO_LLM_HANDLERS = {"agent", "food"}
 _SELF_REPORTING_LLM = {"activity_stuck"}
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
+_planner_lock: "asyncio.Lock | None" = None  # unified executor ownership — initialized in run()
 _last_self_task_at = 0.0
 SELF_TASK_COOLDOWN = 60.0
 _idle_started_at: float | None = None
@@ -813,16 +814,59 @@ async def _check_coordinator_interrupt(state: dict, ws) -> None:
         print(f"[Agent] coordinator interrupt poll 失敗: {e}")
 
 
+async def _check_coordinator_queue(state: dict, ws) -> None:
+    if not COORDINATOR_URL or _planner_lock is None:
+        return
+    # Check before HTTP — never dequeue a task we can't run
+    if _planner_lock.locked():
+        return
+    if executor.is_running():
+        return
+    if _latest_state.get("activity", "idle") != "idle":
+        return
+    # Acquire slot atomically before HTTP round-trip
+    await _planner_lock.acquire()
+    try:
+        async with aiohttp.ClientSession() as s:
+            resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/next")
+            data = await resp.json()
+        envelope = data.get("task")
+        if not envelope:
+            return
+        # Re-check after await — bot state may have changed during HTTP
+        if executor.is_running():
+            current_source = (task_memory.load() or {}).get("source", "unknown")
+            if current_source != "self_task":
+                print(f"[Agent] coordinator queue: source={current_source} 非 self_task，跳過")
+                return
+            print("[Agent] coordinator queue: 中斷 self_task executor，改由 coordinator 任務接手")
+            executor.abort(preserve_task=False, reason="coordinator_queue")
+        elif _latest_state.get("activity", "idle") != "idle":
+            print("[Agent] coordinator queue: activity 非 idle（HTTP 期間改變），跳過")
+            return
+        # Preempt any tick LLM in progress — discard tick from _thinking so later ticks unblock
+        _thinking.discard("tick")
+        print("[Agent] coordinator queue: 取得 ownership，執行 coordinator 任務")
+        await _run_coordinator_task(envelope, state, ws)
+    except Exception as e:
+        print(f"[Agent] coordinator poll 失敗: {e}")
+    finally:
+        if _planner_lock.locked():
+            _planner_lock.release()
+
+
 async def _handle_and_send(state: dict, handler, ws) -> None:
     event_type = state.get("type")
     global _last_self_task_at
     global _idle_started_at
     _thinking.add(event_type)
+    _lock_acquired = False
     try:
         if event_type == "tick":
             now = asyncio.get_running_loop().time()
             if COORDINATOR_URL:
                 asyncio.create_task(_check_coordinator_interrupt(state, ws))
+                asyncio.create_task(_check_coordinator_queue(state, ws))
                 if now - _last_heartbeat_at > HEARTBEAT_INTERVAL:
                     asyncio.create_task(_send_heartbeat())
             if executor.is_running():
@@ -830,24 +874,20 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if state.get("activity") != "idle":
                 _idle_started_at = None
                 return
-            # Poll coordinator HTTP service for next task
-            if COORDINATOR_URL:
-                try:
-                    async with aiohttp.ClientSession() as s:
-                        resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/next")
-                        data = await resp.json()
-                    envelope = data.get("task")
-                    if envelope:
-                        await _run_coordinator_task(envelope, state, ws)
-                        return
-                except Exception as e:
-                    print(f"[Agent] coordinator poll 失敗: {e}")
             if _idle_started_at is None:
                 _idle_started_at = now
                 return
             if now - _idle_started_at < SELF_TASK_COOLDOWN:
                 return
             if now - _last_self_task_at < SELF_TASK_COOLDOWN:
+                return
+            # Acquire planner slot before calling LLM
+            if _planner_lock is None or _planner_lock.locked():
+                return
+            await _planner_lock.acquire()
+            _lock_acquired = True
+            # Re-check after acquire
+            if executor.is_running() or _latest_state.get("activity", "idle") != "idle":
                 return
             _last_self_task_at = now
         # Inject plan context before activity_stuck handler if executor is running
@@ -887,6 +927,11 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         t0 = time.monotonic()
         result = await handler(state, llm)
+        # If coordinator took over while LLM was running, it released the lock — discard result
+        if event_type == "tick" and _lock_acquired and (_planner_lock is None or not _planner_lock.locked()):
+            print("[Agent] tick LLM 結果已被 coordinator 搶佔，丟棄")
+            _lock_acquired = False
+            return
         latency_ms = int((time.monotonic() - t0) * 1000)
         path_taken = None
         path_latency_ms = None
@@ -1029,6 +1074,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         print(f"[Agent] {event_type} 處理失敗: {e}")
     finally:
         _thinking.discard(event_type)
+        if _lock_acquired and _planner_lock is not None and _planner_lock.locked():
+            _planner_lock.release()
 
 
 async def _handle_player_chat(state: dict, ws) -> None:
@@ -1105,6 +1152,8 @@ async def _handle_player_chat(state: dict, ws) -> None:
 
 
 async def run():
+    global _planner_lock
+    _planner_lock = asyncio.Lock()
     _mc_username   = os.environ.get("MC_USERNAME", "?")
     _bot_usernames = os.environ.get("BOT_USERNAMES", "") or "(none)"
     _strict_chat   = os.environ.get("STRICT_CHAT_ADDRESSING", "true")
@@ -1191,10 +1240,12 @@ async def run():
                         and not executor.is_running()
                         and _queued_player_tasks
                         and "chat" not in _thinking
+                        and not (_planner_lock and _planner_lock.locked())
                     ):
                         queued_message = _queued_player_tasks.popleft()
                         print(f"[TaskArb] 取出排隊玩家任務: {queued_message}")
                         queued_state = _augment_state({**state, "type": "chat", "message": queued_message}, player_task=queued_message)
+                        _thinking.add("chat")
                         session_tasks.append(asyncio.create_task(_handle_and_send(queued_state, planner_skill.handle, ws)))
                         continue
 
@@ -1209,6 +1260,7 @@ async def run():
                         session_tasks.append(asyncio.create_task(_handle_player_chat(state, ws)))
                         continue
 
+                    _thinking.add(event_type)
                     session_tasks.append(asyncio.create_task(_handle_and_send(state, handler, ws)))
         except Exception as e:
             print(f"[Agent] 連線中斷: {e}，{reconnect_delay:.0f} 秒後重連...")

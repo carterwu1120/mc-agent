@@ -98,6 +98,16 @@
   - [x] 保持 MVP 為 1 到 2 個 long-running bots，不做動態 spawn container
   - [x] compose 補 service healthcheck（backend `/health` / `/ready`）
 
+- [x] **Coordinator queue poll unblocked from LLM**
+  - [x] 將 coordinator queue poll 改為 `asyncio.create_task`（不被 `_thinking` 擋住）
+  - [x] 使用 `_planner_lock` 統一 executor ownership，取代分散的 flag 機制
+  - [x] 使用者給任務時，self_task LLM 結果被丟棄，改由 coordinator 任務接手
+  - [ ] **Known concurrency issues（future work）：**
+    - [ ] Chat / coordinator_interrupt 路徑尚未納入 `_planner_lock`，理論上仍有 race
+    - [ ] Lock 在 `create_task` 後即釋放，executor `_running=True` 尚未設定，存在短暫 gap
+    - [ ] WebSocket 斷線時 `_check_coordinator_queue` coroutine 未加入 `session_tasks`，不會被 cancel
+    - [ ] Coordinator task dequeue 後若因狀態衝突跳過，task 會留在 `running` 狀態（無 requeue）
+
 - [ ] **Python 側 context 清理機制 v2**
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
   - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
