@@ -2,6 +2,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
+const { sendActivityDone } = bridge
 
 let isSmelting = false
 let _isPaused = false
@@ -208,14 +209,14 @@ async function _loop(bot, goal = {}) {
             console.log(`[Smelt] 達到時間目標 ${goal.duration}s，停止`)
             isSmelting = false
             _setOutcome('done', { reason: 'goal_reached', goal })
-            bridge.sendState(bot, 'activity_done', { activity: 'smelting', reason: 'goal_reached' })
+            sendActivityDone(bot, 'smelting')
             break
         }
         if (goal.target && goal.count && _smeltedCount >= goal.count) {
             console.log(`[Smelt] 達到目標 ${goal.target} x${goal.count}，停止`)
             isSmelting = false
             _setOutcome('done', { reason: 'goal_reached', goal })
-            bridge.sendState(bot, 'activity_done', { activity: 'smelting', reason: 'goal_reached' })
+            sendActivityDone(bot, 'smelting')
             break
         }
 

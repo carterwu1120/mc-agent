@@ -1,6 +1,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { findNearestEntity, findNearestWater, findFishableWater, isWater, scanAreaMap } = require('./world')
 const bridge = require('./bridge')
+const { sendActivityDone } = bridge
 const activityStack = require('./activity')
 
 let isFishing = false
@@ -80,13 +81,13 @@ async function _loop(bot, goal = {}) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Fish] 達到時間目標 ${goal.duration}s，停止`)
             isFishing = false
-            bridge.sendState(bot, 'activity_done', { activity: 'fishing', reason: 'goal_reached' })
+            sendActivityDone(bot, 'fishing')
             break
         }
         if (goal.catches && _catches >= goal.catches) {
             console.log(`[Fish] 達到釣魚目標 ${goal.catches} 次，停止`)
             isFishing = false
-            bridge.sendState(bot, 'activity_done', { activity: 'fishing', reason: 'goal_reached' })
+            sendActivityDone(bot, 'fishing')
             break
         }
         let water = findFishableWater(bot, 16)

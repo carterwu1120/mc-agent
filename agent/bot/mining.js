@@ -3,6 +3,7 @@ const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
 const { ensureToolFor, ensurePickaxeTier, ensurePickaxe } = require('./crafting')
 const bridge = require('./bridge')
+const { sendActivityDone } = bridge
 const { isBuried } = require('./buried')
 const eating = require('./eating')
 const water = require('./water')
@@ -423,13 +424,13 @@ async function _loop(bot, goal = {}, resumePos = null) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Mine] 達到時間目標 ${goal.duration}s，停止`)
             isMining = false
-            bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached', goal_target: goal.target ?? 'general', mined_pos: bot.entity.position, mined_count: _targetCount })
+            sendActivityDone(bot, 'mining', { goal_target: goal.target ?? 'general', mined_pos: bot.entity.position })
             break
         }
         if (goal.target && goal.count && _targetCount >= goal.count) {
             console.log(`[Mine] 達到目標 ${goal.target} x${goal.count}，停止`)
             isMining = false
-            bridge.sendState(bot, 'activity_done', { activity: 'mining', reason: 'goal_reached', goal_target: goal.target ?? 'general', mined_pos: bot.entity.position, mined_count: _targetCount })
+            sendActivityDone(bot, 'mining', { goal_target: goal.target ?? 'general', mined_pos: bot.entity.position })
             break
         }
 

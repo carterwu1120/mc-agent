@@ -3,6 +3,7 @@ const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
 const { ensureAxe, ensureToolFor } = require('./crafting')
 const bridge = require('./bridge')
+const { sendActivityDone } = bridge
 const { findSurfaceSpot } = require('./surface')
 const { applyMovements, createMovements } = require('./movement_prefs')
 
@@ -149,13 +150,13 @@ async function _loop(bot, goal = {}) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Wood] 達到時間目標 ${goal.duration}s，停止`)
             isChopping = false
-            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
+            sendActivityDone(bot, 'chopping', { chop_pos: bot.entity.position })
             break
         }
         if (goal.logs && _logsCollected >= goal.logs) {
             console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
             isChopping = false
-            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
+            sendActivityDone(bot, 'chopping', { chop_pos: bot.entity.position })
             break
         }
         // 如果在地底或水中，先浮出地表再找樹
@@ -339,7 +340,7 @@ async function _loop(bot, goal = {}) {
         await _plantSapling(bot, rootPos, treeLogName)
         if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
         if (goalReached) {
-            bridge.sendState(bot, 'activity_done', { activity: 'chopping', reason: 'goal_reached', chop_pos: bot.entity.position })
+            sendActivityDone(bot, 'chopping', { chop_pos: bot.entity.position })
             break
         }
     }

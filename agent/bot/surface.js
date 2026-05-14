@@ -1,5 +1,6 @@
 const activityStack = require('./activity')
 const bridge = require('./bridge')
+const { sendActivityDone } = bridge
 const { noteTeleportLikeAction } = require('./crafting')
 const { applyMovements } = require('./movement_prefs')
 
@@ -180,7 +181,7 @@ async function _run(bot, goal = {}, token) {
 
         if (arrived && _isSurfaceLike(bot)) {
             console.log('[Surface] 已抵達地表')
-            bridge.sendState(bot, 'activity_done', { activity: 'surface', reason: 'goal_reached' })
+            sendActivityDone(bot, 'surface')
             return
         }
 

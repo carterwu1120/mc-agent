@@ -1,6 +1,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
+const { sendActivityDone } = bridge
 const { findSurfaceSpot } = require('./surface')
 const { noteTeleportLikeAction } = require('./crafting')
 
@@ -116,7 +117,7 @@ async function _loop(bot, goal) {
         if (_killCount >= maxCount) {
             console.log(`[Hunt] 已獵殺 ${_killCount} 隻，完成`)
             isHunting = false
-            bridge.sendState(bot, 'activity_done', { activity: 'hunting', goal, hunt_pos: bot.entity.position })
+            sendActivityDone(bot, 'hunting', { hunt_pos: bot.entity.position })
             break
         }
 

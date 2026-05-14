@@ -1,5 +1,5 @@
 const { WebSocketServer } = require('ws')
-const { getActivity, getStack } = require('./activity')
+const { getActivity, getStack, getTopFrame } = require('./activity')
 const { getChests } = require('./chest')
 const { getHome } = require('./home')
 const { getMode } = require('./mode')
@@ -112,4 +112,15 @@ function sendState(bot, type, extra = {}) {
     agentSocket.send(JSON.stringify(state))
 }
 
-module.exports = { init, sendState, isInitialized }
+function sendActivityDone(bot, activityName, extra = {}) {
+    const frame = getTopFrame()
+    sendState(bot, 'activity_done', {
+        activity: activityName,
+        reason: 'goal_reached',
+        goal: frame?.goal ?? {},
+        progress: frame?.progress ?? {},
+        ...extra,
+    })
+}
+
+module.exports = { init, sendState, sendActivityDone, isInitialized }
