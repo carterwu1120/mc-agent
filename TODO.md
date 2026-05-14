@@ -84,11 +84,11 @@
   - [x] stuck count API：可依 activity / reason 聚合
   - [x] success rate API：區分 task done 與 goal verified
   - [x] metrics query 補 bot_id filter / narrower query capability
-  - [~] Goal completion rate：`activity_done` 時記錄實際完成量 vs 目標量，區分「程式跑完」vs「目標達成」
+  - [x] Goal completion rate：`activity_done` 時記錄實際完成量 vs 目標量，區分「程式跑完」vs「目標達成」
     - [x] JS activity_done payload 統一帶 goal + progress（sendActivityDone helper）
     - [x] DB schema 加 goal_count / actual_count 欄位
     - [x] task_memory.done() 寫入 goal_count / actual_count
-    - [ ] metrics API：GET /metrics/goal-completion endpoint
+    - [x] metrics API：GET /metrics/goal-completion endpoint
 
 #### 1.4 Async / Deployment / Testing
 

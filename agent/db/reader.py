@@ -136,6 +136,46 @@ async def find_task(task_id: str, *, bot_id: str | None = None) -> dict | None:
     return _row_to_dict(row) if row else None
 
 
+async def query_goal_completion(
+    *,
+    bot_id: str | None = None,
+    since_hours: int = 24,
+) -> dict:
+    pool = await get_pool()
+    cutoff = _now_utc() - timedelta(hours=since_hours)
+    bot_filter = ""
+    bot_param: list = []
+    if bot_id:
+        bot_filter = " AND bot_id = $2"
+        bot_param = [bot_id]
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                COUNT(*) FILTER (WHERE goal_count IS NOT NULL)                          AS tasks_with_goal,
+                COUNT(*) FILTER (WHERE goal_count IS NOT NULL AND actual_count >= goal_count) AS fully_met,
+                COUNT(*) FILTER (WHERE goal_count IS NOT NULL AND actual_count < goal_count)  AS partial,
+                ROUND(AVG(actual_count::float / NULLIF(goal_count, 0)) * 100, 1)        AS avg_pct
+            FROM tasks
+            WHERE created_at >= $1 AND status = 'done'{bot_filter}
+            """,
+            cutoff, *bot_param,
+        )
+
+    row = rows[0] if rows else {}
+    tasks_with_goal = row.get("tasks_with_goal") or 0
+    fully_met = row.get("fully_met") or 0
+    return {
+        "since_hours": since_hours,
+        "tasks_with_goal": tasks_with_goal,
+        "fully_met": fully_met,
+        "partial": row.get("partial") or 0,
+        "fully_met_rate": round(fully_met / tasks_with_goal * 100, 1) if tasks_with_goal else None,
+        "avg_completion_pct": float(row["avg_pct"]) if row.get("avg_pct") is not None else None,
+    }
+
+
 async def query_metrics(
     *,
     bot_id: str | None = None,

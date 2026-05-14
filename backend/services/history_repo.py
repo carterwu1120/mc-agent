@@ -9,3 +9,6 @@ class HistoryRepository:
 
     async def metrics(self, since_hours: int = 24, bot_id: str | None = None) -> dict:
         return await db_reader.query_metrics(since_hours=since_hours, bot_id=bot_id)
+
+    async def goal_completion(self, since_hours: int = 24, bot_id: str | None = None) -> dict:
+        return await db_reader.query_goal_completion(since_hours=since_hours, bot_id=bot_id)

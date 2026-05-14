@@ -98,3 +98,12 @@ class LlmLatencyResponse(BaseModel):
     avg_ms: float | None = None
     p95_ms: float | None = None
     by_skill: dict[str, dict[str, Any]]
+
+
+class GoalCompletionResponse(BaseModel):
+    since_hours: int
+    tasks_with_goal: int
+    fully_met: int
+    partial: int
+    fully_met_rate: float | None = None
+    avg_completion_pct: float | None = None

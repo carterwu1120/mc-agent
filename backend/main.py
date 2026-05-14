@@ -16,6 +16,7 @@ from backend.models import (
     BotRuntimeTasksResponse,
     BotStateResponse,
     BotSummaryResponse,
+    GoalCompletionResponse,
     LlmLatencyResponse,
     PublicTaskLookupResponse,
     StuckCountResponse,
@@ -264,6 +265,21 @@ def create_app(
             "avg_ms": llm_latency.get("avg_ms"),
             "p95_ms": llm_latency.get("p95_ms"),
             "by_skill": llm_latency.get("by_skill") or {},
+        }
+
+    @app.get("/metrics/goal-completion", response_model=GoalCompletionResponse)
+    async def get_goal_completion(
+        hours: int = Query(24, ge=1, le=168),
+        bot_id: str | None = Query(None),
+    ):
+        data = await app.state.history_repo.goal_completion(since_hours=hours, bot_id=bot_id)
+        return {
+            "since_hours": hours,
+            "tasks_with_goal": data.get("tasks_with_goal", 0),
+            "fully_met": data.get("fully_met", 0),
+            "partial": data.get("partial", 0),
+            "fully_met_rate": data.get("fully_met_rate"),
+            "avg_completion_pct": data.get("avg_completion_pct"),
         }
 
     return app
