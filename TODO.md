@@ -60,9 +60,14 @@
   - [x] `GET /tasks/{task_id}` 可同時看見 queued / running / archived 狀態
   - [x] heartbeat / offline bot 狀態可從 API 查詢，不只看 log
 
-- [ ] **通用 tool acquisition policy**
+- [~] **通用 tool acquisition policy**
   - 目標：`mining` / `woodcutting` / `combat` 不各自實作 `ensurePickaxe` / `ensureAxe` / `ensureSword`
-  - [~] 共享 retry cooldown：resource fingerprint 防止 inventory 未變化時重複觸發同一 replan（`git stash`：`codex: tool_acquisition fingerprint + smelt alias canonicalization`）
+  - [x] 共享 retry cooldown：resource fingerprint 防止 inventory 未變化時重複觸發同一 replan（mining / smelting 已套用）
+  - [x] hunting `no_weapon` fallthrough fix：alternate_food suppress 不再 early return，會繼續試 wooden_sword_path
+  - [ ] hunting `no_weapon` loop 防護：suppression 設計需要 per-route fingerprint + 執行確認機制，目前暫緩
+    - 問題：`should_retry` 在 *建議* replan 時就記錄，不知道 bot 有沒有真的執行
+    - 問題：fingerprint 難以同時覆蓋所有 candidate_routes（near_trees / near_water / rod / cooked）
+    - 問題：suppressed 路線若只從 deterministic 移除，LLM prompt 裡還是看得到，仍會 loop
   - [ ] 統一 fallback：可徒手繼續的先繼續；不可徒手才升級成 replan
 
 #### 1.3 Data Layer `[Backend: SQL / Schema Design]`
