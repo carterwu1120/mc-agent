@@ -109,9 +109,9 @@
   - [x] 使用者給任務時，self_task LLM 結果被丟棄，改由 coordinator 任務接手
   - [ ] **Known concurrency issues（future work）：**
     - [ ] Chat / coordinator_interrupt 路徑尚未納入 `_planner_lock`，理論上仍有 race
-    - [ ] Lock 在 `create_task` 後即釋放，executor `_running=True` 尚未設定，存在短暫 gap
-    - [ ] WebSocket 斷線時 `_check_coordinator_queue` coroutine 未加入 `session_tasks`，不會被 cancel
-    - [ ] Coordinator task dequeue 後若因狀態衝突跳過，task 會留在 `running` 狀態（無 requeue）
+    - [x] Lock 在 `create_task` 後即釋放，executor `_running=True` 尚未設定，存在短暫 gap → `executor.claim()` 在 lock 釋放前同步設定，local `_lock_acquired` flag 防止錯誤 owner 釋放 lock
+    - [x] WebSocket 斷線時 `_check_coordinator_queue` coroutine 未加入 `session_tasks` → `_bg_tasks` set 追蹤，cancel 安全（peek 非破壞性）
+    - [x] Coordinator task dequeue 後若因狀態衝突跳過，task 會留在 `running` 狀態 → 改為 peek+claim 兩階段：peek 不消耗 task，確認能執行後才 claim；interrupt 同理；移除 requeue endpoint
 
 - [x] **Python 側 context 清理機制 v2**
   - [x] v2：craft_decision / inventory skill 統一接到共用 context builder（`build_for_skill`）

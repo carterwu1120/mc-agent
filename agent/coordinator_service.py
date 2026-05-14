@@ -127,16 +127,40 @@ async def handle_enqueue(request: web.Request) -> web.Response:
 
 
 async def handle_next(request: web.Request) -> web.Response:
+    """Peek at the next queued task without consuming it. Agent must call /claim to take ownership."""
     bot_id = request.match_info["id"]
     queue = _queues.get(bot_id)
     if queue is None:
         return _json({"task": None})
-    try:
-        task = queue.get_nowait()
-    except asyncio.QueueEmpty:
+    items = list(getattr(queue, "_queue", []))
+    if not items:
         return _json({"task": None})
-    task.status = "running"
+    task = items[0]
     return _json({"task": {"task_id": task.task_id, "commands": task.commands, "goal": task.goal}})
+
+
+async def handle_claim(request: web.Request) -> web.Response:
+    """Atomically pop the task from the queue and mark it running. Returns 409 if already claimed."""
+    bot_id = request.match_info["id"]
+    task_id = request.match_info["task_id"]
+    task = _tasks.get(task_id)
+    if task is None:
+        return _json({"error": "task not found"}, 404)
+    if task.bot_id != bot_id:
+        return _json({"error": "task bot_id mismatch"}, 400)
+    if task.status != "queued":
+        return _json({"error": f"not claimable: status={task.status!r}"}, 409)
+    queue = _queues.get(bot_id)
+    if queue is None:
+        return _json({"error": "bot not registered"}, 404)
+    # Verify it's still at the front (no await between status check and pop — asyncio single-threaded)
+    items = list(getattr(queue, "_queue", []))
+    if not items or items[0].task_id != task_id:
+        return _json({"error": "task no longer at queue front"}, 409)
+    queue.get_nowait()
+    task.status = "running"
+    print(f"[CoordinatorService] Task {task_id} claimed by {bot_id}")
+    return _json({"ok": True})
 
 
 async def handle_abort(request: web.Request) -> web.Response:
@@ -157,13 +181,27 @@ async def handle_check_abort(request: web.Request) -> web.Response:
 
 
 async def handle_peek_interrupt(request: web.Request) -> web.Response:
+    """Peek at the pending interrupt task without consuming it. Agent must call /interrupt/claim."""
     bot_id = request.match_info["id"]
     task = _interrupt_slots.get(bot_id)
     if task is None:
         return _json({"task": None})
-    _interrupt_slots[bot_id] = None  # consume
-    task.status = "running"
     return _json({"task": {"task_id": task.task_id, "commands": task.commands, "goal": task.goal}})
+
+
+async def handle_claim_interrupt(request: web.Request) -> web.Response:
+    """Atomically consume the interrupt slot and mark task running. Returns 409 if already claimed."""
+    bot_id = request.match_info["id"]
+    task_id = request.match_info["task_id"]
+    task = _interrupt_slots.get(bot_id)
+    if task is None or task.task_id != task_id:
+        return _json({"error": "interrupt task not found or superseded"}, 409)
+    if task.status != "queued":
+        return _json({"error": f"not claimable: status={task.status!r}"}, 409)
+    _interrupt_slots[bot_id] = None
+    task.status = "running"
+    print(f"[CoordinatorService] Interrupt task {task_id} claimed by {bot_id}")
+    return _json({"ok": True})
 
 
 async def handle_update(request: web.Request) -> web.Response:
@@ -178,6 +216,8 @@ async def handle_update(request: web.Request) -> web.Response:
     task.status = status
     print(f"[CoordinatorService] Task {task_id} → {status}")
     return _json({"ok": True})
+
+
 
 
 async def handle_heartbeat(request: web.Request) -> web.Response:
@@ -270,9 +310,11 @@ def create_app() -> web.Application:
     app.router.add_post("/bots/{id}/heartbeat", handle_heartbeat)
     app.router.add_post("/bots/{id}/tasks", handle_enqueue)
     app.router.add_get("/bots/{id}/tasks/next", handle_next)
+    app.router.add_post("/bots/{id}/tasks/{task_id}/claim", handle_claim)
     app.router.add_post("/bots/{id}/abort", handle_abort)
     app.router.add_get("/bots/{id}/abort", handle_check_abort)
     app.router.add_get("/bots/{id}/tasks/interrupt", handle_peek_interrupt)
+    app.router.add_post("/bots/{id}/tasks/{task_id}/claim-interrupt", handle_claim_interrupt)
     app.router.add_patch("/bots/{id}/tasks/{task_id}", handle_update)
     app.router.add_get("/internal/bots", handle_internal_bots)
     app.router.add_get("/internal/bots/{id}/tasks", handle_internal_bot_tasks)

@@ -311,6 +311,15 @@ class PlanExecutor:
         # When set, verification failures trigger LLM intervention instead of just logging.
         self._verify_failed_callback = None
 
+    def claim(self) -> None:
+        """Synchronously mark executor as busy before releasing _planner_lock.
+        Closes the gap between lock release and execute() setting _running=True."""
+        self._running = True
+
+    def unclaim(self) -> None:
+        """Undo claim() if execute() never starts (e.g. coordinator claim HTTP failure)."""
+        self._running = False
+
     def heartbeat(self) -> None:
         """Called on every tick event to confirm JS is still alive."""
         self._last_heartbeat = asyncio.get_event_loop().time()
