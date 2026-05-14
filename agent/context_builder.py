@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from datetime import datetime
 
 # How many events/failures/interrupted tasks each skill gets in its prompt.
 # Lower budget = shorter prompt = faster LLM, but less context.
@@ -11,8 +12,19 @@ SKILL_BUDGETS: dict[str, dict] = {
     "inventory":      {"events": 3, "failures": 2, "interrupted": 0},
     "tool_durability": {"events": 3, "failures": 2, "interrupted": 0},
     "respawn":        {"events": 4, "failures": 3, "interrupted": 1},
+    "craft_decision":    {"events": 3, "failures": 2, "interrupted": 0},
+    "task_arbitration":  {"events": 3, "failures": 2, "interrupted": 1},
 }
 _DEFAULT_BUDGET: dict = {"events": 4, "failures": 3, "interrupted": 1}
+
+
+def _parse_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def _fmt_pos(pos: dict | None) -> str:
@@ -32,13 +44,14 @@ def _trim_text(value, max_len: int = 120) -> str:
 
 
 def _collapse_events(events: list[dict], limit: int) -> list[dict]:
-    collapsed: list[dict] = []
+    # Pass 1: fold consecutive duplicates
+    pass1: list[dict] = []
     for item in events or []:
-        if len(collapsed) >= limit:
+        if len(pass1) >= limit * 2:
             break
         current = dict(item or {})
-        if collapsed:
-            prev = collapsed[-1]
+        if pass1:
+            prev = pass1[-1]
             same_signature = (
                 prev.get("type") == current.get("type")
                 and prev.get("goal") == current.get("goal")
@@ -51,8 +64,26 @@ def _collapse_events(events: list[dict], limit: int) -> list[dict]:
                 continue
         current["count"] = 1
         current["first_at"] = current.get("at")
-        collapsed.append(current)
-    return collapsed
+        pass1.append(current)
+
+    # Pass 2: fold same (type, reason) within a 10-minute window — keep latest, sum counts
+    _WINDOW_SEC = 600
+    seen: dict[tuple, int] = {}  # key → index in result
+    result: list[dict] = []
+    for item in pass1:
+        key = (item.get("type"), item.get("reason"))
+        at = _parse_at(item.get("at"))
+        if key in seen:
+            prev = result[seen[key]]
+            prev_at = _parse_at(prev.get("at"))
+            if prev_at and at and abs((prev_at - at).total_seconds()) <= _WINDOW_SEC:
+                prev["count"] = int(prev.get("count", 1)) + int(item.get("count", 1))
+                continue
+        seen[key] = len(result)
+        result.append(item)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def build_recent_events_section(events: list[dict], limit: int = 6) -> str:

@@ -1,6 +1,8 @@
 import json
 import re
+from agent import task_memory
 from agent.brain import LLMClient
+from agent.context_builder import build_for_skill
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json
 
@@ -47,10 +49,16 @@ def _extract_first_json_object(text: str) -> dict:
 
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     message = state.get("message", "")
+    task_history = build_for_skill(
+        "task_arbitration",
+        task_memory.recent_events(),
+        task_memory.recent_failures(),
+    )
     prompt = (
         f"玩家剛剛提出新任務／新要求：{message}\n\n"
         f"請根據以下狀態摘要，判斷要 interrupt、queue 還是 defer。\n\n"
         f"{summary_json(state)}"
+        f"{task_history}"
     )
 
     response = None

@@ -1,6 +1,8 @@
 import json
 import re
+from agent import task_memory
 from agent.brain import LLMClient
+from agent.context_builder import build_for_skill
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json
 
@@ -81,11 +83,17 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     if reason == "material_missing" or not options:
         missing = state.get("missing_materials", [])
         missing_lines = "\n".join(f"- {m['name']} x{m['count']}" for m in missing) or "（未指定）"
+        task_history = build_for_skill(
+            "craft_decision",
+            task_memory.recent_events(),
+            task_memory.recent_failures(),
+        )
         prompt = (
             f"機器人想合成「{goal}」，但缺少以下材料：\n{missing_lines}\n\n"
             f"當前狀態：活動={activity}，位置 Y={y}，血量={health}/20，飢餓={food}/20\n\n"
             f"背包內容：\n{inv_summary}\n\n"
             f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
+            f"{task_history}"
             f"請根據缺少的材料類型，決定下一步行動。"
         )
         response = None
@@ -121,6 +129,11 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         if smeltable_lines else "（無可燒製原料）"
     )
 
+    task_history = build_for_skill(
+        "craft_decision",
+        task_memory.recent_events(),
+        task_memory.recent_failures(),
+    )
     prompt = (
         f"機器人需要合成：{goal}\n"
         f"目前可合成的選項：{', '.join(options)}\n\n"
@@ -128,6 +141,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"背包內容：\n{inv_summary}\n\n"
         f"{smeltable_section}\n\n"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
+        f"{task_history}"
         f"請從選項中選出最適合的一個，必要時考慮是否先燒製原料能讓合成更好的工具。"
     )
 

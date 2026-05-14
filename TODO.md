@@ -113,9 +113,11 @@
     - [ ] WebSocket 斷線時 `_check_coordinator_queue` coroutine 未加入 `session_tasks`，不會被 cancel
     - [ ] Coordinator task dequeue 後若因狀態衝突跳過，task 會留在 `running` 狀態（無 requeue）
 
-- [ ] **Python 側 context 清理機制 v2**
-  - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder
-  - [ ] v2：加入重複事件折疊、按 skill 類型設定 context budget
+- [x] **Python 側 context 清理機制 v2**
+  - [x] v2：craft_decision / inventory skill 統一接到共用 context builder（`build_for_skill`）
+  - [x] v2：加入重複事件折疊（consecutive + 10 min time-window）、按 skill 類型設定 context budget
+  - [x] v2：task_arbitration skill 統一接到共用 context builder
+  - [ ] v2：verify_failure / 其他新增 skill 加入時也需接上 context builder
 
 - [~] **Replay testing（regression tests）** `[Backend: Testing]`
   - [ ] 從 production stuck state 建 unit test fixtures（state dict → expected commands）
