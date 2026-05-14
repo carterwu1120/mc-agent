@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     steps          JSONB       NOT NULL DEFAULT '[]',
     status         TEXT        NOT NULL,
     goal_verified  BOOLEAN,
+    goal_count     INTEGER,
+    actual_count   INTEGER,
     interrupted_by TEXT,
     created_at     TIMESTAMPTZ NOT NULL,
     finished_at    TIMESTAMPTZ,
@@ -65,6 +67,13 @@ CREATE INDEX IF NOT EXISTS idx_logs_time     ON logs(time DESC);
 """
 
 
+_MIGRATIONS_SQL = """
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_count   INTEGER;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_count INTEGER;
+"""
+
+
 async def init_schema(pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
+        await conn.execute(_MIGRATIONS_SQL)

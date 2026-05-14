@@ -34,8 +34,8 @@ async def archive_task(task: dict, bot_id: str) -> None:
             """
             INSERT INTO tasks
                 (id, bot_id, goal, final_goal, commands, steps, status,
-                 goal_verified, interrupted_by, created_at, finished_at)
-            VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11)
+                 goal_verified, goal_count, actual_count, interrupted_by, created_at, finished_at)
+            VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)
             ON CONFLICT (id, bot_id) DO UPDATE SET
                 goal           = EXCLUDED.goal,
                 final_goal     = EXCLUDED.final_goal,
@@ -43,6 +43,8 @@ async def archive_task(task: dict, bot_id: str) -> None:
                 steps          = EXCLUDED.steps,
                 status         = EXCLUDED.status,
                 goal_verified  = EXCLUDED.goal_verified,
+                goal_count     = EXCLUDED.goal_count,
+                actual_count   = EXCLUDED.actual_count,
                 interrupted_by = EXCLUDED.interrupted_by,
                 finished_at    = EXCLUDED.finished_at
             """,
@@ -54,6 +56,8 @@ async def archive_task(task: dict, bot_id: str) -> None:
             _as_jsonb(task.get("steps") or []),
             task.get("status") or "unknown",
             None if goal_verified is None else bool(goal_verified),
+            task.get("goal_count"),
+            task.get("actual_count"),
             task.get("interruptedBy"),
             _parse_ts(task.get("createdAt")),
             _now_utc(),

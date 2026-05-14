@@ -130,7 +130,19 @@ async def _on_done(_state: dict, _llm: LLMClient):
     if _state.get('type') == 'activity_done' and not executor.is_running():
         task = task_memory.load()
         if task and task.get('status') == 'running':
-            task_memory.done()
+            goal_data = _state.get('goal') or {}
+            progress_data = _state.get('progress') or {}
+            goal_count = None
+            actual_count = None
+            for key in ('count', 'logs', 'catches'):
+                if goal_data.get(key) is not None:
+                    goal_count = int(goal_data[key])
+                    break
+            for key in ('count', 'logs', 'catches', 'smelted'):
+                if progress_data.get(key) is not None:
+                    actual_count = int(progress_data[key])
+                    break
+            task_memory.done(goal_count=goal_count, actual_count=actual_count)
         set_task_id(None)
     _record_to_exploration_memory(_state)
     return None

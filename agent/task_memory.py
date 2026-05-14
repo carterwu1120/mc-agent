@@ -279,11 +279,15 @@ def interrupt(reason: str) -> None:
     history_db.archive_task(dict(t))
 
 
-def done(goal_verified: bool = True) -> None:
+def done(goal_verified: bool = True, goal_count: int | None = None, actual_count: int | None = None) -> None:
     t = _load_raw()
     if t:
         t["status"] = "done"
         t["goalVerified"] = goal_verified
+        if goal_count is not None:
+            t["goal_count"] = goal_count
+        if actual_count is not None:
+            t["actual_count"] = actual_count
         _write(t)
         history_db.archive_task(dict(t))
 
