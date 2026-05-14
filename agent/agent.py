@@ -25,6 +25,7 @@ from agent.skills import tool_durability as tool_durability_skill
 from agent.executor import PlanExecutor
 from agent import task_memory
 from agent import exploration_memory
+from agent import history_db
 from agent import dashboard as _dashboard
 
 load_dotenv()
@@ -492,6 +493,16 @@ def _extract_path_meta(result: list[dict]) -> tuple[str | None, int | None]:
     return None, None
 
 
+def _summarize_result(result) -> list | None:
+    if not result:
+        return None
+    actions = result if isinstance(result, list) else [result]
+    return [
+        {k: v for k, v in a.items() if k in ("action", "command", "commands", "args", "text")}
+        for a in actions if isinstance(a, dict)
+    ] or None
+
+
 def _sync_task_context(state: dict) -> None:
     task = task_memory.load()
     if not task or task.get("status") not in ("running", "interrupted"):
@@ -921,6 +932,20 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             })
             state["recent_stuck"] = list(_recent_stuck_events)
             executor.notify_stuck()
+            task_memory.record_event(
+                "activity_stuck",
+                reason=state.get("reason"),
+                command=(state.get("plan_context") or {}).get("current_cmd"),
+                step=(state.get("plan_context") or {}).get("current_step"),
+                details={
+                    "activity": state.get("activity_name", state.get("activity")),
+                    "detail": state.get("detail"),
+                    "watchdog": state.get("watchdog", False),
+                    "suggested_actions": state.get("suggested_actions"),
+                    "progress": state.get("progress"),
+                },
+                db_only=True,
+            )
 
         skill_name = handler.__module__.split('.')[-1]
         if skill_name not in _NO_LLM_HANDLERS:
@@ -945,13 +970,14 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                         'skill': 'activity_stuck',
                         'latency_ms': path_latency_ms,
                         'activity': state.get('activity'),
+                        'llm_response': _summarize_result(result),
                     },
                     db_only=True,
                 )
         if skill_name not in _NO_LLM_HANDLERS and skill_name not in _SELF_REPORTING_LLM:
             task_memory.record_event(
                 'llm_call',
-                details={'skill': skill_name, 'latency_ms': latency_ms},
+                details={'skill': skill_name, 'latency_ms': latency_ms, 'llm_response': _summarize_result(result)},
                 db_only=True,
             )
         if not result:
@@ -1169,9 +1195,8 @@ async def run():
 
     # 啟動時把任何殘留的 running 任務標記為 interrupted
     # Initialize PostgreSQL if DATABASE_URL is set
-    from agent import history_db as _history_db
-    if _history_db.is_available():
-        await _history_db.init_db()
+    if history_db.is_available():
+        await history_db.init_db()
         print(f"[Agent] PostgreSQL schema ready")
 
     # （表示上次 agent 異常終止，下次說「繼續」可以接回）
@@ -1250,6 +1275,18 @@ async def run():
                         continue
 
                     handler = HANDLERS.get(event_type)
+                    if event_type in {"task_started", "task_stopped", "activity_done", "player_died", "player_respawned"}:
+                        _active = task_memory.load()
+                        _active_id = _active.get("id") if _active and _active.get("status") == "running" else None
+                        history_db.write_event(
+                            {
+                                "type": event_type,
+                                "goal": (_active or {}).get("goal"),
+                                "details": {k: state.get(k) for k in ("activity", "goal", "progress", "cause", "reason") if state.get(k)},
+                                "at": None,
+                            },
+                            task_id=_active_id,
+                        )
                     if not handler:
                         continue
                     if event_type in _thinking:

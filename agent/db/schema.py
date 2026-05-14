@@ -70,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_time     ON logs(time DESC);
 _MIGRATIONS_SQL = """
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_count   INTEGER;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_count INTEGER;
+CREATE INDEX IF NOT EXISTS idx_events_details_activity ON events ((details->>'activity'));
 """
 
 

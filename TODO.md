@@ -323,6 +323,13 @@
   - Replay testing：可用真實 stuck state 對 deterministic_shortcut 做 regression test
   - README 補 Evaluation section（SQL queries）
 
+- [x] **Observability v1: agent behavior recording** `[Backend: Observability]`
+  - `agent.py`：`activity_stuck` 事件本身在 handler 前寫入 DB（activity, reason, detail, watchdog, progress）
+  - `agent.py`：`llm_call` event details 補上 `llm_response`（action/command/commands/text）
+  - `agent.py`：JS lifecycle events（task_started/stopped, activity_done, player_died/respawned）寫入 DB，task_id 只在有 running task 時綁定，否則為 NULL
+  - `executor.py`：`step_started` / `step_done` / `step_timeout` 寫入 DB（僅 preserve_task=False）
+  - `db/schema.py`：新增 `idx_events_details_activity` index
+
 - [x] **Deterministic rules 下沉到系統層**
   - `_enforce_pending_steps`、`_filter_done_steps_from_replan`、`_deduplicate_adjacent_cmds`、`_block_invalid_skip`
 

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from agent import task_memory
 from agent.logger import get_task_id
 from agent.plan_utils import normalize_commands
@@ -377,6 +378,9 @@ class PlanExecutor:
             self._before_state = dict(self._latest_state)
             self._after_state = {}
             print(f'[Executor] 執行步驟 {i}: {cmd_str}')
+            step_t0 = time.monotonic()
+            if not preserve_task:
+                task_memory.record_event("step_started", command=cmd_str, step=i, db_only=True)
             if self._pending_stopall:
                 self._pending_stopall = False
                 print('[Executor] 重新規劃前先送 stopall 清空 JS activity stack，等待 action_done')
@@ -416,6 +420,8 @@ class PlanExecutor:
                         print(f'[Executor] JS 無回應超過 {HEARTBEAT_TIMEOUT}s，中止計畫')
                         done_task.cancel()
                         stuck_task.cancel()
+                        if not preserve_task:
+                            task_memory.record_event("step_timeout", command=cmd_str, step=i, db_only=True)
                         if not preserve_task:
                             task_memory.mark_step_failed(i, "timeout")
                         self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "timeout"})
@@ -516,6 +522,8 @@ class PlanExecutor:
                         print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
                     if not preserve_task:
                         task_memory.mark_step_done(i)
+                        task_memory.record_event("step_done", command=cmd_str, step=i,
+                            details={"duration_ms": int((time.monotonic() - step_t0) * 1000)}, db_only=True)
                     self._step_results.append({"cmd": cmd_str, "status": "done", "warning": warning})
                 else:
                     # Normal completion — verify before marking done.
@@ -537,6 +545,8 @@ class PlanExecutor:
                         print(f"[Executor] ⚠ 驗證警告 step {i} ({cmd_str}): {warning}")
                     if not preserve_task:
                         task_memory.mark_step_done(i)
+                        task_memory.record_event("step_done", command=cmd_str, step=i,
+                            details={"duration_ms": int((time.monotonic() - step_t0) * 1000)}, db_only=True)
                     self._step_results.append({"cmd": cmd_str, "status": "done", "warning": warning})
 
             except asyncio.CancelledError:
