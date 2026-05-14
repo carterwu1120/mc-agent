@@ -92,7 +92,7 @@
   - [x] `backend` 服務獨立於 `agent0`
   - [x] backend 與 coordinator / agents 的 network / volume 邊界明確化
   - [x] 保持 MVP 為 1 到 2 個 long-running bots，不做動態 spawn container
-  - [ ] compose 補 service healthcheck（backend `/health` / `/ready`）
+  - [x] compose 補 service healthcheck（backend `/health` / `/ready`）
 
 - [ ] **Python 側 context 清理機制 v2**
   - [ ] v2：activity_stuck / verify_failure / 其他 skill 也統一接到共用 context builder

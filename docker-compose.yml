@@ -61,8 +61,16 @@ services:
       - ./agent/logs:/app/agent/logs
       - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
     depends_on:
-      - bot0
-      - postgres
+      bot0:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3010/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     ports:
       - "3002:3002"
       - "3010:3010"
@@ -127,8 +135,10 @@ services:
     volumes:
       - ./agent/data:/app/agent/data:ro
     depends_on:
-      - agent0
-      - postgres
+      agent0:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"
     healthcheck:

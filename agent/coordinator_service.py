@@ -259,8 +259,13 @@ async def _monitor_bot_health() -> None:
             _bot_last_seen[bot_id] = now  # reset to suppress log spam until re-register
 
 
+async def handle_health(request: web.Request) -> web.Response:
+    return _json({"ok": True, "service": "coordinator"}, 200)
+
+
 def create_app() -> web.Application:
     app = web.Application()
+    app.router.add_get("/health", handle_health)
     app.router.add_post("/bots/register", handle_register)
     app.router.add_post("/bots/{id}/heartbeat", handle_heartbeat)
     app.router.add_post("/bots/{id}/tasks", handle_enqueue)
