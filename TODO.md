@@ -200,9 +200,10 @@
   - [ ] JS bot → Python agent → coordinator / backend 的 request chain 可串起來
   - [ ] 評估 OpenTelemetry 或至少自定 structured trace spans
 
-- [ ] **Observability v2**
+- [~] **Observability v2**
   - [ ] backend metrics：request latency、error rate、queue depth、bot heartbeat freshness
-  - [ ] workflow metrics：plan length、replan count、verify fail count、interrupt count
+  - [x] workflow metrics：replan count（by reason/activity/path）、step duration p95、stuck detail（watchdog vs activity-specific）
+    - `GET /metrics/replan-count`、`GET /metrics/step-duration`、`GET /metrics/stuck-detail`
   - [ ] dashboard / API 顯示 bot health timeline 與 task timeline
 
 #### 3.2 Workflow Orchestration

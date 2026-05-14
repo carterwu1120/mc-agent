@@ -260,3 +260,140 @@ async def query_metrics(
             "by_skill": by_skill,
         },
     }
+
+
+async def query_replan_metrics(
+    *,
+    bot_id: str | None = None,
+    since_hours: int = 24,
+) -> dict:
+    pool = await get_pool()
+    cutoff = _now_utc() - timedelta(hours=since_hours)
+    bot_filter = ""
+    bot_param: list = []
+    if bot_id:
+        bot_filter = " AND bot_id = $2"
+        bot_param = [bot_id]
+
+    async with pool.acquire() as conn:
+        total_row = await conn.fetchrow(
+            f"SELECT COUNT(*) AS n FROM events WHERE event_type = 'replan' AND at >= $1{bot_filter}",
+            cutoff, *bot_param,
+        )
+        by_reason_rows = await conn.fetch(
+            f"SELECT reason, COUNT(*) AS n FROM events"
+            f" WHERE event_type = 'replan' AND at >= $1 AND reason IS NOT NULL{bot_filter}"
+            f" GROUP BY reason ORDER BY n DESC",
+            cutoff, *bot_param,
+        )
+        by_activity_rows = await conn.fetch(
+            f"SELECT details->>'activity' AS activity, COUNT(*) AS n FROM events"
+            f" WHERE event_type = 'replan' AND at >= $1 AND details->>'activity' IS NOT NULL{bot_filter}"
+            f" GROUP BY 1 ORDER BY n DESC",
+            cutoff, *bot_param,
+        )
+        by_path_rows = await conn.fetch(
+            f"SELECT details->>'path_taken' AS path, COUNT(*) AS n FROM events"
+            f" WHERE event_type = 'replan' AND at >= $1{bot_filter}"
+            f" GROUP BY 1",
+            cutoff, *bot_param,
+        )
+
+    return {
+        "since_hours": since_hours,
+        "total": total_row["n"] if total_row else 0,
+        "by_reason": {r["reason"]: r["n"] for r in by_reason_rows},
+        "by_activity": {r["activity"]: r["n"] for r in by_activity_rows},
+        "by_path": {(r["path"] or "unknown"): r["n"] for r in by_path_rows},
+    }
+
+
+async def query_step_duration_metrics(
+    *,
+    bot_id: str | None = None,
+    since_hours: int = 24,
+) -> dict:
+    pool = await get_pool()
+    cutoff = _now_utc() - timedelta(hours=since_hours)
+    bot_filter = ""
+    bot_param: list = []
+    if bot_id:
+        bot_filter = " AND bot_id = $2"
+        bot_param = [bot_id]
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT command,"
+            f"  COUNT(*) AS n,"
+            f"  ROUND(AVG((details->>'duration_ms')::float)) AS avg_ms,"
+            f"  ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP"
+            f"    (ORDER BY (details->>'duration_ms')::float)::numeric, 0) AS p95_ms"
+            f" FROM events"
+            f" WHERE event_type = 'step_done' AND at >= $1"
+            f"   AND details->>'duration_ms' IS NOT NULL{bot_filter}"
+            f" GROUP BY command ORDER BY avg_ms DESC NULLS LAST",
+            cutoff, *bot_param,
+        )
+        timeout_rows = await conn.fetch(
+            f"SELECT command, COUNT(*) AS n FROM events"
+            f" WHERE event_type = 'step_timeout' AND at >= $1{bot_filter}"
+            f" GROUP BY command ORDER BY n DESC",
+            cutoff, *bot_param,
+        )
+
+    by_command = {}
+    for row in rows:
+        cmd = row["command"] or "unknown"
+        by_command[cmd] = {
+            "count": row["n"],
+            "avg_ms": float(row["avg_ms"]) if row["avg_ms"] is not None else None,
+            "p95_ms": float(row["p95_ms"]) if row["p95_ms"] is not None else None,
+        }
+
+    return {
+        "since_hours": since_hours,
+        "by_command": by_command,
+        "timeouts": {r["command"]: r["n"] for r in timeout_rows},
+    }
+
+
+async def query_stuck_detail_metrics(
+    *,
+    bot_id: str | None = None,
+    since_hours: int = 24,
+) -> dict:
+    pool = await get_pool()
+    cutoff = _now_utc() - timedelta(hours=since_hours)
+    bot_filter = ""
+    bot_param: list = []
+    if bot_id:
+        bot_filter = " AND bot_id = $2"
+        bot_param = [bot_id]
+
+    async with pool.acquire() as conn:
+        total_row = await conn.fetchrow(
+            f"SELECT COUNT(*) AS n FROM events WHERE event_type = 'activity_stuck' AND at >= $1{bot_filter}",
+            cutoff, *bot_param,
+        )
+        by_activity_reason_rows = await conn.fetch(
+            f"SELECT details->>'activity' AS activity, reason, COUNT(*) AS n FROM events"
+            f" WHERE event_type = 'activity_stuck' AND at >= $1{bot_filter}"
+            f" GROUP BY 1, 2 ORDER BY n DESC LIMIT 20",
+            cutoff, *bot_param,
+        )
+        watchdog_row = await conn.fetchrow(
+            f"SELECT COUNT(*) AS n FROM events"
+            f" WHERE event_type = 'activity_stuck' AND at >= $1"
+            f"   AND (details->>'watchdog')::boolean = true{bot_filter}",
+            cutoff, *bot_param,
+        )
+
+    return {
+        "since_hours": since_hours,
+        "total": total_row["n"] if total_row else 0,
+        "watchdog_triggered": watchdog_row["n"] if watchdog_row else 0,
+        "by_activity_reason": [
+            {"activity": r["activity"], "reason": r["reason"], "count": r["n"]}
+            for r in by_activity_reason_rows
+        ],
+    }

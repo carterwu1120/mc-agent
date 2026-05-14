@@ -19,7 +19,10 @@ from backend.models import (
     GoalCompletionResponse,
     LlmLatencyResponse,
     PublicTaskLookupResponse,
+    ReplanMetricsResponse,
+    StepDurationResponse,
     StuckCountResponse,
+    StuckDetailResponse,
     SubmitTaskRequest,
     SubmitTaskResponse,
     SuccessRateResponse,
@@ -280,6 +283,45 @@ def create_app(
             "partial": data.get("partial", 0),
             "fully_met_rate": data.get("fully_met_rate"),
             "avg_completion_pct": data.get("avg_completion_pct"),
+        }
+
+    @app.get("/metrics/replan-count", response_model=ReplanMetricsResponse)
+    async def get_replan_count(
+        hours: int = Query(24, ge=1, le=168),
+        bot_id: str | None = Query(None),
+    ):
+        data = await app.state.history_repo.replan_metrics(since_hours=hours, bot_id=bot_id)
+        return {
+            "since_hours": hours,
+            "total": data.get("total", 0),
+            "by_reason": data.get("by_reason") or {},
+            "by_activity": data.get("by_activity") or {},
+            "by_path": data.get("by_path") or {},
+        }
+
+    @app.get("/metrics/step-duration", response_model=StepDurationResponse)
+    async def get_step_duration(
+        hours: int = Query(24, ge=1, le=168),
+        bot_id: str | None = Query(None),
+    ):
+        data = await app.state.history_repo.step_duration_metrics(since_hours=hours, bot_id=bot_id)
+        return {
+            "since_hours": hours,
+            "by_command": data.get("by_command") or {},
+            "timeouts": data.get("timeouts") or {},
+        }
+
+    @app.get("/metrics/stuck-detail", response_model=StuckDetailResponse)
+    async def get_stuck_detail(
+        hours: int = Query(24, ge=1, le=168),
+        bot_id: str | None = Query(None),
+    ):
+        data = await app.state.history_repo.stuck_detail_metrics(since_hours=hours, bot_id=bot_id)
+        return {
+            "since_hours": hours,
+            "total": data.get("total", 0),
+            "watchdog_triggered": data.get("watchdog_triggered", 0),
+            "by_activity_reason": data.get("by_activity_reason") or [],
         }
 
     return app

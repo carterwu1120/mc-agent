@@ -107,3 +107,36 @@ class GoalCompletionResponse(BaseModel):
     partial: int
     fully_met_rate: float | None = None
     avg_completion_pct: float | None = None
+
+
+class ReplanMetricsResponse(BaseModel):
+    since_hours: int
+    total: int
+    by_reason: dict[str, int]
+    by_activity: dict[str, int]
+    by_path: dict[str, int]
+
+
+class StepDurationEntry(BaseModel):
+    count: int
+    avg_ms: float | None = None
+    p95_ms: float | None = None
+
+
+class StepDurationResponse(BaseModel):
+    since_hours: int
+    by_command: dict[str, StepDurationEntry]
+    timeouts: dict[str, int]
+
+
+class StuckDetailEntry(BaseModel):
+    activity: str | None
+    reason: str | None
+    count: int
+
+
+class StuckDetailResponse(BaseModel):
+    since_hours: int
+    total: int
+    watchdog_triggered: int
+    by_activity_reason: list[StuckDetailEntry]
