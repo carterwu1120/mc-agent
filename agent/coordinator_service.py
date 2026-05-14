@@ -204,6 +204,25 @@ async def handle_claim_interrupt(request: web.Request) -> web.Response:
     return _json({"ok": True})
 
 
+async def handle_release(request: web.Request) -> web.Response:
+    """Return a claimed task back to the queue so it can be retried.
+    Called by the agent when a post-claim local failure prevents the task from running."""
+    bot_id = request.match_info["id"]
+    task_id = request.match_info["task_id"]
+    task = _tasks.get(task_id)
+    if task is None or task.bot_id != bot_id:
+        return _json({"error": "task not found"}, 404)
+    if task.status != "running":
+        return _json({"error": f"not releasable: status={task.status!r}"}, 409)
+    queue = _queues.get(bot_id)
+    if queue is None:
+        return _json({"error": "bot not registered"}, 404)
+    task.status = "queued"
+    await queue.put(task)
+    print(f"[CoordinatorService] Task {task_id} released back to queue by {bot_id}")
+    return _json({"ok": True})
+
+
 async def handle_update(request: web.Request) -> web.Response:
     task_id = request.match_info["task_id"]
     task = _tasks.get(task_id)
@@ -316,6 +335,7 @@ def create_app() -> web.Application:
     app.router.add_get("/bots/{id}/tasks/interrupt", handle_peek_interrupt)
     app.router.add_post("/bots/{id}/tasks/{task_id}/claim-interrupt", handle_claim_interrupt)
     app.router.add_patch("/bots/{id}/tasks/{task_id}", handle_update)
+    app.router.add_post("/bots/{id}/tasks/{task_id}/release", handle_release)
     app.router.add_get("/internal/bots", handle_internal_bots)
     app.router.add_get("/internal/bots/{id}/tasks", handle_internal_bot_tasks)
     app.router.add_get("/internal/tasks/{task_id}", handle_internal_task)

@@ -783,24 +783,101 @@ async def _run_coordinator_task(envelope: dict, state: dict, ws) -> bool:
     return True
 
 
+async def _check_coordinator_abort(state: dict, ws) -> None:
+    """Lightweight abort check — always runs on tick, independent of queue poll."""
+    try:
+        async with aiohttp.ClientSession() as s:
+            resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/abort")
+            data = await resp.json()
+        if data.get("abort"):
+            print("[Agent] coordinator abort: 強制停止所有任務")
+            await _apply_manual_abort(state, ws)
+    except Exception as e:
+        print(f"[Agent] coordinator abort check 失敗: {e}")
+
+
+async def _planner_transition(
+    *,
+    state: dict,
+    ws,
+    launch_fn,
+    remote_claim_fn=None,
+    remote_release_fn=None,
+    preempt_fn=None,
+    preempt_self_task: bool = False,
+    already_locked: bool = False,
+) -> bool:
+    """Unified plan ownership transition.
+
+    All paths that launch, replace, or resume a plan call this function.
+    Sequence: acquire lock → optional remote claim → optional preempt → executor.claim()
+              → launch_fn() → on exception: unclaim + release remote task.
+
+    Args:
+        launch_fn: async () -> bool — launches plan, returns True if started
+        remote_claim_fn: async () -> bool — True=claimed, False=skip (e.g. 409)
+        remote_release_fn: async () -> None — releases remote task on local failure
+        preempt_fn: async () -> None — aborts local work, called after remote claim
+        preempt_self_task: discard "tick" from _thinking so self_task LLM drops its result
+        already_locked: True if caller already holds _planner_lock (tick path)
+    """
+    _acquired_here = False
+    try:
+        if preempt_self_task:
+            _thinking.discard("tick")
+
+        if not already_locked:
+            if _planner_lock is None or _planner_lock.locked():
+                return False
+            await _planner_lock.acquire()
+            _acquired_here = True
+
+        # Re-check after lock (state may have changed while waiting)
+        if not already_locked and executor.is_running() and not preempt_self_task:
+            return False
+
+        if remote_claim_fn is not None:
+            ok = await remote_claim_fn()
+            if not ok:
+                return False
+
+        if preempt_fn is not None:
+            await preempt_fn()
+
+        executor.claim()
+        if _acquired_here:
+            _acquired_here = False
+            _planner_lock.release()
+
+        try:
+            launched = await launch_fn()
+            if not launched:
+                executor.unclaim()
+                if remote_release_fn:
+                    await remote_release_fn()
+            return bool(launched)
+        except Exception:
+            executor.unclaim()
+            if remote_release_fn:
+                await remote_release_fn()
+            raise
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print(f"[Agent] _planner_transition 失敗: {e}")
+        return False
+    finally:
+        if _acquired_here and _planner_lock is not None and _planner_lock.locked():
+            _planner_lock.release()
+
+
 async def _coordinator_poll(state: dict, ws) -> None:
     """Single serialized coordinator interaction per tick.
-    Covers abort check, interrupt slot, and queue — in priority order.
+    Covers interrupt slot and queue — in priority order. Abort is handled separately.
     At most one instance runs at a time; ticks skip spawning if previous poll is still in-flight."""
     global _coordinator_poll_running
-    _lock_acquired = False
     try:
-        # Phase 1: Abort check
-        try:
-            async with aiohttp.ClientSession() as s:
-                abort_resp = await s.get(f"{COORDINATOR_URL}/bots/{BOT_ID}/abort")
-                abort_data = await abort_resp.json()
-            if abort_data.get("abort"):
-                print("[Agent] coordinator abort: 強制停止所有任務")
-                await _apply_manual_abort(state, ws)
-                return
-        except Exception as e:
-            print(f"[Agent] coordinator abort check 失敗: {e}")
 
         # Phase 2: Interrupt slot (no lock — can preempt self_task)
         try:
@@ -824,33 +901,45 @@ async def _coordinator_poll(state: dict, ws) -> None:
                     should_accept = True  # bot idle — always accept coordinator interrupt work
 
                 if should_accept:
-                    # Claim FIRST — before touching any local state
-                    async with aiohttp.ClientSession() as s:
-                        claim_resp = await s.post(
-                            f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{task_id}/claim-interrupt"
-                        )
-                    if claim_resp.status == 409:
-                        print(f"[Agent] coordinator interrupt: task {task_id} already claimed, skipping")
-                        return
-                    claim_resp.raise_for_status()
+                    async def _interrupt_remote_claim(
+                        _tid=task_id,
+                    ) -> bool:
+                        async with aiohttp.ClientSession() as s:
+                            r = await s.post(
+                                f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_tid}/claim-interrupt"
+                            )
+                        if r.status == 409:
+                            print(f"[Agent] coordinator interrupt: task {_tid} already claimed, skipping")
+                            return False
+                        r.raise_for_status()
+                        return True
 
-                    # Claim succeeded — NOW preempt local work
-                    if executor.is_running():
-                        print(f"[Agent] coordinator interrupt: 中斷 self_task，切換至: {goal}")
-                        executor.abort(preserve_task=False, reason="coordinator_interrupt")
-                    else:
-                        stop_cmd = _STOP_COMMAND_FOR_ACTIVITY.get(state.get("activity"))
-                        if stop_cmd:
-                            await ws.send(json.dumps({"command": stop_cmd}))
+                    async def _interrupt_preempt(_goal=goal) -> None:
+                        if executor.is_running():
+                            print(f"[Agent] coordinator interrupt: 中斷 self_task，切換至: {_goal}")
+                            executor.abort(preserve_task=False, reason="coordinator_interrupt")
+                        else:
+                            stop_cmd = _STOP_COMMAND_FOR_ACTIVITY.get(state.get("activity"))
+                            if stop_cmd:
+                                await ws.send(json.dumps({"command": stop_cmd}))
 
-                    executor.claim()
-                    try:
-                        launched = await _run_coordinator_task(envelope, state, ws)
-                        if not launched:
-                            executor.unclaim()
-                    except Exception:
-                        executor.unclaim()
-                        raise
+                    async def _interrupt_release(_tid=task_id) -> None:
+                        try:
+                            async with aiohttp.ClientSession() as s:
+                                await s.post(
+                                    f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_tid}/release"
+                                )
+                        except Exception as e:
+                            print(f"[Agent] coordinator interrupt release 失敗: {e}")
+
+                    await _planner_transition(
+                        state=state, ws=ws,
+                        launch_fn=lambda: _run_coordinator_task(envelope, state, ws),
+                        remote_claim_fn=_interrupt_remote_claim,
+                        remote_release_fn=_interrupt_release,
+                        preempt_fn=_interrupt_preempt,
+                        preempt_self_task=True,
+                    )
                     return
                 elif envelope and not should_accept:
                     print(f"[Agent] coordinator interrupt: source={current_source}，拒絕中斷，task stays in slot")
@@ -858,16 +947,11 @@ async def _coordinator_poll(state: dict, ws) -> None:
         except Exception as e:
             print(f"[Agent] coordinator interrupt poll 失敗: {e}")
 
-        # Phase 3: Queue (needs _planner_lock — bot must be idle)
-        if _planner_lock is None or _planner_lock.locked():
-            return
+        # Phase 3: Queue (bot must be idle before we even try)
         if executor.is_running():
             return
         if _latest_state.get("activity", "idle") != "idle":
             return
-
-        await _planner_lock.acquire()
-        _lock_acquired = True
 
         try:
             async with aiohttp.ClientSession() as s:
@@ -878,50 +962,43 @@ async def _coordinator_poll(state: dict, ws) -> None:
                 return
 
             task_id = envelope.get("task_id")
+            envelope_holder: list = [envelope]  # mutable ref for closures below
 
-            # Remote claim FIRST — before touching any local state
-            async with aiohttp.ClientSession() as s:
-                claim_resp = await s.post(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{task_id}/claim")
-            if claim_resp.status == 409:
-                print(f"[Agent] coordinator queue: task {task_id} already claimed, skipping")
-                return
-            claim_resp.raise_for_status()
-
-            # Claim succeeded — NOW check and preempt local work if needed
-            if executor.is_running():
-                current_source = (task_memory.load() or {}).get("source", "unknown")
-                if current_source != "self_task":
-                    print(f"[Agent] coordinator queue: source={current_source} 非 self_task，無法搶佔，標記失敗")
-                    async with aiohttp.ClientSession() as s:
-                        await s.patch(
-                            f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{task_id}",
-                            json={"status": "failed"},
-                        )
-                    return
-                print("[Agent] coordinator queue: 中斷 self_task executor，改由 coordinator 任務接手")
-                executor.abort(preserve_task=False, reason="coordinator_queue")
-            elif _latest_state.get("activity", "idle") != "idle":
-                print("[Agent] coordinator queue: activity 非 idle（HTTP 期間改變），標記失敗")
+            async def _queue_remote_claim(_tid=task_id) -> bool:
                 async with aiohttp.ClientSession() as s:
-                    await s.patch(
-                        f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{task_id}",
-                        json={"status": "failed"},
-                    )
-                return
+                    r = await s.post(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_tid}/claim")
+                if r.status == 409:
+                    print(f"[Agent] coordinator queue: task {_tid} already claimed, skipping")
+                    return False
+                r.raise_for_status()
+                return True
 
-            executor.claim()
-            _lock_acquired = False
-            _planner_lock.release()
+            async def _queue_preempt() -> None:
+                if executor.is_running():
+                    current_source = (task_memory.load() or {}).get("source", "unknown")
+                    if current_source != "self_task":
+                        raise RuntimeError(f"coordinator queue: source={current_source} 非 self_task，無法搶佔")
+                    print("[Agent] coordinator queue: 中斷 self_task executor，改由 coordinator 任務接手")
+                    executor.abort(preserve_task=False, reason="coordinator_queue")
+                elif _latest_state.get("activity", "idle") != "idle":
+                    raise RuntimeError("coordinator queue: activity 非 idle（HTTP 期間改變）")
+
+            async def _queue_release(_tid=task_id) -> None:
+                try:
+                    async with aiohttp.ClientSession() as s:
+                        await s.post(f"{COORDINATOR_URL}/bots/{BOT_ID}/tasks/{_tid}/release")
+                except Exception as e:
+                    print(f"[Agent] coordinator queue release 失敗: {e}")
 
             _thinking.discard("tick")
             print("[Agent] coordinator queue: 取得 ownership，執行 coordinator 任務")
-            try:
-                launched = await _run_coordinator_task(envelope, state, ws)
-                if not launched:
-                    executor.unclaim()
-            except Exception:
-                executor.unclaim()
-                raise
+            await _planner_transition(
+                state=state, ws=ws,
+                launch_fn=lambda: _run_coordinator_task(envelope_holder[0], state, ws),
+                remote_claim_fn=_queue_remote_claim,
+                remote_release_fn=_queue_release,
+                preempt_fn=_queue_preempt,
+            )
 
         except Exception as e:
             print(f"[Agent] coordinator queue poll 失敗: {e}")
@@ -929,8 +1006,6 @@ async def _coordinator_poll(state: dict, ws) -> None:
     except asyncio.CancelledError:
         raise
     finally:
-        if _lock_acquired and _planner_lock is not None and _planner_lock.locked():
-            _planner_lock.release()
         _coordinator_poll_running = False
 
 
@@ -945,6 +1020,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         if event_type == "tick":
             now = asyncio.get_running_loop().time()
             if COORDINATOR_URL:
+                asyncio.create_task(_check_coordinator_abort(state, ws))  # always — never blocked by poll
                 if not _coordinator_poll_running:
                     _coordinator_poll_running = True  # set synchronously before create_task — no yield
                     _t = asyncio.create_task(_coordinator_poll(state, ws))
@@ -1074,6 +1150,29 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             else "player" if event_type == "chat"
             else None
         )
+        async def _do_plan_launch(
+            commands, goal, final_goal, resume_task, preserve_task, reason, source
+        ) -> None:
+            """Acquire plan ownership (if not already held) then abort+claim+launch."""
+            nonlocal _lock_acquired
+            if commands:
+                if not _lock_acquired:
+                    # Non-tick path: acquire lock before touching executor
+                    if _planner_lock is not None and not _planner_lock.locked():
+                        await _planner_lock.acquire()
+                        _lock_acquired = True
+                if executor.is_running():
+                    if preserve_task:
+                        print('[Agent] 暫停舊計畫，插入臨時 recovery 計畫')
+                        executor.abort(preserve_task=True, reason=event_type)
+                    else:
+                        print('[Agent] 計畫執行中，中止舊計畫')
+                        executor.abort()
+                executor.claim()
+                _launch_plan(commands, ws, goal=goal, final_goal=final_goal,
+                             resume_task=resume_task, preserve_task=preserve_task,
+                             source=source, reason=reason)
+
         if isinstance(result, dict) and result.get('action') == 'plan':
             commands = result.get('commands', [])
             goal = result.get('goal', '')
@@ -1084,15 +1183,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             resume_task = bool(result.get('resume_task'))
             preserve_task = bool(result.get('preserve_task'))
             commands, preserve_task = _normalize_temporary_inventory_plan(commands, preserve_task)
-            if commands:
-                if executor.is_running():
-                    if preserve_task:
-                        print('[Agent] 暫停舊計畫，插入臨時 recovery 計畫')
-                        executor.abort(preserve_task=True, reason=event_type)
-                    else:
-                        print('[Agent] 計畫執行中，中止舊計畫')
-                        executor.abort()
-                _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source, reason=reason)
+            await _do_plan_launch(commands, goal, final_goal, resume_task, preserve_task, reason, _plan_source)
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
@@ -1121,16 +1212,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 resume_task = bool(a.get("resume_task"))
                 preserve_task = bool(a.get("preserve_task"))
                 commands, preserve_task = _normalize_temporary_inventory_plan(commands, preserve_task)
-                if commands:
-                    if executor.is_running():
-                        if preserve_task:
-                            print('[Agent] 暫停舊計畫，插入臨時 recovery 計畫')
-                            executor.abort(preserve_task=True, reason=event_type)
-                        else:
-                            print('[Agent] 計畫執行中，中止舊計畫')
-                            executor.abort()
-                    reason = a.get('text', '') or a.get('reasoning', '')
-                    _launch_plan(commands, ws, goal=goal, final_goal=final_goal, resume_task=resume_task, preserve_task=preserve_task, source=_plan_source, reason=reason)
+                reason = a.get('text', '') or a.get('reasoning', '')
+                await _do_plan_launch(commands, goal, final_goal, resume_task, preserve_task, reason, _plan_source)
                 continue
             if isinstance(a, dict) and a.get("action") == "replan":
                 cmds = a.get("commands", [])
