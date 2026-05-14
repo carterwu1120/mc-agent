@@ -1357,7 +1357,7 @@ async def run():
         print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
 
     if os.environ.get('DASHBOARD_PORT') or BOT_ID == 'bot0':
-        _dashboard.init(_latest_state, _thinking, _queued_player_tasks,
+        _dashboard.init(_latest_state, _thinking, [],
                         _recent_stuck_events, bot_id=BOT_ID)
         asyncio.create_task(_dashboard.start())
 
