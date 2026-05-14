@@ -235,7 +235,7 @@ docker compose up
 @all sethome            → both bots respond
 ```
 
-Each bot's Python process writes `live_state.json` on every WebSocket tick. The backend aggregates bot state from coordinator runtime data plus per-bot files/SQLite history.
+Each bot's Python process writes `live_state.json` on every WebSocket tick. The backend aggregates bot state from coordinator runtime data plus per-bot files and the shared PostgreSQL database.
 
 **Bot-to-bot isolation**: Bots ignore each other's Minecraft chat (configurable via `BOT_USERNAMES`). Coordination between bots goes through the HTTP coordinator service, not the game chat channel.
 
@@ -297,16 +297,28 @@ curl http://localhost:8000/bots/bot0/tasks
 curl http://localhost:8000/tasks/<task_id>
 ```
 
-Submit a structured task:
+Submit a task (natural language or structured):
 
 ```bash
+# Natural language — LLM decomposes into commands
 curl -X POST http://localhost:8000/bots/bot0/tasks \
   -H 'content-type: application/json' \
-  -d '{
-    "goal": "mine iron 8",
-    "commands": ["mine iron 8"],
-    "interrupt": false
-  }'
+  -d '{"goal": "mine iron 8", "interrupt": false}'
+
+# Structured — explicit command list
+curl -X POST http://localhost:8000/bots/bot0/tasks \
+  -H 'content-type: application/json' \
+  -d '{"goal": "mine iron 8", "commands": ["mine iron 8"], "interrupt": false}'
+```
+
+Task control:
+
+```bash
+# Abort the running task
+curl -X POST http://localhost:8000/bots/bot0/abort
+
+# Resume the last interrupted task
+curl -X POST http://localhost:8000/bots/bot0/resume
 ```
 
 Metrics:
@@ -315,6 +327,7 @@ Metrics:
 curl http://localhost:8000/metrics/success-rate
 curl http://localhost:8000/metrics/stuck-count
 curl http://localhost:8000/metrics/llm-latency
+curl http://localhost:8000/metrics/goal-completion
 ```
 
 ### Local Development
@@ -389,7 +402,7 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 ## Roadmap
 
 ### Near-term
-- **Manual override / interrupt**: Natural language interrupt/resume classification, not just prefix matching
+- **Metrics dashboard**: Surface the new event data (stuck count, step durations, LLM decisions) in the live dashboard
 - **Context budget system**: Per-skill limits on how much history enters the LLM prompt (`context_builder` v2)
 - **Tool acquisition policy**: Shared `ensureTool` retry/cooldown logic instead of per-activity reimplementation
 
@@ -407,73 +420,68 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 
 ## Evaluation
 
-Each bot writes a SQLite database at `agent/data/<bot_id>/task_history.db` with four tables: `tasks`, `events`, `failures`, `logs`.
+All bots share a single **PostgreSQL** database (`tasks`, `events`, `failures`, `logs`) with `bot_id` as the isolation key. Task history is migrated from per-bot SQLite files.
 
-### Metrics already queryable (no code needed)
+### Event types recorded
 
-```sql
--- Task success/failure rate
-SELECT status, COUNT(*) FROM tasks GROUP BY status;
+| Event | When | Key details |
+|-------|------|-------------|
+| `llm_call` | After every LLM invocation | `skill`, `latency_ms`, `llm_response` (action/commands) |
+| `activity_stuck` | On every stuck trigger, before handler | `activity`, `reason`, `detail`, `watchdog`, `progress` |
+| `replan` | When LLM or deterministic path replans | `new_commands`, `path_taken` |
+| `skip` | When a step is skipped | `path_taken` |
+| `step_started` | Executor step begins | `command`, `step` |
+| `step_done` | Executor step completes | `command`, `step`, `duration_ms` |
+| `step_timeout` | Executor step times out (no JS heartbeat) | `command`, `step` |
+| `task_started` | JS bot starts an activity | `activity`, `goal` |
+| `task_stopped` | JS bot stops an activity | `activity`, `reason` |
+| `activity_done` | JS bot completes an activity | `activity`, `goal`, `progress` |
+| `player_died` / `player_respawned` | Bot death / respawn | `cause`, `deathPos` |
+| `goal_verification_failed` | Goal check after plan | remediation commands |
 
--- Average task duration (completed tasks)
-SELECT ROUND(AVG((julianday(finished_at)-julianday(created_at))*86400)) AS avg_sec
-FROM tasks WHERE status='completed';
-
--- Stuck count per task
-SELECT t.goal, t.status, COUNT(f.id) AS stuck_count
-FROM tasks t LEFT JOIN failures f ON f.task_id=t.id
-GROUP BY t.id ORDER BY stuck_count DESC;
-
--- Step failure rate by command type
-SELECT command, COUNT(*) AS failures
-FROM failures GROUP BY command ORDER BY failures DESC;
-
--- Task interrupt rate by cause
-SELECT interrupted_by, COUNT(*) FROM tasks
-WHERE interrupted_by IS NOT NULL GROUP BY interrupted_by;
-```
-
-### Metrics requiring the eval instrumentation (added in 5f8d49c)
-
-Every `replan` and `skip` event in the `events` table now carries a `path_taken` field (`"deterministic"` or `"llm"`) and every LLM invocation writes an `event_type='llm_call'` row with `latency_ms`.
+### Example queries (PostgreSQL)
 
 ```sql
--- Deterministic shortcut vs LLM split for stuck recovery
-SELECT json_extract(details,'$.path_taken') AS path, COUNT(*) AS cnt
+-- Full step-by-step trace for a task
+SELECT event_type, command, step, details->>'duration_ms' AS ms, at
+FROM events WHERE task_id = 'abc123' ORDER BY at;
+
+-- Stuck events per activity in last 24h
+SELECT details->>'activity', reason, COUNT(*)
+FROM events WHERE event_type = 'activity_stuck' AND at > NOW() - INTERVAL '24h'
+GROUP BY 1, 2 ORDER BY 3 DESC;
+
+-- What the LLM decided on each stuck recovery
+SELECT e1.details->>'activity', e1.reason,
+       e2.details->>'llm_response' AS decision
+FROM events e1
+JOIN events e2 ON e1.task_id = e2.task_id AND e2.event_type = 'llm_call'
+WHERE e1.event_type = 'activity_stuck'
+ORDER BY e1.at DESC LIMIT 20;
+
+-- Deterministic vs LLM split for stuck recovery
+SELECT details->>'path_taken' AS path, COUNT(*)
 FROM events WHERE event_type IN ('replan','skip')
 GROUP BY path;
 
--- LLM calls per task
-SELECT t.goal, COUNT(e.id) AS llm_calls, t.status
-FROM tasks t
-LEFT JOIN events e ON e.task_id=t.id AND e.event_type='llm_call'
-GROUP BY t.id ORDER BY llm_calls DESC;
-
 -- Average LLM latency per skill
-SELECT json_extract(details,'$.skill') AS skill,
-       ROUND(AVG(json_extract(details,'$.latency_ms'))) AS avg_ms
-FROM events WHERE event_type='llm_call'
+SELECT details->>'skill' AS skill,
+       ROUND(AVG((details->>'latency_ms')::float)) AS avg_ms,
+       COUNT(*) AS calls
+FROM events WHERE event_type = 'llm_call'
 GROUP BY skill ORDER BY avg_ms DESC;
 
--- Stuck recovery time: deterministic vs LLM (ms)
-SELECT json_extract(e.details,'$.path_taken') AS path,
-       ROUND(AVG((julianday(e.at)-julianday(f.at))*86400*1000)) AS avg_recovery_ms
-FROM failures f
-JOIN events e ON e.task_id=f.task_id AND e.event_type IN ('replan','skip')
-  AND (julianday(e.at)-julianday(f.at))*86400 BETWEEN 0 AND 120
-GROUP BY path;
+-- Task success/failure rate
+SELECT status, COUNT(*) FROM tasks GROUP BY status;
 
--- Coverage gaps: which activity/reason still falls to LLM most often
-SELECT f.activity, f.reason,
-       SUM(CASE WHEN json_extract(e.details,'$.path_taken')='deterministic' THEN 1 ELSE 0 END) AS det,
-       SUM(CASE WHEN json_extract(e.details,'$.path_taken')='llm' THEN 1 ELSE 0 END) AS llm
-FROM failures f
-JOIN events e ON e.task_id=f.task_id AND e.event_type IN ('replan','skip')
-  AND (julianday(e.at)-julianday(f.at))*86400 BETWEEN 0 AND 120
-GROUP BY f.activity, f.reason ORDER BY llm DESC;
+-- Coverage gaps: activity/reason pairs still falling to LLM most often
+SELECT reason, details->>'activity' AS activity, COUNT(*) AS stuck_count
+FROM events WHERE event_type = 'activity_stuck'
+  AND at > NOW() - INTERVAL '7d'
+GROUP BY 1, 2 ORDER BY 3 DESC;
 ```
 
-The coverage-gaps query is the most actionable: high `llm` counts for a given `activity/reason` pair indicate candidates for new deterministic shortcuts.
+The coverage-gaps query is the most actionable: high counts for a given `activity/reason` pair indicate candidates for new deterministic shortcuts.
 
 ---
 
@@ -484,8 +492,10 @@ The coverage-gaps query is the most actionable: high `llm` counts for a given `a
 | Minecraft bot runtime | Node.js, [mineflayer](https://github.com/PrismarineJS/mineflayer) |
 | Bot-agent transport | WebSocket (ws) |
 | Intelligence layer | Python 3.11, asyncio |
-| LLM backends | Google Gemini API, Ollama (local) |
+| LLM backends | Google Gemini API, Ollama (local), Vertex AI |
+| Backend API | FastAPI |
 | Dashboard server | aiohttp |
+| Database | PostgreSQL (asyncpg), shared across all bots |
 | Deployment | Docker, Docker Compose |
 | Package management | uv (Python), npm (Node) |
 
