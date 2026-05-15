@@ -20,8 +20,10 @@ const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craf
 const { setMode } = require('./mode')
 const activityStack = require('./activity')
 
-const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'smelt', 'combat', 'hunt', 'getfood', 'explore'])
-// surface/back exempt from checkFull — they are part of the inventory recovery flow itself
+// smelt exempt from checkFull — used inside inventory recovery plans (smelt before re-equip),
+// blocking it causes the same deadlock as surface did.
+// surface/back also exempt — they are part of the inventory recovery flow itself.
+const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'combat', 'hunt', 'getfood', 'explore'])
 
 function handle(bot, msg) {
     if (msg._task_id !== undefined) setTaskId(msg._task_id)

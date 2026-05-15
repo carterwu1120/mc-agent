@@ -85,14 +85,11 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
     const junked = await _dropJunkArmor(bot)
     if (junked > 0) console.log(`[Inv] 丟棄 ${junked} 件垃圾裝備`)
 
-    for (const item of bot.inventory.items()) {
-        if (!JUNK_ITEMS.has(item.name)) continue
-        try {
-            await bot.toss(item.type, null, item.count)
-            console.log(`[Inv] 丟棄雜物 ${item.name} x${item.count}`)
-        } catch (e) {
-            console.log(`[Inv] 丟棄 ${item.name} 失敗: ${e.message}`)
-        }
+    const junkToRemove = bot.inventory.items().filter(i => JUNK_ITEMS.has(i.name))
+    if (junkToRemove.length > 0) {
+        const junkMap = new Map(junkToRemove.map(i => [i.name, i.count]))
+        console.log(`[Inv] 埋棄雜物: ${[...junkMap.keys()].join(', ')}`)
+        await _buryItems(bot, junkMap)
     }
 
     if (!forceLlm || bot.inventory.items().length < INVENTORY_FULL) {
