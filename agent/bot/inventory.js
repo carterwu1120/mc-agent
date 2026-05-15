@@ -9,6 +9,8 @@ const INVENTORY_FULL = 34  // trigger 2 slots early so there's room to craft/pla
 
 const JUNK_ITEMS = new Set([
     'clay_ball',
+    'andesite', 'tuff', 'calcite', 'amethyst_block',
+    'gravel', 'smooth_basalt', 'granite', 'coarse_dirt', 'dirt',
 ])
 
 const _ARMOR_SLOT_FOR = {
