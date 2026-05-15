@@ -450,9 +450,12 @@ async function _reclaimCraftingTable(bot) {
             )
             if (dropped) {
                 try {
-                    await bot.pathfinder.goto(
-                        new goals.GoalNear(dropped.position.x, dropped.position.y, dropped.position.z, 0)
-                    )
+                    await Promise.race([
+                        bot.pathfinder.goto(
+                            new goals.GoalNear(dropped.position.x, dropped.position.y, dropped.position.z, 1)
+                        ),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('pickup timeout')), 2000)),
+                    ])
                 } catch (_) {}
             }
         }

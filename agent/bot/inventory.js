@@ -7,6 +7,10 @@ const activityStack = require('./activity')
 
 const INVENTORY_FULL = 34  // trigger 2 slots early so there's room to craft/place
 
+const JUNK_ITEMS = new Set([
+    'clay_ball',
+])
+
 const _ARMOR_SLOT_FOR = {
     helmet: 'head', chestplate: 'torso', leggings: 'legs', boots: 'feet',
 }
@@ -78,6 +82,16 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
     }
     const junked = await _dropJunkArmor(bot)
     if (junked > 0) console.log(`[Inv] 丟棄 ${junked} 件垃圾裝備`)
+
+    for (const item of bot.inventory.items()) {
+        if (!JUNK_ITEMS.has(item.name)) continue
+        try {
+            await bot.toss(item.type, null, item.count)
+            console.log(`[Inv] 丟棄雜物 ${item.name} x${item.count}`)
+        } catch (e) {
+            console.log(`[Inv] 丟棄 ${item.name} 失敗: ${e.message}`)
+        }
+    }
 
     if (!forceLlm || bot.inventory.items().length < INVENTORY_FULL) {
         console.log('[Inv] 壓縮後背包已有空間，不需丟棄物品')

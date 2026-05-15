@@ -1034,6 +1034,32 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if state.get("activity") != "idle":
                 _idle_started_at = None
                 return
+
+            # Auto-resume transient interruptions (inventory_full, tool_low_durability) on first idle tick
+            _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability"}
+            _pending = task_memory._load_raw()
+            if (
+                _pending
+                and _pending.get("status") == "interrupted"
+                and _pending.get("interruptedBy") in _RESUMABLE_INTERRUPTS
+                and not executor.is_running()
+            ):
+                print(f"[Agent] 自動恢復被 {_pending.get('interruptedBy')} 中斷的任務：{_pending.get('goal')}")
+                if _planner_lock is not None:
+                    await _planner_lock.acquire()
+                    _lock_acquired = True
+                executor.claim()
+                if _lock_acquired:
+                    _lock_acquired = False
+                    _planner_lock.release()
+                asyncio.create_task(executor.execute(
+                    ["resumetask"], ws,
+                    goal=_pending.get("goal", ""),
+                    preserve_task=True,
+                    source=_pending.get("source", "coordinator"),
+                ))
+                return
+
             if _idle_started_at is None:
                 _idle_started_at = now
                 return
@@ -1344,9 +1370,16 @@ async def run():
 
     # （表示上次 agent 異常終止，下次說「繼續」可以接回）
     _startup_task = task_memory._load_raw()
-    if _startup_task and _startup_task.get("status") == "running":
-        task_memory.interrupt("agent_restart")
-        print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
+    if _startup_task:
+        _startup_status = _startup_task.get("status")
+        _startup_interrupted_by = _startup_task.get("interruptedBy")
+        _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability"}
+        if _startup_status == "running":
+            task_memory.interrupt("agent_restart")
+            print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
+        elif _startup_status == "interrupted" and _startup_interrupted_by in _RESUMABLE_INTERRUPTS:
+            # Transient interruption — will auto-resume on first tick
+            print(f"[Agent] 啟動：發現被 {_startup_interrupted_by} 暫時中斷的任務「{_startup_task.get('goal')}」，待連線後恢復")
 
     if os.environ.get('DASHBOARD_PORT') or BOT_ID == 'bot0':
         _dashboard.init(_latest_state, _thinking, [],

@@ -162,6 +162,14 @@ async function equipBestArmor(bot) {
 
     const SLOT_TO_BODY = { head: 'head', torso: 'torso', legs: 'legs', feet: 'feet' }
 
+    // Drop broken armor from inventory before selecting best
+    for (const item of bot.inventory.items()) {
+        const isArmor = Object.values(ARMOR_PRIORITY).some(names => names.includes(item.name))
+        if (isArmor && _durabilityPct(item) === 0) {
+            try { await bot.toss(item.type, null, item.count) } catch (_) {}
+        }
+    }
+
     for (const [slot, priority] of Object.entries(ARMOR_PRIORITY)) {
         // Include currently-worn item in the candidate pool so _findBestItem can compare all options
         const bodyPart = SLOT_TO_BODY[slot]

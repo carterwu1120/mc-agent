@@ -124,6 +124,12 @@ bot.once('spawn', () => {
         if (lowItems.length === 0) return
         _lastDurabilityWarnAt = now
         console.log(`[Durability] 耐久度警告：${lowItems.map(i => `${i.item} ${i.durability_pct}%`).join(', ')}`)
+        // Try to handle armor upgrades locally before asking Python LLM
+        const hasArmorLow = lowItems.some(i => i.item.endsWith('_helmet') || i.item.endsWith('_chestplate') || i.item.endsWith('_leggings') || i.item.endsWith('_boots'))
+        if (hasArmorLow) {
+            const { craftMissingArmor } = require('./combat')
+            craftMissingArmor(bot)
+        }
         bridge.sendState(bot, 'tool_low_durability', { items: lowItems })
     }, 5000)
 

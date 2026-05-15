@@ -30,8 +30,11 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的裝備耐久度處理助手。
 - 盔甲（頭盔/胸甲/護腿/靴子）是直接用材料合成，不需要冶煉步驟
 
 【決策原則】
-- 若背包有備用裝備可替換 → equip 換上
-- 若背包有足夠材料可以合成新裝備 → equip（bot 會自動合成）
+- 若背包有「現成裝備」且耐久正常（無 ⚠ 標註）→ equip 換上
+- 若背包的同類裝備標註 ⚠ 耐久損壞 → 那件不可用，不要 equip，視同沒有備品
+- 若背包只有材料（iron_ingot 等）但沒有現成裝備 → equip（bot 會自動合成後換上）
+  ⚠ 注意：iron_ingot ≠ iron_leggings，有 ingot 不代表有現成護腿
+- 若 equip 已執行但問題仍存在（本次警告與上次相同）→ 停止重複 equip，改為合成或採礦
 - 若沒有材料：
   - 鑽石裝備 → 需要 mine diamond，沒有捷徑
   - 鐵製裝備 → plan: mine iron → smelt raw_iron → equip
@@ -56,7 +59,13 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
     inventory = state.get('inventory', [])
 
     items_summary = "\n".join(f"- {i['item']}：耐久 {i['durability_pct']}%" for i in items)
-    inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
+    def _inv_line(i):
+        line = f"- {i['name']} x{i['count']}"
+        pct = i.get('durability_pct')
+        if pct is not None and pct <= 10:
+            line += f" ⚠ 耐久 {pct}%（已損壞，不可用）"
+        return line
+    inv_summary = "\n".join(_inv_line(i) for i in inventory) or "（空背包）"
     equip_summary = equipment_summary(state)
     item_names = "、".join(i['item'] for i in items)
 
