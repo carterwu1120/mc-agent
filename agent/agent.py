@@ -1021,12 +1021,6 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         if event_type == "tick":
             now = asyncio.get_running_loop().time()
             if COORDINATOR_URL:
-                asyncio.create_task(_check_coordinator_abort(state, ws))  # always — never blocked by poll
-                if not _coordinator_poll_running:
-                    _coordinator_poll_running = True  # set synchronously before create_task — no yield
-                    _t = asyncio.create_task(_coordinator_poll(state, ws))
-                    _bg_tasks.add(_t)
-                    _t.add_done_callback(_bg_tasks.discard)
                 if now - _last_heartbeat_at > HEARTBEAT_INTERVAL:
                     asyncio.create_task(_send_heartbeat())
             if executor.is_running():
@@ -1448,6 +1442,16 @@ async def run():
                             },
                             task_id=_active_id,
                         )
+                    # Coordinator poll runs unconditionally on every tick — never blocked by _thinking
+                    if event_type == "tick" and COORDINATOR_URL:
+                        asyncio.create_task(_check_coordinator_abort(state, ws))
+                        global _coordinator_poll_running
+                        if not _coordinator_poll_running:
+                            _coordinator_poll_running = True
+                            _t = asyncio.create_task(_coordinator_poll(state, ws))
+                            _bg_tasks.add(_t)
+                            _t.add_done_callback(_bg_tasks.discard)
+
                     if not handler:
                         continue
                     if event_type in _thinking:
@@ -1463,6 +1467,7 @@ async def run():
         except Exception as e:
             print(f"[Agent] 連線中斷: {e}，{reconnect_delay:.0f} 秒後重連...")
             _thinking.clear()
+            _coordinator_poll_running = False
             for t in session_tasks:
                 t.cancel()
             for t in list(_bg_tasks):
