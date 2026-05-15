@@ -121,6 +121,29 @@ def format_chests(chests: list) -> list[dict]:
     return out
 
 
+def _inject_activity_progress(task_dict: dict | None, snapshot: dict) -> dict | None:
+    """Inject real-time activity progress from the JS stack into the task dict."""
+    if not task_dict:
+        return task_dict
+    stack = snapshot.get("stack") or []
+    if not stack:
+        return task_dict
+    top = stack[-1]
+    progress = top.get("progress") or {}
+    goal = top.get("goal") or {}
+    # Numeric progress: count (mining/chopping), smelted, catches
+    count = next(
+        (progress[k] for k in ("count", "smelted", "catches", "logs") if progress.get(k) is not None),
+        0,
+    )
+    target = goal.get("count")
+    result = {**task_dict}
+    if target is not None:
+        result["activityCount"] = int(count)
+        result["activityTarget"] = int(target)
+    return result
+
+
 def build_bot_view(
     bot_id: str,
     *,
@@ -163,7 +186,7 @@ def build_bot_view(
             "mode": snapshot.get("mode"),
             "home": snapshot.get("home"),
         },
-        "current_task": format_task(task or None),
+        "current_task": _inject_activity_progress(format_task(task or None), snapshot),
         "interrupted_tasks": [format_task(item) for item in (task.get("interruptedTasks") or [])[:3]],
         "equipment": snapshot.get("equipment") or {},
         "inventory": top_items(snapshot.get("inventory") or [], n=12),

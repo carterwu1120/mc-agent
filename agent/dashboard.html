@@ -269,7 +269,10 @@ function renderAgent(agent) {
     // Step list
     const allSteps = [];
     if (task.currentCmd) {
-      allSteps.push({ cmd: task.currentCmd, cls: 'running' });
+      const actProg = (task.activityCount != null && task.activityTarget != null)
+        ? ` <span style="color:var(--blue)">${task.activityCount}/${task.activityTarget}</span>`
+        : '';
+      allSteps.push({ cmd: task.currentCmd + actProg, cls: 'running', html: true });
     }
     (task.pendingSteps || []).forEach(c => allSteps.push({ cmd: c, cls: 'pending' }));
     if (allSteps.length) {
