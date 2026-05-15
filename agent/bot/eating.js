@@ -117,7 +117,6 @@ function _checkFoodLow(bot) {
     const foodLevel = _foodLevel(bot)
     if (foodLevel === null) return
     if (foodLevel >= FOOD_LOW_THRESHOLD) return
-    if (getActivity() !== 'idle') return
     if (Date.now() - _lastFoodLowTime < FOOD_LOW_COOLDOWN) return
     const hasFood = bot.inventory.items().some(i => FOOD_ITEMS.has(i.name))
     if (hasFood) return

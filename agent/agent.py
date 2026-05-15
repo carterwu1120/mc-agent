@@ -1030,7 +1030,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 return
 
             # Auto-resume transient interruptions (inventory_full, tool_low_durability) on first idle tick
-            _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability"}
+            _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability", "food_low"}
             _pending = task_memory._load_raw()
             if (
                 _pending
@@ -1156,7 +1156,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             return
 
         def _normalize_temporary_inventory_plan(commands: list, preserve_task: bool) -> tuple[list, bool]:
-            if event_type != "inventory_full":
+            if event_type not in ("inventory_full", "food_low"):
                 return commands, preserve_task
             if not executor.is_running():
                 return commands, preserve_task
@@ -1367,7 +1367,7 @@ async def run():
     if _startup_task:
         _startup_status = _startup_task.get("status")
         _startup_interrupted_by = _startup_task.get("interruptedBy")
-        _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability"}
+        _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability", "food_low"}
         if _startup_status == "running":
             task_memory.interrupt("agent_restart")
             print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
