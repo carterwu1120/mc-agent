@@ -899,15 +899,7 @@ async def _coordinator_poll(state: dict, ws) -> None:
                 goal = envelope.get("goal", "coordinator interrupt task")
                 current_source = (task_memory.load() or {}).get("source", "unknown")
 
-                should_accept = False
-                if executor.is_running():
-                    if current_source == "self_task":
-                        should_accept = True
-                elif state.get("activity") != "idle":
-                    if current_source in ("self_task", "unknown"):
-                        should_accept = True
-                else:
-                    should_accept = True  # bot idle — always accept coordinator interrupt work
+                should_accept = True  # interrupt tasks always preempt regardless of current source
 
                 if should_accept:
                     async def _interrupt_remote_claim(

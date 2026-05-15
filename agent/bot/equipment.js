@@ -160,8 +160,28 @@ async function equipShield(bot) {
 async function equipBestArmor(bot) {
     const equipped = []
 
+    const SLOT_TO_BODY = { head: 'head', torso: 'torso', legs: 'legs', feet: 'feet' }
+
     for (const [slot, priority] of Object.entries(ARMOR_PRIORITY)) {
-        let armor = _findBestItem(bot, priority)
+        // Include currently-worn item in the candidate pool so _findBestItem can compare all options
+        const bodyPart = SLOT_TO_BODY[slot]
+        const worn = bodyPart ? bot.inventory.slots[bot.getEquipmentDestSlot(bodyPart)] : null
+
+        // Temporarily treat worn item as if it were in inventory for comparison
+        const allItems = bot.inventory.items()
+        if (worn && !allItems.find(i => i === worn)) allItems.push(worn)
+
+        const candidates = priority
+            .map(name => allItems.find(i => i.name === name && _isUsable(i)))
+            .filter(Boolean)
+        const best = candidates.length === 0 ? null
+            : (_durabilityPct(candidates[0]) > 10 ? candidates[0]
+                : candidates.reduce((a, b) => _durabilityPct(a) >= _durabilityPct(b) ? a : b))
+
+        // Skip equip if the best choice is already worn
+        if (best && worn && worn.name === best.name) continue
+
+        let armor = best
         const topTierName = priority[0]
         if ((!armor || armor.name !== topTierName) && _canCraftArmorItem(bot, topTierName)) {
             armor = await _craftArmorUpgrade(bot, slot)

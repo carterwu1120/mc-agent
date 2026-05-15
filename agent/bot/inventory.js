@@ -7,6 +7,51 @@ const activityStack = require('./activity')
 
 const INVENTORY_FULL = 34  // trigger 2 slots early so there's room to craft/place
 
+const _ARMOR_SLOT_FOR = {
+    helmet: 'head', chestplate: 'torso', leggings: 'legs', boots: 'feet',
+}
+const _ARMOR_TIER = { leather: 1, golden: 2, chainmail: 3, iron: 4, diamond: 5, netherite: 6 }
+
+function _armorTier(name) {
+    const mat = name?.split('_')[0]
+    return _ARMOR_TIER[mat] ?? 0
+}
+
+function _durabilityPct(item) {
+    if (!item?.maxDurability) return 100
+    return Math.max(0, Math.round(((item.maxDurability - item.durabilityUsed) / item.maxDurability) * 100))
+}
+
+// Drop junk armor from inventory: broken items or leather pieces where a better tier is already worn.
+async function _dropJunkArmor(bot) {
+    const toToss = []
+    for (const item of bot.inventory.items()) {
+        const suffix = Object.keys(_ARMOR_SLOT_FOR).find(s => item.name.endsWith('_' + s))
+        if (!suffix) continue
+        const tier = _armorTier(item.name)
+        if (tier === 0) continue
+
+        const broken = _durabilityPct(item) <= 5
+        if (broken) { toToss.push(item); continue }
+
+        // Check what's currently worn in that slot
+        const bodyPart = _ARMOR_SLOT_FOR[suffix]
+        const worn = bot.inventory.slots[bot.getEquipmentDestSlot(bodyPart)]
+        if (worn && _armorTier(worn.name) > tier) {
+            toToss.push(item)
+        }
+    }
+    for (const item of toToss) {
+        try {
+            await bot.toss(item.type, null, item.count)
+            console.log(`[Inv] 丟棄垃圾裝備 ${item.name} (${_durabilityPct(item)}% 耐久 / 穿著更好裝備)`)
+        } catch (e) {
+            console.log(`[Inv] 丟棄 ${item.name} 失敗: ${e.message}`)
+        }
+    }
+    return toToss.length
+}
+
 let _decision = null
 let _checking = false
 
@@ -31,7 +76,10 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
     if (compacted > 0) {
         console.log(`[Inv] 已壓縮 ${compacted} 組資源方塊，背包格數 ${beforeSlots} -> ${afterSlots}`)
     }
-    if (!forceLlm || afterSlots < INVENTORY_FULL) {
+    const junked = await _dropJunkArmor(bot)
+    if (junked > 0) console.log(`[Inv] 丟棄 ${junked} 件垃圾裝備`)
+
+    if (!forceLlm || bot.inventory.items().length < INVENTORY_FULL) {
         console.log('[Inv] 壓縮後背包已有空間，不需丟棄物品')
         activityStack.resumeCurrent(bot)
         _checking = false

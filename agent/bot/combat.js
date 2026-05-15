@@ -238,6 +238,8 @@ async function _loop(bot, goal = {}) {
     const _myGen = ++_loopGen
     const startTime = Date.now()
     let noTargetTicks = 0
+    let gotoFailStreak = 0
+    const MAX_GOTO_FAILS = 5
 
     while (isCombating) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
@@ -269,13 +271,27 @@ async function _loop(bot, goal = {}) {
 
         const dist = target.position.distanceTo(bot.entity.position)
         if (dist > 3) {
+            let reached = false
             try {
-                activityStack.touch('combat', 'goto_target')
                 await Promise.race([
-                    bot.pathfinder.goto(new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2)),
+                    bot.pathfinder.goto(new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2)).then(() => { reached = true }),
                     _sleep(5000).then(() => { bot.pathfinder.setGoal(null) }),
                 ])
             } catch (_) {}
+            if (reached) {
+                gotoFailStreak = 0
+                activityStack.touch('combat', 'goto_target')
+            } else {
+                gotoFailStreak++
+                if (gotoFailStreak >= MAX_GOTO_FAILS) {
+                    console.log(`[Combat] 連續 ${gotoFailStreak} 次無法抵達目標，放棄戰鬥`)
+                    isCombating = false
+                    bridge.sendState(bot, 'activity_stuck', { reason: 'cannot_reach_target', detail: `failed to reach ${target.name} after ${gotoFailStreak} attempts` })
+                    break
+                }
+            }
+        } else {
+            gotoFailStreak = 0
         }
 
         if (!isCombating) break
