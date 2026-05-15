@@ -199,6 +199,70 @@ def _build_getfood_replan_after_failed_hunt(state: dict, plan_context: dict) -> 
     return getfood_stuck.build_replan_after_failed_hunt(state, plan_context)
 
 
+def _deterministic_shortcut(state: dict, plan_context: dict | None) -> list[dict] | None:
+    """Run all deterministic shortcuts. Returns tagged result or None if LLM is needed."""
+    activity = state.get("activity_name", state.get("activity", "unknown"))
+    reason = state.get("reason", "unknown")
+    pos = state.get("pos") or {}
+    y = round(pos.get("y", 0))
+
+    emergency = _food_emergency(state)
+    if emergency:
+        return _tag_path(emergency, 'deterministic')
+
+    if _looks_like_getfood_subflow(activity, reason, plan_context):
+        shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
+        if shortcut:
+            return _tag_path(shortcut, 'deterministic')
+
+    if activity == "smelting" and reason == "no_input" and plan_context:
+        shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
+        if shortcut:
+            return _tag_path(shortcut, 'deterministic')
+
+    if activity == "hunting" and reason == "no_weapon":
+        shortcut = hunting_stuck.deterministic_shortcut_no_weapon(state, plan_context)
+        if shortcut:
+            return _tag_path(shortcut, 'deterministic')
+
+    if activity == "hunting" and reason == "no_animals" and plan_context:
+        shortcut = _build_hunting_replan_no_animals(state, plan_context)
+        if shortcut:
+            return _tag_path(shortcut, 'deterministic')
+
+    if activity == "getfood" and reason == "no_raw_food" and plan_context and _recent_hunting_no_animals(state):
+        shortcut = _build_getfood_replan_after_failed_hunt(state, plan_context)
+        if shortcut:
+            return _tag_path(shortcut, 'deterministic')
+
+    if activity == "getfood" and reason == "no_raw_food":
+        shortcut = getfood_stuck.deterministic_shortcut_no_raw_food_satisfied(state, plan_context)
+        if shortcut:
+            return _tag_path(shortcut, 'deterministic')
+
+    if activity == "chopping" and reason == "no_trees":
+        nearby = state.get("nearby") or {}
+        if not nearby.get("trees"):
+            pending_steps = (plan_context or {}).get("pending_steps", [])
+            if y < 40:
+                commands = ["surface", "explore trees"] + pending_steps
+                msg = "附近沒有樹且目前在地底，先回到地表再尋找新的樹木區域。"
+            else:
+                commands = ["explore trees"] + pending_steps
+                msg = "附近已沒有樹，移動到新的區域尋找樹木。"
+            return _tag_path([
+                {"command": "chat", "text": msg},
+                {"action": "replan", "commands": commands},
+            ], 'deterministic')
+
+    if activity == "mining" and reason == "no_tools":
+        shortcut = mining_stuck.deterministic_shortcut(state, plan_context)
+        if shortcut:
+            return _tag_path(shortcut, 'deterministic')
+
+    return None
+
+
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     activity = state.get("activity_name", state.get("activity", "unknown"))
     reason = state.get("reason", "unknown")
@@ -214,70 +278,14 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     missing_count = state.get("missing_count")
     plan_context = state.get("plan_context")
 
-    # ── Emergency: food critically low mid-task ────────────────────────────────
-    emergency = _food_emergency(state)
-    if emergency:
-        return _tag_path(emergency, 'deterministic')
-
     # ── Layer 1: Pre-LLM state enrichment ─────────────────────────────────────
     is_critical = _compute_is_critical_subtask(activity, state)
     if is_critical:
         state = {**state, "is_critical_subtask": True}
 
-    if _looks_like_getfood_subflow(activity, reason, plan_context):
-        shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
-        if shortcut:
-            return _tag_path(shortcut, 'deterministic')
-
-    if activity == "smelting" and reason == "no_input" and plan_context:
-        shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
-        if shortcut:
-            return _tag_path(shortcut, 'deterministic')
-
-    if activity == "hunting" and reason == "no_weapon":
-        shortcut = hunting_stuck.deterministic_shortcut_no_weapon(state, plan_context)
-        if shortcut:
-            print("[Skill/activity_stuck] hunting/no_weapon 走 deterministic shortcut")
-            return _tag_path(shortcut, 'deterministic')
-
-    if activity == "hunting" and reason == "no_animals" and plan_context:
-        shortcut = _build_hunting_replan_no_animals(state, plan_context)
-        if shortcut:
-            print("[Skill/activity_stuck] hunting/no_animals，直接改走換區域或改釣魚的 replan")
-            return _tag_path(shortcut, 'deterministic')
-
-    if activity == "getfood" and reason == "no_raw_food" and plan_context and _recent_hunting_no_animals(state):
-        shortcut = _build_getfood_replan_after_failed_hunt(state, plan_context)
-        if shortcut:
-            print("[Skill/activity_stuck] getfood/no_raw_food 且最近剛 hunting/no_animals，直接改走換區域或改釣魚的 replan")
-            return _tag_path(shortcut, 'deterministic')
-
-    if activity == "getfood" and reason == "no_raw_food":
-        shortcut = getfood_stuck.deterministic_shortcut_no_raw_food_satisfied(state, plan_context)
-        if shortcut:
-            print("[Skill/activity_stuck] getfood/no_raw_food 但熟食已足夠，直接跳過補食流程")
-            return _tag_path(shortcut, 'deterministic')
-
-    if activity == "chopping" and reason == "no_trees":
-        nearby = state.get("nearby") or {}
-        if not nearby.get("trees"):
-            pending_steps = (plan_context or {}).get("pending_steps", [])
-            if y < 40:
-                commands = ["surface", "explore trees"] + pending_steps
-                msg = "附近沒有樹且目前在地底，先回到地表再尋找新的樹木區域。"
-            else:
-                commands = ["explore trees"] + pending_steps
-                msg = "附近已沒有樹，移動到新的區域尋找樹木。"
-            print(f"[Skill/activity_stuck] chopping/no_trees deterministic: {commands}")
-            return _tag_path([
-                {"command": "chat", "text": msg},
-                {"action": "replan", "commands": commands},
-            ], 'deterministic')
-
-    if activity == "mining" and reason == "no_tools":
-        shortcut = mining_stuck.deterministic_shortcut(state, plan_context)
-        if shortcut:
-            return _tag_path(shortcut, 'deterministic')
+    shortcut = _deterministic_shortcut(state, plan_context)
+    if shortcut:
+        return shortcut
 
     if activity == "makechest":
         chests = state.get("chests") or []

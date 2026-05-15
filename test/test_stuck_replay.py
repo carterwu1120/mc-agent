@@ -260,3 +260,115 @@ class TestSmeltingNoInput:
         replan = next((a for a in result if a.get("action") == "replan"), None)
         assert replan is not None
         assert replan["commands"][0].startswith("deposit")
+
+
+# ── chopping: no_trees ────────────────────────────────────────────────────────
+
+def _chopping_state(**kwargs):
+    base = {
+        "activity": "chopping",
+        "reason": "no_trees",
+        "inventory": [],
+        "inventory_slots": {"free": 20},
+        "chests": [],
+        "capabilities": {},
+        "equipment": {},
+        "pos": {"x": 0, "y": 64, "z": 0},
+        "health": 20,
+        "food": 18,
+    }
+    base.update(kwargs)
+    return base
+
+
+def _chopping_plan_context(pending=None):
+    return {
+        "goal": "chop logs 20",
+        "current_cmd": "chop logs 20",
+        "pending_steps": pending or [],
+        "done_steps": [],
+        "total_steps": 1,
+        "current_step": 0,
+    }
+
+
+class TestChoppingNoTrees:
+    def _call(self, state, plan_context=None):
+        from agent.skills import activity_stuck
+        # Call the internal deterministic dispatch directly
+        return activity_stuck._deterministic_shortcut(state, plan_context or _chopping_plan_context())
+
+    def test_no_trees_surface_produces_explore_replan(self):
+        state = _chopping_state(nearby={"trees": False})
+        result = self._call(state)
+        assert result is not None
+        replan = next((a for a in result if a.get("action") == "replan"), None)
+        assert replan is not None
+        assert any("explore" in c for c in replan["commands"])
+
+    def test_no_trees_underground_includes_surface_first(self):
+        state = _chopping_state(nearby={"trees": False}, pos={"x": 0, "y": 20, "z": 0})
+        result = self._call(state)
+        assert result is not None
+        replan = next((a for a in result if a.get("action") == "replan"), None)
+        assert replan is not None
+        cmds = replan["commands"]
+        assert cmds[0] == "surface"
+        assert any("explore" in c for c in cmds)
+
+    def test_no_trees_underground_preserves_pending_steps(self):
+        plan = _chopping_plan_context(pending=["equip"])
+        state = _chopping_state(nearby={"trees": False}, pos={"x": 0, "y": 10, "z": 0})
+        result = self._call(state, plan)
+        assert result is not None
+        replan = next((a for a in result if a.get("action") == "replan"), None)
+        assert replan is not None
+        assert "equip" in replan["commands"]
+
+    def test_no_trees_with_nearby_trees_returns_none(self):
+        # If trees are actually nearby, deterministic shortcut should not fire
+        state = _chopping_state(nearby={"trees": True})
+        result = self._call(state)
+        assert result is None
+
+
+# ── mining: additional edge cases ─────────────────────────────────────────────
+
+class TestMiningAdditional:
+    def setup_method(self):
+        from agent.skills.stuck import tool_acquisition
+        tool_acquisition._LAST_ATTEMPTS.clear()
+
+    def test_no_tools_with_iron_ingots_includes_equip(self):
+        state = _state(
+            reason="no_tools",
+            capabilities={"can_make_pickaxe": True},
+            inventory=[{"name": "iron_ingot", "count": 10}],
+        )
+        result = mining_stuck.deterministic_shortcut(state, _plan_context())
+        assert result is not None
+        replan = next(a for a in result if a.get("action") == "replan")
+        assert any("equip" in c for c in replan["commands"])
+
+    def test_no_tools_diamond_target_still_replans(self):
+        state = _state(
+            reason="no_tools",
+            capabilities={"can_make_pickaxe": True},
+            inventory=[{"name": "cobblestone", "count": 20}],
+        )
+        result = mining_stuck.deterministic_shortcut(state, _plan_context("mine diamond 5"))
+        assert result is not None
+        replan = next(a for a in result if a.get("action") == "replan")
+        assert any("mine" in c for c in replan["commands"])
+
+    def test_fingerprint_prevents_double_replan(self):
+        state = _state(
+            reason="no_tools",
+            capabilities={"can_make_pickaxe": True},
+            inventory=[{"name": "cobblestone", "count": 8}],
+        )
+        result1 = mining_stuck.deterministic_shortcut(state, _plan_context())
+        result2 = mining_stuck.deterministic_shortcut(state, _plan_context())
+        # First call should produce replan, second should return None (fingerprint blocks retry)
+        assert result1 is not None
+        assert result2 is None

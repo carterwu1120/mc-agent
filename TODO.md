@@ -108,7 +108,7 @@
   - [x] 使用 `_planner_lock` 統一 executor ownership，取代分散的 flag 機制
   - [x] 使用者給任務時，self_task LLM 結果被丟棄，改由 coordinator 任務接手
   - [ ] **Known concurrency issues（future work）：**
-    - [ ] Chat / coordinator_interrupt 路徑尚未納入 `_planner_lock`，理論上仍有 race
+    - [x] Chat / coordinator_interrupt 路徑尚未納入 `_planner_lock`，理論上仍有 race → single queue refactor 已解決，chat 統一走 coordinator enqueue
     - [x] Lock 在 `create_task` 後即釋放，executor `_running=True` 尚未設定，存在短暫 gap → `executor.claim()` 在 lock 釋放前同步設定，local `_lock_acquired` flag 防止錯誤 owner 釋放 lock
     - [x] WebSocket 斷線時 `_check_coordinator_queue` coroutine 未加入 `session_tasks` → `_bg_tasks` set 追蹤，cancel 安全（peek 非破壞性）
     - [x] Coordinator task dequeue 後若因狀態衝突跳過，task 會留在 `running` 狀態 → 改為 peek+claim 兩階段：peek 不消耗 task，確認能執行後才 claim；interrupt 同理；移除 requeue endpoint
@@ -117,16 +117,16 @@
   - [x] v2：craft_decision / inventory skill 統一接到共用 context builder（`build_for_skill`）
   - [x] v2：加入重複事件折疊（consecutive + 10 min time-window）、按 skill 類型設定 context budget
   - [x] v2：task_arbitration skill 統一接到共用 context builder
-  - [ ] v2：verify_failure / 其他新增 skill 加入時也需接上 context builder
+  - [x] v2：verify_failure / 其他新增 skill 加入時也需接上 context builder → verify_failure 走 activity_stuck handler，已有 build_for_skill
 
-- [~] **Replay testing（regression tests）** `[Backend: Testing]`
-  - [ ] 從 production stuck state 建 unit test fixtures（state dict → expected commands）
-  - [ ] 至少涵蓋：mining no_tools、smelting no_input、chopping no_trees
+- [x] **Replay testing（regression tests）** `[Backend: Testing]`
+  - [x] 從 production stuck state 建 unit test fixtures（state dict → expected commands）
+  - [x] 涵蓋：mining no_tools、smelting no_input、chopping no_trees（20 tests）
   - [x] 為 FastAPI route / repository layer 補 API tests
 
-- [ ] **Plan reasoning 欄位推廣與驗證**
-  - [ ] `reasoning` vs `commands` 一致性檢查（說要補鐵但 commands 沒有 smelt → 抓邏輯錯）
-  - [ ] reasoning 可選擇性 chat 給玩家看（透明度）
+- [x] **Plan reasoning 欄位推廣與驗證**
+  - [x] `reasoning` vs `commands` 一致性檢查（說要補鐵但 commands 沒有對應步驟 → log warning）
+  - [x] reasoning chat 給玩家看（planner 有 reasoning 時先 chat 再執行 plan）
   - [ ] 評估 Gemini 2.5 Flash vs Ollama 小模型的 reasoning 品質差距
 
 ### Phase 2 — RAG + Knowledge System

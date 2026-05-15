@@ -832,6 +832,27 @@ def _maybe_plan_stop(message: str, activity: str) -> dict | None:
     return {"action": "plan", "commands": [stop_cmd]}
 
 
+_REASONING_RESOURCE_KEYWORDS = {
+    "iron": ["mine iron", "smelt raw_iron", "smelt iron"],
+    "diamond": ["mine diamond"],
+    "wood": ["chop"],
+    "log": ["chop"],
+    "coal": ["mine coal"],
+    "gold": ["mine gold", "smelt raw_gold"],
+    "food": ["hunt", "fish"],
+}
+
+def _check_reasoning_consistency(reasoning: str, commands: list[str]) -> None:
+    if not reasoning:
+        return
+    lowered = reasoning.lower()
+    commands_str = " ".join(commands).lower()
+    for keyword, expected_cmds in _REASONING_RESOURCE_KEYWORDS.items():
+        if keyword in lowered:
+            if not any(ec in commands_str for ec in expected_cmds):
+                print(f"[Planner] ⚠ reasoning 提到 '{keyword}' 但 commands 沒有對應步驟: {commands}")
+
+
 async def handle(state: dict, llm: LLMClient) -> dict | None:
     message = state.get("message", "")
     player_name = state.get("from")
@@ -958,7 +979,14 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                     return repaired
                 return _planner_failure_chat()
             decision["commands"] = commands
-            print(f"[Planner] 計畫: {decision.get('commands')}")
+            reasoning = (decision.get("reasoning") or "").strip()
+            _check_reasoning_consistency(reasoning, commands)
+            print(f"[Planner] 計畫: {commands}")
+            if reasoning:
+                return [
+                    {"command": "chat", "text": reasoning},
+                    decision,
+                ]
             return decision  # agent.py routes to executor
 
         if decision.get("action") == "chat":
