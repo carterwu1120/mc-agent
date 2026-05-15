@@ -8,9 +8,16 @@ const activityStack = require('./activity')
 const INVENTORY_FULL = 34  // trigger 2 slots early so there's room to craft/place
 
 const JUNK_ITEMS = new Set([
+    // stone byproducts
     'clay_ball',
     'andesite', 'tuff', 'calcite', 'amethyst_block',
     'gravel', 'smooth_basalt', 'granite', 'coarse_dirt', 'dirt',
+    // cave/nature pickups with no bot use
+    'big_dripleaf', 'small_dripleaf', 'brown_mushroom', 'red_mushroom',
+    'moss_carpet', 'moss_block', 'vine', 'lily_pad', 'dead_bush',
+    'white_banner', 'flint',
+    // mob drops bot doesn't use
+    'bone', 'leather',
 ])
 
 const _ARMOR_SLOT_FOR = {
