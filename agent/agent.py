@@ -90,6 +90,7 @@ def _write_live_state() -> None:
         snapshot = {
             **_latest_state,
             'bot_id': BOT_ID,
+            'mc_connected': bool(_latest_state.get('mc_connected')),
             'ws_connected': _latest_state.get('health') is not None,
             'updated_at': datetime.datetime.utcnow().isoformat() + 'Z',
         }
@@ -1418,12 +1419,12 @@ async def run():
                     state = json.loads(raw)
                     _latest_state.clear()
                     _latest_state.update(state)
-                    _write_live_state()
-                    executor.update_state(state)
-                    _sync_task_context(state)
                     event_type = state.get("type")
                     if event_type == "tick":
                         executor.heartbeat()
+                    _write_live_state()
+                    executor.update_state(state)
+                    _sync_task_context(state)
                     pos = state.get("pos") or {}
                     print(f"[State] type={event_type}  "
                           f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})  "

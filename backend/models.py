@@ -47,6 +47,7 @@ class BotStateResponse(BaseModel):
     name: str
     online: bool
     last_seen: str | None = None
+    connection: dict[str, Any] = Field(default_factory=dict)
     status: dict[str, Any]
     current_task: dict[str, Any] | None = None
     interrupted_tasks: list[dict[str, Any]]

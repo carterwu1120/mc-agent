@@ -44,6 +44,9 @@ const WS_PORT = parseInt(process.env.BOT_WS_PORT || '3001')
 const wss = new WebSocketServer({ port: WS_PORT })
 let agentSocket = null
 let _initialized = false
+let _mcConnected = false
+
+function setMcConnected(val) { _mcConnected = val }
 
 function isInitialized() { return _initialized }
 
@@ -78,6 +81,7 @@ function sendState(bot, type, extra = {}) {
         mode: getMode(),
         activity: getActivity(),
         stack: getStack(),
+        mc_connected: _mcConnected,
         pos: bot.entity ? bot.entity.position : null,
         health: bot.health,
         food: bot.food,
@@ -123,4 +127,4 @@ function sendActivityDone(bot, activityName, extra = {}) {
     })
 }
 
-module.exports = { init, sendState, sendActivityDone, isInitialized }
+module.exports = { init, sendState, sendActivityDone, isInitialized, setMcConnected }

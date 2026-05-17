@@ -159,12 +159,12 @@ def build_bot_view(
     snapshot = snapshot or {}
     task = task or {}
     chests = chests or []
-    snapshot_online = bool(snapshot.get("ws_connected")) and snapshot_is_fresh(snapshot)
-    online = (
-        internal_state.get("online")
-        if internal_state and internal_state.get("online") is not None
-        else snapshot_online
-    )
+    # ws_connected = Python agent received a tick from JS bot within 10s (written by agent.py)
+    # snapshot_is_fresh = live_state.json was written within 30s
+    # Both must be true — coordinator online flag intentionally excluded (it doesn't reflect WS state)
+    ws_connected = bool(snapshot.get("ws_connected")) and snapshot_is_fresh(snapshot)
+    mc_connected = bool(snapshot.get("mc_connected")) and ws_connected
+    online = ws_connected
     state_updated_at = (
         internal_state.get("last_seen")
         if internal_state and internal_state.get("last_seen")
@@ -176,7 +176,8 @@ def build_bot_view(
     return {
         "id": bot_id,
         "name": snapshot.get("name", bot_id),
-        "ws_connected": bool(online),
+        "ws_connected": ws_connected,
+        "mc_connected": mc_connected,
         "state_updated_at": state_updated_at,
         "status": {
             "activity": snapshot.get("activity") if online else None,
@@ -199,6 +200,10 @@ def build_bot_view(
         "queued_count": (internal_state or {}).get("queued_count", 0),
         "online": bool(online),
         "last_seen": state_updated_at,
+        "connection": {
+            "mc_connected": mc_connected,
+            "ws_connected": ws_connected,
+        },
     }
 
 

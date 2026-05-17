@@ -122,6 +122,7 @@ def create_app(
             "name": bot_view["name"],
             "online": bot_view["online"],
             "last_seen": bot_view["last_seen"],
+            "connection": bot_view.get("connection", {}),
             "status": bot_view["status"],
             "current_task": bot_view["current_task"],
             "interrupted_tasks": bot_view["interrupted_tasks"],

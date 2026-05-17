@@ -3,6 +3,7 @@ const minecraftProtocolForge = require('minecraft-protocol-forge')
 const { pathfinder } = require('mineflayer-pathfinder')
 const { initLogger } = require('./logger')
 const bridge = require('./bridge')
+const { setMcConnected } = bridge
 const activityStack = require('./activity')
 const { handle } = require('./commands')
 const eating = require('./eating')
@@ -84,6 +85,7 @@ function _wrapPathfinderDebug(bot) {
 }
 
 bot.once('spawn', () => {
+    setMcConnected(true)
     const _mcUsername   = process.env.MC_USERNAME || 'Agent'
     const _botUsernames = process.env.BOT_USERNAMES || '(none)'
     console.log(
@@ -218,5 +220,5 @@ bot.on('health', () => {
 })
 
 bot.on('error', (err) => console.error(`[Error] ${err.message}`))
-bot.on('kicked', (reason) => console.log(`[Kicked] ${reason}`))
-bot.on('end', () => console.log('[Bot] 連線結束'))
+bot.on('kicked', (reason) => { setMcConnected(false); console.log(`[Kicked] ${reason}`) })
+bot.on('end', () => { setMcConnected(false); console.log('[Bot] 連線結束') })
