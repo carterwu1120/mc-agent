@@ -359,6 +359,11 @@ class PlanExecutor:
             cmd_str = _substitute(commands[i], self._context)
 
             if preserve_task and cmd_str.strip() == 'resumetask':
+                # Unlock the JS-side _waitForDecision before resuming the original task.
+                # Without this, JS waits up to 120s for a signal that never comes when
+                # the inventory plan chose the "plan" (deposit) path instead of drop/continue.
+                import json as _json
+                await self._ws.send(_json.dumps({"command": "inventory_decision", "action": "continue"}))
                 interrupted = task_memory.load()
                 if not interrupted or interrupted.get('status') != 'interrupted':
                     print('[Executor] resumetask 失敗：找不到中斷中的任務')

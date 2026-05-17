@@ -110,8 +110,8 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
 
     bridge.sendState(bot, 'inventory_full', {})
 
-    // 等待 LLM 決策（最多 30 秒）
-    const decision = await _waitForDecision(30000)
+    // 等待 LLM 決策（最多 120 秒，deposit/drop 流程可能需要較長時間）
+    const decision = await _waitForDecision(120000)
 
     if (!decision || decision.action === 'continue') {
         console.log('[Inv] LLM 決定繼續（或超時）')
