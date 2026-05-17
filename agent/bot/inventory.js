@@ -15,9 +15,12 @@ const JUNK_ITEMS = new Set([
     // cave/nature pickups with no bot use
     'big_dripleaf', 'small_dripleaf', 'brown_mushroom', 'red_mushroom',
     'moss_carpet', 'moss_block', 'vine', 'lily_pad', 'dead_bush',
-    'white_banner', 'flint',
+    'white_banner', 'flint', 'amethyst_shard', 'azalea', 'spruce_sapling',
+    'mossy_cobblestone', 'wheat_seeds',
     // mob drops bot doesn't use
-    'bone', 'leather',
+    'bone', 'leather', 'phantom_membrane', 'gunpowder',
+    // combat drops bot doesn't use
+    'bow', 'arrow',
 ])
 
 const _ARMOR_SLOT_FOR = {
