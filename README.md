@@ -1,6 +1,6 @@
 # Minecraft LLM Agent
 
-An autonomous Minecraft bot powered by a large language model (Gemini / Ollama), capable of planning multi-step tasks, recovering from failures, managing inventory, and operating as part of a multi-agent system — all without human intervention after the initial instruction.
+An autonomous Minecraft bot powered by Codex or Claude Code using subscription login, capable of planning multi-step tasks, recovering from failures, managing inventory, and operating as part of a multi-agent system — all without human intervention after the initial instruction.
 
 > **Side project** | Node.js · Python · mineflayer · aiohttp · Docker
 
@@ -78,7 +78,7 @@ JS bot receives chat event
   ▼
 Python agent — routes to planner.py
   │
-  │  [HTTPS]  POST api.google.com/gemini
+  │  [CLI subprocess]  codex exec / claude --print
   ▼
 LLM returns plan: ["equip pickaxe", "mine diamond 10"]
   │
@@ -111,7 +111,7 @@ Python agent marks task complete
 | Transport | Used for |
 |-----------|---------|
 | WebSocket | All JS bot ↔ Python agent messages (events and commands) |
-| HTTPS | Python agent → Gemini API (LLM calls) |
+| CLI subprocess | Python agent → Codex / Claude Code (planning decisions) |
 | HTTP :3010 | Python agent ↔ Coordinator (internal multi-bot task assignment only) |
 | HTTP :8000 | Client / dashboard UI ↔ Backend public API |
 
@@ -256,16 +256,70 @@ This is a **pull model** — bot1 asks for work rather than bot0 pushing to bot1
 
 ## Deployment
 
-### Docker Compose (recommended)
+### Codex / Claude Code planning providers
+
+For local development, install and authenticate either CLI, then set:
+
+```powershell
+$env:LLM_PROVIDER="codex" # or "claude"
+# Remove any previous provider-specific model override:
+Remove-Item Env:LLM_MODEL -ErrorAction SilentlyContinue
+python -m agent.agent
+```
+
+The CLI uses its subscription login and built-in default model. `LLM_MODEL` can
+override the model. Optional `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` selects an
+executable (not a shell command); `CLI_AGENT_TIMEOUT` defaults to 120 seconds.
+No model API key is required. Codex is restricted to ChatGPT login and Claude
+selects claude.ai login. Inherited model API keys, custom API URLs and cloud
+provider overrides are excluded from the CLI environment; there is no API
+fallback. Codex user configuration is ignored, so use LLM_MODEL to select a model.
+Before each Claude decision, the adapter checks `claude auth status` and refuses
+API/Console authentication before sending the game prompt.
+Subscription usage limits and any account-level extra usage settings still apply.
+
+If an existing .env sets LLM_PROVIDER=gemini/openai/vertex/ollama, change it to
+codex or claude and clear the old LLM_MODEL. Old providers now fail explicitly;
+their Python SDKs and implementations have been removed.
+
+This is a planning adapter: existing skills send game state to `codex exec` or
+`claude --print`, then validate and execute the returned JSON through
+PlanExecutor and Mineflayer. Each request starts a fresh session; Python task
+memory supplies continuity. Claude built-in tools and MCP are disabled. Codex
+runs in a temporary directory with a read-only sandbox and ignores user CLI config. This does not expose Minecraft tools to a persistent CLI agent.
+
+For the simplest setup, sign in to Codex using `codex login` (ChatGPT account)
+or run `claude` and choose your Claude subscription, then run the Python agent
+locally. On Windows, use `codex.cmd login` if PowerShell blocks the npm .ps1 shim.
+The adapter resolves npm launchers directly without changing execution policy.
+
+Subscription authentication: [Codex authentication](https://developers.openai.com/codex/auth)
+and [Claude subscription setup and usage limits](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan).
+
+References: [Codex noninteractive mode](https://developers.openai.com/codex/noninteractive)
+and [Claude Code programmatic usage](https://code.claude.com/docs/en/headless).
+
+### Docker Compose
 
 ```bash
-# Set up .env
-echo "GOOGLE_API_KEY=your_key" > .env
-echo "MC_HOST=your_server" >> .env
+# Copy .env.example to .env; set MC_HOST and LLM_PROVIDER=codex or claude.
+# Build the agent image (includes both CLIs).
+docker compose build agent0
 
-# Start the stack
+# Authenticate the chosen CLI inside the container, using your subscription.
+# Codex: complete the device login URL shown in the terminal.
+docker compose run --rm --no-deps agent0 codex login --device-auth
+# Or Claude: select the subscription login and follow its browser instructions.
+# docker compose run --rm --no-deps agent0 claude
+
+# Start the stack.
 docker compose up --build
 ```
+
+Container CLI login is stored in the named `cli_home` volume and persists
+across restarts. Host CLI login is separate. Do not delete this volume unless
+you intend to sign in again. Authentication is interactive setup; the running
+Minecraft agent uses noninteractive CLI calls.
 
 Default services in the current MVP:
 - `bot0`
@@ -353,7 +407,10 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 | `COORDINATOR_PORT` | `` | Set on bot0 to start the coordinator service on this port |
 | `COORDINATOR_URL` | `` | Set on every agent that should register/poll against the coordinator |
 | `BACKEND_CORS_ORIGINS` | `` | Extra comma-separated origins allowed to call backend APIs |
-| `GOOGLE_API_KEY` | — | Gemini API key |
+| `LLM_PROVIDER` | `codex` | `codex` or `claude`; restart after changing |
+| `LLM_MODEL` | CLI default | Optional model supported by your subscription |
+| `CLI_AGENT_TIMEOUT` | `120` | Maximum seconds per CLI call |
+| `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` | PATH lookup | Optional executable path |
 
 ---
 
@@ -389,7 +446,7 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 
 ### Known limitations
 
-- **LLM latency**: Each LLM call adds 1–3 seconds of latency. Deterministic shortcuts mitigate this for common cases, but complex stuck situations still feel slow.
+- **CLI latency**: Each decision starts a CLI process and waits for inference. Deterministic shortcuts reduce calls, but complex stuck situations can still feel slow.
 
 - **Context window pressure**: Long-running sessions accumulate events and failures in `task.json`. A context compression layer (`context_builder.py` already started) needs to be extended to all skill handlers.
 
@@ -407,7 +464,7 @@ $env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
 - **Tool acquisition policy**: Shared `ensureTool` retry/cooldown logic instead of per-activity reimplementation
 
 ### Mid-term
-- **Pydantic AI integration**: Replace fragile `re.sub + json.loads` LLM response parsing with typed structured outputs — starting with `planner.py`
+- **Structured decisions**: Extend typed validation of CLI agent JSON responses, starting with `planner.py`
 - **Interaction memory**: Persist player preferences and long-term goals across sessions
 - **Reflection memory**: Bot accumulates observations about what works and what doesn't
 
@@ -492,7 +549,7 @@ The coverage-gaps query is the most actionable: high counts for a given `activit
 | Minecraft bot runtime | Node.js, [mineflayer](https://github.com/PrismarineJS/mineflayer) |
 | Bot-agent transport | WebSocket (ws) |
 | Intelligence layer | Python 3.11, asyncio |
-| LLM backends | Google Gemini API, Ollama (local), Vertex AI |
+| Planning agents | Codex CLI / Claude Code CLI, subscription login |
 | Backend API | FastAPI |
 | Dashboard server | aiohttp |
 | Database | PostgreSQL (asyncpg), shared across all bots |

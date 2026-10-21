@@ -172,10 +172,10 @@ Switch: `!setmode <mode>` or LLM sends `setmode <mode>` command.
 ## LLM Clients (`agent/brain/`)
 
 ```python
-from agent.brain import LLMClient, GeminiClient, OllamaClient
+from agent.brain import LLMClient, build_client
 
-llm: LLMClient = GeminiClient()
-# llm = OllamaClient(model="qwen3:14b")
+llm: LLMClient = build_client()  # LLM_PROVIDER=codex (default) or claude
 ```
 
-Both implement `async def chat(messages, system=None) -> str`.
+Both CLI providers implement `async def chat(messages, system=None) -> str`.
+They use subscription login, with no direct model API fallback or API SDK dependency.

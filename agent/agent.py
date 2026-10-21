@@ -10,7 +10,7 @@ import aiohttp
 import websockets
 from dotenv import load_dotenv
 
-from agent.brain import LLMClient, GeminiClient, OllamaClient, OpenAIClient, VertexClient, RateLimitedLLMClient
+from agent.brain import LLMClient, build_client
 from agent.logger import init_logger, set_task_id
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
@@ -41,24 +41,10 @@ HEARTBEAT_INTERVAL: float = 10.0
 _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 
 # ── LLM provider 由 env var 控制，不需要 rebuild ──────────
-# LLM_PROVIDER=gemini|openai|ollama|vertex  (default: gemini)
+# LLM_PROVIDER=codex|claude (default: codex; no direct model API fallback)
 # LLM_MODEL=<model>                         (optional, overrides provider default)
-# LLM_RPM=<int>                             (requests per minute, default: 60)
-def _build_llm() -> LLMClient:
-    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
-    model = os.environ.get("LLM_MODEL")
-    rpm = int(os.environ.get("LLM_RPM", "60"))
-    if provider == "openai":
-        inner: LLMClient = OpenAIClient(model=model or "gpt-5.4-mini")
-    elif provider == "ollama":
-        inner = OllamaClient(model=model or "qwen3:14b")
-    elif provider == "vertex":
-        inner = VertexClient(model=model or "gemini-2.5-flash")
-    else:
-        inner = GeminiClient(model=model or "gemini-2.5-flash")
-    return RateLimitedLLMClient(inner, rpm=rpm, burst=5)
-
-llm: LLMClient = _build_llm()
+# CLI_AGENT_TIMEOUT=<seconds>               (default: 120)
+llm: LLMClient = build_client()
 
 executor = PlanExecutor()
 
@@ -1348,11 +1334,11 @@ async def run():
     _bot_usernames = os.environ.get("BOT_USERNAMES", "") or "(none)"
     _strict_chat   = os.environ.get("STRICT_CHAT_ADDRESSING", "true")
     _is_coord      = os.environ.get("COORDINATOR_BOT", "false")
-    _provider      = os.environ.get("LLM_PROVIDER", "gemini")
+    _provider      = os.environ.get("LLM_PROVIDER", "codex")
     _model         = os.environ.get("LLM_MODEL") or "default"
     print(
         f"[Agent] 啟動 BOT_ID={BOT_ID} | WS={WS_URL} | MC_USERNAME={_mc_username} | "
-        f"LLM={_provider}/{_model} | LLM_RPM={os.environ.get('LLM_RPM', '60')} | "
+        f"CLI_AGENT={_provider}/{_model} | CLI_TIMEOUT={getattr(llm, 'timeout', 120)}s | "
         f"BOT_USERNAMES={_bot_usernames} | "
         f"STRICT_CHAT={_strict_chat} | COORDINATOR={_is_coord}"
     )

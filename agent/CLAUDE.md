@@ -23,6 +23,24 @@ Entry points:
 
 ## Architecture
 
+CLI planning providers: `LLM_PROVIDER=codex|claude` selects `brain/cli_agent.py`
+through `brain/factory.py` (default: Codex). Direct model API providers and SDK
+dependencies have been removed on this branch; invalid/old providers fail with
+migration instructions instead of falling back to another provider.
+Each skill call starts an isolated noninteractive CLI process, forwards its prompt
+via stdin, and returns the final decision to the existing skill parser. Python
+retains task memory, event routing, and PlanExecutor ownership; CLI sessions do
+not directly control Minecraft. CLI calls are serialized, with timeout and
+cancellation cleanup. Install and authenticate the CLI in the agent's runtime.
+CLI subprocesses omit inherited API keys and third-party provider overrides;
+Codex forces ChatGPT login, Claude selects claude.ai login. Claude auth status
+must report a logged-in claude.ai account before inference; saved API/Console
+authentication is rejected. Codex user config is ignored; use LLM_MODEL for an
+explicit model override. Subscription usage limits
+and any account-level extra usage settings still apply.
+The Docker agent image includes both CLIs. Its HOME is persisted in the cli_home
+volume; authenticate inside that runtime before starting the agent.
+
 Two-process system connected by WebSocket on port 3001:
 
 ```
@@ -58,7 +76,7 @@ For Python skill internals (skill pattern, LLM format, task_memory): see agent/s
 | `agent.py` | Event router — maps event types to skill handlers |
 | `executor.py` | Sequences plan commands, waits for `action_done`/`activity_done` between steps |
 | `task_memory.py` | Persists current task to `agent/data/task.json` |
-| `brain/` | `GeminiClient` / `OllamaClient` — both implement `LLMClient` |
+| `brain/` | `build_client()` selects Codex or Claude Code; `CLIAgentClient` implements `LLMClient` |
 
 ---
 

@@ -41,13 +41,9 @@ services:
       context: .
       dockerfile: Dockerfile.agent
     environment:
-      GOOGLE_API_KEY:         ${GOOGLE_API_KEY}
-      OPENAI_API_KEY:         ${OPENAI_API_KEY}
-      OLLAMA_BASE_URL:        ${OLLAMA_BASE_URL:-http://localhost:11434}
-      LLM_PROVIDER:           ${LLM_PROVIDER:-gemini}
-      LLM_MODEL:              ${LLM_MODEL}
-      GOOGLE_CLOUD_PROJECT:   ${GOOGLE_CLOUD_PROJECT}
-      GOOGLE_CLOUD_LOCATION:  ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      LLM_PROVIDER:           ${LLM_PROVIDER:-codex}
+      LLM_MODEL:              ${LLM_MODEL:-}
+      CLI_AGENT_TIMEOUT:     ${CLI_AGENT_TIMEOUT:-120}
       BOT_WS_URL:             ws://bot0:3001
       BOT_ID:                 bot0
       BOT_DATA_DIR:           /app/agent/data/bot0
@@ -59,7 +55,7 @@ services:
     volumes:
       - ./agent/data:/app/agent/data
       - ./agent/logs:/app/agent/logs
-      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      - cli_home:/root/agent-home
     depends_on:
       bot0:
         condition: service_started
@@ -102,13 +98,9 @@ services:
   #     context: .
   #     dockerfile: Dockerfile.agent
   #   environment:
-  #     GOOGLE_API_KEY:         ${GOOGLE_API_KEY}
-  #     OPENAI_API_KEY:         ${OPENAI_API_KEY}
-  #     OLLAMA_BASE_URL:        ${OLLAMA_BASE_URL:-http://localhost:11434}
-  #     LLM_PROVIDER:           ${LLM_PROVIDER:-gemini}
-  #     LLM_MODEL:              ${LLM_MODEL}
-  #     GOOGLE_CLOUD_PROJECT:   ${GOOGLE_CLOUD_PROJECT}
-  #     GOOGLE_CLOUD_LOCATION:  ${GOOGLE_CLOUD_LOCATION:-us-central1}
+  #     LLM_PROVIDER:           ${LLM_PROVIDER:-codex}
+  #     LLM_MODEL:              ${LLM_MODEL:-}
+  #     CLI_AGENT_TIMEOUT:     ${CLI_AGENT_TIMEOUT:-120}
   #     BOT_WS_URL:             ws://bot1:3003
   #     BOT_ID:                 bot1
   #     BOT_DATA_DIR:           /app/agent/data/bot1
@@ -117,7 +109,7 @@ services:
   #   volumes:
   #     - ./agent/data:/app/agent/data
   #     - ./agent/logs:/app/agent/logs
-  #     - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+  #     - cli_home:/root/agent-home
   #   depends_on:
   #     - bot1
   #   extra_hosts:
@@ -151,3 +143,4 @@ services:
 
 volumes:
   postgres_data:
+  cli_home:
