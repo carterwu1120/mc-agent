@@ -102,7 +102,8 @@ async function _loop(bot, goal) {
 - `updateTopGoal(goal)` — updates top frame's goal, resets progress (used by `_resumeX`)
 - `getActivity()` — top frame name or `'idle'`
 - `getStack()` — all frames without `resumeFn` (JSON-safe, sent to Python)
-- `touch(name, reason)` — marks meaningful activity progress
+- `touch(name, reason)` — records diagnostics; watchdog independently verifies evidence
+- `waitFor(reason, timeoutMs)` / `endWait()` — bounded expected waits
 - `getActivityOptions(name)` — returns registered metadata for watchdog / recovery
 
 Each frame stores:
@@ -119,60 +120,52 @@ Each frame stores:
 
 ---
 
-## Progress Semantics
+## Progress Semantics and Watchdog
 
-Stuck detection is based on **progress**, not merely "still not done".
+`ProgressWatch` in watchdog.js uses its own evidence timeline, independently of
+`touch()`. New 2-block spatial cells and inventory/counter high-water marks count
+as local effects. Repeated targets, gear swaps, equal counters and short oscillations
+cannot refresh the deadline. The visited-cell history is bounded at 512 entries.
+For targeted mining, unrelated byproducts do not count as requested resource output.
 
-Use a layered model:
+Check interval: 2s. No-effect timeout: 25s, fishing 60s; activity metadata can override
+`timeoutMs`. Resource activities moving without output trigger review after 180s
+(`reviewMs`). Paused/nonrunning top frames trigger after 45s (`pauseTimeoutMs`).
+Idle-with-unfinished-task is handled by Python, where task ownership is known.
 
-1. **Semantic progress**
-   - Activity-specific signals that directly advance the goal.
-   - Examples:
-   - `mining`: dug block, target ore found, count incremented
-   - `smelting`: placed furnace, inserted fuel/input, took output
-   - `hunting`: target acquired, kill count incremented, drops collected
-2. **Physical progress fallback**
-   - Applied globally by `watchdog.js` to every top activity.
-   - Signals:
-   - position changed materially
-   - inventory changed
-   - held item changed
-   - goal changed
-   - top-frame progress changed
-3. **No-progress timeout**
-   - If the top activity is still running but no meaningful progress occurs before timeout, watchdog emits `activity_stuck(reason='no_progress')`.
+`waitFor(reason, timeoutMs)` gives the top activity a bounded expected wait (max 120s).
+Repeated calls with the same reason cannot extend it. `endWait()` clears it after
+observable completion. Inventory uses 120s, furnace output 30s, fish bite 35s.
+Do not use touch('waiting') to manufacture progress. `updateProgress` ignores equal
+values, and catches increment only when inventory actually gained an item.
 
-Guidelines:
-- Prefer `activityStack.touch(name, reason)` when a step clearly advances the current activity.
-- Use `activityStack.updateProgress({...})` when the activity has a durable counter or measurable milestone.
-- Do **not** treat random state churn (minor jitter, hunger ticks, damage taken) as semantic progress.
-- New activities do not need a full custom progress implementation on day one; physical fallback covers them by default.
-- If a new activity gets false positives or false negatives, add semantic progress hooks before adding special watchdog logic.
+Watchdog pauses the top frame and clears navigation/digging/controls before sending
+activity_stuck with reason and a bounded `progress_evidence` history. Duplicate
+reports are limited to one per 30s. Python then requests a full suspend handshake.
 
----
+## Cancellation and command ownership
 
-## Watchdog
+`execution.js` uses AsyncLocalStorage scopes plus a global execution epoch.
+Command dispatch creates a scope with `_command_id`; exported activity starts are
+wrapped with `execution.owned()` so nested activities get independent scopes.
+Each frame retains its scope and original command ID (scope itself is not serialized).
+Pause/pop/remove revoke the old scope. Resume creates a fresh scope, preserving the
+original command ID. Activity loops must return after stale async continuations.
 
-`watchdog.js` monitors the current top activity only.
+`execution.install(bot)` guards movement, dig/place, equipment, item/window operations
+and returned chest/furnace methods. Stale async operations reject with AbortError;
+stale synchronous mutations and bridge events are ignored. Guards do not undo packets
+already sent to the server. New primitive APIs must be added to the guarded methods.
+Background food/water/combat safety monitors remain available outside old task scopes.
 
-Rules:
-- `idle` is ignored.
-- The watchdog checks `lastProgressAt`, not `activity_done`.
-- Long-running activities are valid as long as progress keeps occurring.
-- Default timeout applies to all activities automatically.
-- Only activities with special pacing should override `timeoutMs` in `register(...)`.
-
-When watchdog fires, it sends:
-- `type='activity_stuck'`
-- `reason='no_progress'`
-- `detail`
-- `goal`
-- `progress`
-- `suggested_actions`
-
-This is a JS-side mechanical signal. Python may then decide whether to retry, replan, or interrupt strategically.
-
----
+`suspend` invalidates the global epoch, pauses/removes every stack frame without
+resuming its parent, cancels inventory recovery and navigation, clears physical controls,
+then emits `recovery_paused {request_id, stopped, errors}`. This is a local execution
+acknowledgement, not proof that a previously sent server packet was rolled back.
+It must never emit action_done. `stopall` also invalidates old scopes and clears motion.
+Stopping a named activity present in the stack also clears its paused parent frames;
+a manually stopped task must not silently revive after a later activity completes.
+Bridge snapshots carry command_id and activity_runtime, including explicit wait leases.
 
 ## Existing Activity Modules
 

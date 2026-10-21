@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
 const { sendActivityDone } = bridge
@@ -112,6 +113,7 @@ function findSurfaceSpot(bot, maxRadius = 24) {
 activityStack.register('surface', _pause)
 
 function _pause(_bot) {
+    _runToken++
     isSurfacing = false
     _isPaused = true
     console.log('[Surface] 暫停前往地表')
@@ -172,6 +174,7 @@ async function _run(bot, goal = {}, token) {
         noteTeleportLikeAction()
         bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
         await _sleep(500)
+        if (!execution.isCurrent()) return
         if (token !== _runToken || !isSurfacing) return
 
         const pos = bot.entity.position
@@ -199,7 +202,7 @@ async function _run(bot, goal = {}, token) {
             detail: e.message,
         })
     } finally {
-        if (token !== _runToken) return
+        if (!execution.isCurrent() || token !== _runToken) return
         const paused = _isPaused
         isSurfacing = false
         _isPaused = false
@@ -208,3 +211,8 @@ async function _run(bot, goal = {}, token) {
 }
 
 module.exports = { startSurfacing, stopSurfacing, findSurfaceSpot }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

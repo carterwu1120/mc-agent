@@ -96,7 +96,8 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `action_done` | Instant action completed | Yes — signals PlanExecutor |
 | `task_started` | Activity started (via `!` command or LLM) | Yes — saves to task_memory for resume |
 | `task_stopped` | Activity manually stopped | Yes — marks task_memory interrupted |
-| `activity_stuck` | Stuck mid-activity | Yes — LLM decides recovery |
+| `activity_stuck` | Stuck, expired wait, orphaned pause or unexpected idle | Yes — RecoverySupervisor |
+| `recovery_paused` | Correlated JS suspension acknowledgement | Yes — resolves stop deadline; never action_done |
 | `inventory_full` | Inventory ≥ 34 slots | Yes — LLM decides drop/plan |
 | `craft_decision` | Needs crafting decision | Yes |
 | `food_low` | Food < 10 & idle & no food | Yes — deterministic, no LLM |
@@ -115,7 +116,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 |------|-------------|---------|
 | `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復 |
 | `inventory.py` | `inventory_full` | LLM decides drop / deposit plan / continue |
-| `activity_stuck.py` | `activity_stuck` | 單步恢復；executor 執行中可回傳 `replan` 替換剩餘步驟 |
+| `recovery.py` | supervised `activity_stuck` | Validated replacement strategy or explicit wait for player |
 | `self_task.py` | `tick` (idle, 60s) | 自主任務規劃；companion mode 不執行 |
 | `respawn.py` | `player_respawned` | LLM 決定重生後恢復計畫 |
 | `tool_durability.py` | `tool_low_durability` | LLM 決定工具耐久不足的處理 |
@@ -145,13 +146,40 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 
 ## Stuck / Recovery Model
 
-The system uses a layered stuck model:
+`recovery.py` owns a single recovery per bot. `agent.py` routes all activity_stuck
+(including executor verification/timeouts) through it and `skills/recovery.py`.
+The previous `skills/activity_stuck.py` rules remain for replay/reference, but are
+not the live event handler. Local mechanical navigation remains separate.
 
-1. **Semantic progress** — activity-specific progress that directly advances the activity goal.
-2. **Physical progress fallback** — generic signals such as movement, inventory changes, held-item changes, goal/progress mutations.
-3. **No-progress watchdog** — if the current top activity remains active but stale past timeout, JS emits `activity_stuck` with `reason='no_progress'`.
+1. JS watches new spatial cells, inventory high-water marks and output counters.
+   Repeated touches, gear changes, equal counters and short loops cannot keep it alive.
+2. Default no-effect threshold is 25s (fishing 60s). Orphaned pauses trigger at 45s;
+   named waits have nonrenewable deadlines. Resource work without relevant output
+   requests review after 180s even if the bot keeps traveling.
+3. Python detects unfinished tasks which remain idle for 15s, including companion
+   mode. Instant commands have a 45s completion deadline; heartbeats alone do not
+   extend these deadlines. Intentional idle/manual stops do not trigger recovery.
+4. Supervisor sends `suspend` with request_id, waits at most 5s for recovery_paused,
+   then calls the CLI. JS revokes command/activity scopes, pauses every frame without
+   resuming old routes, clears motion and reports local cancellation success.
+5. Decision deadline is RECOVERY_DECISION_TIMEOUT (60s default), two attempts per
+   episode, at most three episodes in a rolling 5 minutes between explicit tasks.
+   Duplicate events coalesce. A repeated strategy in the same position/inventory/
+   goal fingerprint is rejected. These are call budgets, not exact token quotas.
+6. A valid plan includes commands and an observable expected_outcome. The latter
+   is explanatory context, not a generic executable predicate; existing step/goal
+   verification and watchdog observations still determine actual progress.
+7. The current executor/coordinator retains ownership during replan. No response,
+   invalid/empty plans, missing stop acknowledgement or exhausted budget preserve
+   the task as recovery_blocked and enter waiting_player. Autonomous ticks cannot
+   overwrite it. A player instruction can restart/replan explicitly.
+8. New tasks, manual stops, death/disconnect invalidate pending AI responses.
+   Commands carry correlation IDs; late completions cannot complete a different
+   command. PlanExecutor clears completion flags before sending, and old runs may
+   not clear the replacement run's command in finally blocks.
 
-Important rules:
-- Do not treat "no `activity_done` for N seconds" as stuck by itself.
-- `activity_stuck(reason='no_progress')` is valid even while an activity is still running.
-- New JS activities should automatically be covered by the watchdog via global defaults; only special cases should override timeout or suggested actions.
+`live_state.json` includes supervision phase/deadline/expected_outcome. Recovery
+attempts and final blocking reasons are recorded in task history. Runtime waits and
+command IDs are included in bridge snapshots. See bot/CLAUDE.md for scope rules.
+Offline tests cover the protocol and adversarial async timelines; they cannot prove
+server physics, permissions, block placement or every plugin API is cancellable.

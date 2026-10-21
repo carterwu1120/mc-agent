@@ -4,6 +4,8 @@ const { getChests } = require('./chest')
 const { getHome } = require('./home')
 const { getMode } = require('./mode')
 const navigation = require('./navigation')
+const execution = require('./execution')
+const activityStack = require('./activity')
 
 const TREE_BLOCK_NAMES = [
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
@@ -76,12 +78,15 @@ function init(bot, onAction) {
 }
 
 function sendState(bot, type, extra = {}) {
+    if (!execution.isCurrent()) return
     if (!agentSocket || agentSocket.readyState !== 1) return
     const state = {
         type,
+        command_id: execution.commandId(),
         mode: getMode(),
         activity: getActivity(),
         stack: getStack(),
+        activity_runtime: activityStack.getRuntimeState(getActivity()),
         navigation: navigation.lastResult(bot),
         mc_connected: _mcConnected,
         pos: bot.entity ? bot.entity.position : null,

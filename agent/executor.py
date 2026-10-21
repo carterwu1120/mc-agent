@@ -1,14 +1,17 @@
 import asyncio
 import json
 import time
+import uuid
 from agent import task_memory
 from agent.logger import get_task_id
 from agent.plan_utils import normalize_commands
 
 
 HEARTBEAT_TIMEOUT = 30.0   # seconds without a tick before declaring JS unresponsive
-POLL_INTERVAL    = 10.0   # how often to check heartbeat while waiting
-ACTIVITY_START_TIMEOUT = 90.0  # seconds before retrying if expected activity never started
+POLL_INTERVAL = 2.0
+ACTIVITY_START_TIMEOUT = 15.0
+ACTION_TIMEOUT = 45.0
+RECOVERY_TIMEOUT = 150.0
 
 _CHOP_LOG_NAMES = frozenset({
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
@@ -305,11 +308,11 @@ class PlanExecutor:
         self._before_state: dict = {}   # snapshot before each command
         self._after_state: dict = {}    # snapshot from action_done / activity_done
         self._command_sent_at: float = 0.0
-        self._activity_retried: bool = False
         self._plan_start_state: dict = {}   # snapshot before the first step of a plan
         # Optional callback set by agent.py: async (state, ws) → None
         # When set, verification failures trigger LLM intervention instead of just logging.
         self._verify_failed_callback = None
+        self.recovery_timeout = RECOVERY_TIMEOUT
 
     def claim(self) -> None:
         """Synchronously mark executor as busy before releasing _planner_lock.
@@ -387,6 +390,7 @@ class PlanExecutor:
             self._current_step_index = i
 
             msg = _parse(cmd_str)
+            msg['_command_id'] = uuid.uuid4().hex
             msg['_task_id'] = get_task_id()
             self._current_command = msg
             self._before_state = dict(self._latest_state)
@@ -401,25 +405,27 @@ class PlanExecutor:
                 self._current_command = {'command': 'stopall'}
                 self._done.clear()
                 await ws.send(json.dumps({'command': 'stopall', '_task_id': get_task_id()}))
-                await self._done.wait()
+                try:
+                    await asyncio.wait_for(self._done.wait(), 5)
+                except asyncio.TimeoutError:
+                    await self._request_recovery('stop_not_confirmed', ws)
+                    return
                 if self._run_id != my_run_id:
                     return
                 self._current_command = msg
-            await ws.send(json.dumps(msg))
-            self._command_sent_at = asyncio.get_event_loop().time()
-            self._activity_retried = False
-
             self._done.clear()
             self._stuck_event.clear()
             self._skip_event.clear()
+            self._command_sent_at = asyncio.get_event_loop().time()
+            await ws.send(json.dumps(msg))
 
-            timed_out = False
             try:
                 done_task = asyncio.ensure_future(self._done.wait())
                 stuck_task = asyncio.ensure_future(self._stuck_event.wait())
 
                 # Poll in short intervals, checking heartbeat between each.
-                # Activity runs as long as JS keeps sending ticks — no fixed timeout.
+                # Heartbeats detect disconnects; command deadlines and the JS
+                # watchdog detect idle or missing progress independently.
                 while True:
                     finished, _ = await asyncio.wait(
                         [done_task, stuck_task],
@@ -430,7 +436,7 @@ class PlanExecutor:
                         break  # done or stuck fired — proceed normally
                     # Neither fired yet — check JS is still alive
                     now = asyncio.get_event_loop().time()
-                    if self._last_heartbeat > 0 and now - self._last_heartbeat > HEARTBEAT_TIMEOUT:
+                    if now - max(self._last_heartbeat, self._command_sent_at) > HEARTBEAT_TIMEOUT:
                         print(f'[Executor] JS 無回應超過 {HEARTBEAT_TIMEOUT}s，中止計畫')
                         done_task.cancel()
                         stuck_task.cancel()
@@ -439,26 +445,24 @@ class PlanExecutor:
                         if not preserve_task:
                             task_memory.mark_step_failed(i, "timeout")
                         self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "timeout"})
-                        timed_out = True
-                        break
+                        self.abort(preserve_task=True, reason='connection_lost')
+                        return
                     elapsed = now - self._last_heartbeat
                     if elapsed > 10:
                         print(f'[Executor] 等待 "{cmd_str}" 中... (上次心跳 {elapsed:.0f}s 前)')
 
-                    # Detect activity command that JS never started (command was dropped)
-                    expected_activity = _cmd_to_activity(cmd_str)
-                    if expected_activity and not self._activity_retried:
-                        current_activity = self._latest_state.get('activity', 'idle')
-                        idle_secs = now - self._command_sent_at
-                        if current_activity == 'idle' and idle_secs > ACTIVITY_START_TIMEOUT:
-                            print(f'[Executor] {expected_activity} 送出後 {idle_secs:.0f}s 仍未啟動，重試指令: {cmd_str}')
-                            self._activity_retried = True
-                            self._command_sent_at = now
-                            await ws.send(json.dumps(msg))
+                    # Heartbeats prove transport liveness, not command progress.
+                    elapsed_command = now - self._command_sent_at
+                    long_running = msg['command'] in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface', 'explore'}
+                    limit = ACTIVITY_START_TIMEOUT if long_running else ACTION_TIMEOUT
+                    if elapsed_command > limit and (not long_running or self._latest_state.get('activity', 'idle') == 'idle'):
+                        await self._request_recovery('unexpected_idle' if long_running else 'action_timeout', ws)
+                        if self._run_id != my_run_id:
+                            return
+                        break
 
-                if not timed_out:
-                    done_task.cancel()
-                    stuck_task.cancel()
+                done_task.cancel()
+                stuck_task.cancel()
 
                 # abort() increments _run_id — detect superseded run and bail out
                 if self._run_id != my_run_id:
@@ -470,7 +474,11 @@ class PlanExecutor:
                     # to wait for an explicit resume / skip / replan signal and
                     # then apply that control flow before touching the next step.
                     print(f'[Executor] 步驟 {i} 因 activity_stuck 暫停，等待 LLM 決策...')
-                    await self._done.wait()
+                    try:
+                        await asyncio.wait_for(self._done.wait(), self.recovery_timeout)
+                    except asyncio.TimeoutError:
+                        await self._request_recovery('recovery_timeout', ws)
+                        return
 
                     # abort() increments _run_id while unblocking _done
                     if self._run_id != my_run_id:
@@ -570,7 +578,11 @@ class PlanExecutor:
                 self._step_results.append({"cmd": cmd_str, "status": "failed", "error": "cancelled"})
                 break
             finally:
-                self._current_command = None
+                for pending in (done_task, stuck_task):
+                    if not pending.done():
+                        pending.cancel()
+                if self._run_id == my_run_id:
+                    self._current_command = None
 
             i += 1
 
@@ -602,6 +614,8 @@ class PlanExecutor:
         print('[Executor] 計畫執行完畢')
 
     def signal_done(self, state: dict | None = None) -> None:
+        if state and state.get('command_id') and self._current_command and state['command_id'] != self._current_command.get('_command_id'):
+            return
         if not self._current_command:
             self._done.set()
             return
@@ -649,6 +663,8 @@ class PlanExecutor:
         Only unblocks the executor if the completing activity matches the
         original step's expected activity. Recovery actions (e.g. surface
         completing during a chop step) keep the executor waiting."""
+        if state and state.get('command_id') and self._current_command and state['command_id'] != self._current_command.get('_command_id'):
+            return
         event_type = (state or {}).get('type')
 
         if event_type == 'activity_done':
@@ -676,12 +692,20 @@ class PlanExecutor:
     def notify_stuck(self) -> None:
         """Signal that activity_stuck fired. Pauses executor until resume or replan."""
         if self._running:
+            self._done.clear()
             self._in_stuck_recovery = True
             self._stuck_event.set()
 
+    async def _request_recovery(self, reason, ws):
+        state = {**self._latest_state, 'type': 'activity_stuck', 'reason': reason,
+                 'detail': f"Command did not complete: {self._current_command}"}
+        if self._verify_failed_callback:
+            await self._verify_failed_callback(state, ws)
+        else:
+            self.abort(preserve_task=True, reason=reason)
+
     def replan(self, new_commands: list, path_taken: str | None = None) -> None:
         """Accept new plan from LLM. Unblocks the paused executor."""
-        self._in_stuck_recovery = False
         previous_command = None
         task = task_memory.load()
         if task:
@@ -690,7 +714,11 @@ class PlanExecutor:
                 steps = task.get("steps", [])
                 if current_index - 1 < len(steps):
                     previous_command = steps[current_index - 1].get("cmd")
-        self._replan_commands = normalize_commands(new_commands, previous_command=previous_command)
+        normalized = normalize_commands(new_commands, previous_command=previous_command)
+        if not normalized:
+            raise ValueError('Recovery plan has no executable steps')
+        self._in_stuck_recovery = False
+        self._replan_commands = normalized
         self._replan_path = path_taken
         self._done.set()
 
@@ -701,11 +729,6 @@ class PlanExecutor:
             self._skip_path = path_taken
             self._skip_event.set()
             self._done.set()
-
-    def resume_after_stuck(self) -> None:
-        """Called after single-step stuck recovery finishes. Resumes the plan."""
-        self._in_stuck_recovery = False
-        self._done.set()
 
     def is_in_stuck_recovery(self) -> bool:
         return self._in_stuck_recovery
@@ -830,6 +853,10 @@ class PlanExecutor:
 
     def is_running(self) -> bool:
         return self._running
+
+    def idle_timeout(self) -> float:
+        command = (self._current_command or {}).get('command')
+        return ACTION_TIMEOUT if command and command not in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface', 'explore'} else ACTIVITY_START_TIMEOUT
 
     async def _send_summary(self, ws) -> None:
         if not self._step_results:

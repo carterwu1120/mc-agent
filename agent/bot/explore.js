@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
 const { noteTeleportLikeAction } = require('./crafting')
@@ -223,6 +224,7 @@ function findExploreSpotForSurface(bot, maxRadius = 96, minRadius = 20, options 
 activityStack.register('explore', _pause)
 
 function _pause(_bot) {
+    _runToken++
     isExploring = false
     _isPaused = true
     console.log('[Explore] 暫停探索')
@@ -308,6 +310,7 @@ async function _run(bot, goal = {}, token) {
             noteTeleportLikeAction()
             bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
             await _sleep(500)
+            if (!execution.isCurrent()) return
             if (token !== _runToken || !isExploring) return
 
             const pos = bot.entity.position
@@ -359,6 +362,7 @@ async function _run(bot, goal = {}, token) {
             if (attempt < maxAttempts) {
                 console.log(`[Explore] 目前區域未命中 ${targetType}，繼續向外探索（${attempt}/${maxAttempts}）`)
                 await _sleep(200)
+                if (!execution.isCurrent()) return
                 if (token !== _runToken || !isExploring) return
             }
         }
@@ -377,7 +381,7 @@ async function _run(bot, goal = {}, token) {
             detail: e.message,
         })
     } finally {
-        if (token !== _runToken) return
+        if (!execution.isCurrent() || token !== _runToken) return
         const paused = _isPaused
         isExploring = false
         _isPaused = false
@@ -390,4 +394,9 @@ module.exports = {
     stopExploring,
     findExploreSpotForTrees,
     findExploreSpotForSurface,
+}
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
 }

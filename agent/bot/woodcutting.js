@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
@@ -34,13 +35,14 @@ const TREE_SEARCH_RADII = [32, 64]
 activityStack.register('chopping', _pause)
 
 function _pause(_bot) {
+    _loopGen++
     isChopping = false
     _isPaused = true
     console.log('[Wood] 暫停砍樹')
 }
 
 function _shouldAbort(expectedGen = null) {
-    return !isChopping || (expectedGen !== null && _loopGen !== expectedGen)
+    return !execution.isCurrent() || !isChopping || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
 function _shouldAbortAfterGoal(expectedGen = null) {
@@ -58,6 +60,7 @@ async function _waitForCollectedLogs(bot, minCount = 1, timeoutMs = 1500) {
     while (Date.now() - start < timeoutMs) {
         if (_countLogsInInventory(bot) >= minCount) return true
         await _sleep(150)
+        if (!execution.isCurrent()) return
     }
     return _countLogsInInventory(bot) >= minCount
 }
@@ -68,8 +71,10 @@ async function _safeEquip(bot, item, slot = 'hand', label = '裝備物品') {
         if (bot.currentWindow) {
             bot.closeWindow(bot.currentWindow)
             await _sleep(100)
+            if (!execution.isCurrent()) return
         }
         await bot.equip(item, slot)
+        if (!execution.isCurrent()) return
         return true
     } catch (e) {
         console.log(`[Wood] ${label}失敗: ${e.message}`)
@@ -81,6 +86,7 @@ async function _equipToolForDig(bot, block) {
     if (!block) return
     try {
         await ensureToolFor(bot, block.name)
+        if (!execution.isCurrent()) return
         return
     } catch (_) {}
     try {
@@ -146,7 +152,7 @@ async function _loop(bot, goal = {}) {
     const startTime = Date.now()
     let goalReached = false
 
-    while (isChopping) {
+    while (isChopping && execution.isCurrent() && _loopGen === _myGen) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Wood] 達到時間目標 ${goal.duration}s，停止`)
             isChopping = false
@@ -188,6 +194,7 @@ async function _loop(bot, goal = {}) {
         // 每次迴圈檢查斧頭（斧頭壞掉或第一次有材料時自動合成）
         if (!bot.inventory.items().some(i => i.name.endsWith('_axe'))) {
             const ok = await ensureAxe(bot)
+            if (!execution.isCurrent()) return
             if (!ok) {
                 // 沒斧頭也繼續，用徒手砍
                 console.log('[Wood] 沒有斧頭，用徒手繼續')
@@ -262,6 +269,7 @@ async function _loop(bot, goal = {}) {
             // 先水平走近（遇到樹葉可以挖開，但不挖礦石）
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3))
+                if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
             } catch (e) { /* 走不到也繼續，試試疊方塊 */ }
 
@@ -269,6 +277,7 @@ async function _loop(bot, goal = {}) {
             const heightDiff = pos.y - Math.floor(bot.entity.position.y)
             if (heightDiff > 2) {
                 await _pillarUp(bot, pos.y, pos)
+                if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
             }
 
@@ -280,17 +289,21 @@ async function _loop(bot, goal = {}) {
             if (!fresh || !fresh.name.endsWith('_log')) continue
 
             await ensureToolFor(bot, fresh.name)
+            if (!execution.isCurrent()) return
 
             try {
                 await bot.dig(fresh)
+                if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
                 _logsCollected++
                 activityStack.touch('chopping', 'collected_log')
                 console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}（共 ${_logsCollected} 根）`)
                 activityStack.updateProgress({ logs: _logsCollected })
                 await _sleep(500)
+                if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
                 await _collectNearby(bot, pos, 4)
+                if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
                 if (goal.logs && _logsCollected >= goal.logs) {
                     console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
@@ -301,6 +314,7 @@ async function _loop(bot, goal = {}) {
             } catch (e) {
                 console.log('[Wood] 砍樹失敗:', e.message)
                 await _sleep(400)
+                if (!execution.isCurrent()) return
             }
         }
 
@@ -313,6 +327,7 @@ async function _loop(bot, goal = {}) {
         // 整棵樹砍完後才回收疊腳方塊、安全下來
         if (Math.floor(bot.entity.position.y) > groundY) {
             await _reclaimScaffold(bot, groundY)
+            if (!execution.isCurrent()) return
             if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
         }
         if (Math.floor(bot.entity.position.y) > groundY) {
@@ -330,14 +345,17 @@ async function _loop(bot, goal = {}) {
 
         // 砍完後：撿附近掉落物、種樹苗
         await _collectNearby(bot, rootPos, 8)
+        if (!execution.isCurrent()) return
         if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
         if (goalReached) {
             const hasLogs = await _waitForCollectedLogs(bot, Math.min(_logsCollected, goal.logs || _logsCollected || 1))
+            if (!execution.isCurrent()) return
             if (!hasLogs) {
                 console.log('[Wood] 已達採集目標，但木頭尚未進背包，先等待並延後回報完成')
             }
         }
         await _plantSapling(bot, rootPos, treeLogName)
+        if (!execution.isCurrent()) return
         if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
         if (goalReached) {
             sendActivityDone(bot, 'chopping', { chop_pos: bot.entity.position })
@@ -345,6 +363,7 @@ async function _loop(bot, goal = {}) {
         }
     }
 
+    if (!execution.isCurrent() || _loopGen !== _myGen) return
     if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
@@ -416,6 +435,7 @@ async function _pillarUp(bot, targetY, targetPos) {
         bot.setControlState('jump', false)
 
         await _sleep(400)
+        if (!execution.isCurrent()) return
 
         // 放方塊失敗（位置沒變），不要繼續跳
         if (bot.entity.position.y <= beforeY + 0.1) break
@@ -435,9 +455,12 @@ async function _reclaimScaffold(bot, groundY) {
         if (!below || !SCAFFOLD_BLOCKS.has(below.name)) break
         try {
             await ensureToolFor(bot, below.name)
+            if (!execution.isCurrent()) return
             await bot.dig(below)
+            if (!execution.isCurrent()) return
             console.log(`[Wood] 回收 ${below.name}`)
             await _sleep(300)
+            if (!execution.isCurrent()) return
         } catch (e) {
             break
         }
@@ -456,6 +479,7 @@ async function _collectNearby(bot, nearPos, maxDistance) {
     for (const e of items) {
         if (!isChopping) return
         await _collectDrop(bot, e)
+        if (!execution.isCurrent()) return
     }
 }
 
@@ -467,6 +491,7 @@ async function _collectDrop(bot, drop) {
                 new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 1)
             )
             await _sleep(250)
+            if (!execution.isCurrent()) return
         } catch (e) {
             if (await _clearLeavesToward(bot, drop.position)) {
                 continue
@@ -484,6 +509,7 @@ async function _collectDrop(bot, drop) {
             continue
         }
         await _sleep(300)
+        if (!execution.isCurrent()) return
     }
 }
 
@@ -508,9 +534,12 @@ async function _clearLeavesToward(bot, targetPos) {
     for (const { block } of candidates.slice(0, 2)) {
         try {
             await _equipToolForDig(bot, block)
+            if (!execution.isCurrent()) return
             await bot.dig(block)
+            if (!execution.isCurrent()) return
             console.log(`[Wood] 挖開 ${block.name} 以撿取掉落物`)
             await _sleep(200)
+            if (!execution.isCurrent()) return
             return true
         } catch (_) {}
     }
@@ -539,6 +568,7 @@ async function _plantSapling(bot, rootPos, logName) {
         )
         if (!await _safeEquip(bot, sapling, 'hand', '裝備樹苗')) return
         await bot.placeBlock(groundBlock, new Vec3(0, 1, 0))
+        if (!execution.isCurrent()) return
         console.log(`[Wood] 種下 ${saplingName}`)
     } catch (e) {
         console.log(`[Wood] 種樹苗失敗: ${e.message}`)
@@ -558,3 +588,8 @@ function isActive() {
 }
 
 module.exports = { startChopping, stopChopping, isActive }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

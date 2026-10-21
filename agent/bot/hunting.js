@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const { goals } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
@@ -22,13 +23,14 @@ let _loopGen = 0
 activityStack.register('hunting', _pause)
 
 function _pause(_bot) {
+    _loopGen++
     isHunting = false
     _isPaused = true
     console.log('[Hunt] 暫停狩獵')
 }
 
 function _shouldAbort(expectedGen = null) {
-    return !isHunting || (expectedGen !== null && _loopGen !== expectedGen)
+    return !execution.isCurrent() || !isHunting || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
 async function _gotoNearWithTimeout(bot, x, y, z, range, timeoutMs) {
@@ -58,8 +60,10 @@ async function _safeEquip(bot, item, slot = 'hand', label = '裝備武器') {
         if (bot.currentWindow) {
             bot.closeWindow(bot.currentWindow)
             await _sleep(100)
+            if (!execution.isCurrent()) return
         }
         await bot.equip(item, slot)
+        if (!execution.isCurrent()) return
         return true
     } catch (e) {
         console.log(`[Hunt] ${label}失敗: ${e.message}`)
@@ -101,16 +105,19 @@ async function _loop(bot, goal) {
 
     try {
         const armed = await _equipSword(bot)
+        if (!execution.isCurrent()) return
         if (!armed) {
             await _reportNoWeaponStuck(bot, goal, _myGen)
+            if (!execution.isCurrent()) return
             return
         }
     } catch (_) {}
 
-    while (isHunting) {
+    while (isHunting && execution.isCurrent() && _loopGen === _myGen) {
         if (_shouldAbort(_myGen)) return
 
         const surfaced = await _ensureSurfaceIfNeeded(bot, _myGen)
+        if (!execution.isCurrent()) return
         if (_shouldAbort(_myGen)) return
         if (surfaced === false) break
 
@@ -139,6 +146,7 @@ async function _loop(bot, goal) {
                 break
             }
             await _sleep(2000)
+            if (!execution.isCurrent()) return
             if (_shouldAbort(_myGen)) return
             continue
         }
@@ -148,6 +156,7 @@ async function _loop(bot, goal) {
 
         // 攻擊直到死亡
         const killed = await _killAnimal(bot, animal, _myGen)
+        if (!execution.isCurrent()) return
         if (killed) {
             _killCount++
             activityStack.updateProgress({ count: _killCount })
@@ -155,9 +164,11 @@ async function _loop(bot, goal) {
             await _sleep(DROPS_WAIT)  // 等掉落物出現
             if (_shouldAbort(_myGen)) return
             await _collectNearbyDrops(bot, animal.position, 6, _myGen)
+            if (!execution.isCurrent()) return
         }
     }
 
+    if (!execution.isCurrent() || _loopGen !== _myGen) return
     if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
@@ -171,8 +182,10 @@ async function _killAnimal(bot, animal, expectedGen = null) {
         const handItem = bot.heldItem
         if (!handItem || !SWORD_PRIORITY.includes(handItem.name)) {
             const armed = await _equipSword(bot)
+            if (!execution.isCurrent()) return
             if (!armed) {
                 await _reportNoWeaponStuck(bot, activityStack.getTopFrame()?.goal || {}, expectedGen)
+                if (!execution.isCurrent()) return
                 return false
             }
         }
@@ -194,9 +207,11 @@ async function _killAnimal(bot, animal, expectedGen = null) {
 
         try {
             await bot.lookAt(animal.position.offset(0, (animal.height ?? 1.6) / 2, 0))
+            if (!execution.isCurrent()) return
             bot.attack(animal)
         } catch (_) {}
         await _sleep(600)
+        if (!execution.isCurrent()) return
     }
     return !animal.isValid
 }
@@ -227,6 +242,7 @@ async function _equipSword(bot) {
         if (!sword) continue
         try {
             const ok = await _safeEquip(bot, sword, 'hand', '裝備劍')
+            if (!execution.isCurrent()) return
             if (!ok) continue
             console.log(`[Hunt] 裝備 ${sword.name}`)
             return true
@@ -235,12 +251,14 @@ async function _equipSword(bot) {
 
     const { ensureSword } = require('./crafting')
     const crafted = await ensureSword(bot)
+    if (!execution.isCurrent()) return
     if (crafted) {
         for (const name of SWORD_PRIORITY) {
             const sword = bot.inventory.items().find(i => i.name === name)
             if (!sword) continue
             try {
                 const ok = await _safeEquip(bot, sword, 'hand', '裝備劍')
+                if (!execution.isCurrent()) return
                 if (!ok) continue
                 console.log(`[Hunt] 裝備 ${sword.name}`)
                 return true
@@ -280,6 +298,7 @@ async function _collectNearbyDrops(bot, nearPos, maxDistance, expectedGen = null
                 new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 1)
             )
             await _sleep(250)
+            if (!execution.isCurrent()) return
         } catch (_) {}
     }
 }
@@ -305,6 +324,7 @@ async function _ensureSurfaceIfNeeded(bot, expectedGen = null) {
             noteTeleportLikeAction()
             bot.chat(`/tp ${bot.username} ${spot.x} ${spot.y} ${spot.z}`)
             await _sleep(500)
+            if (!execution.isCurrent()) return
             if (_shouldAbort(expectedGen)) return false
             if (!_isLikelyUnderground(bot)) {
                 console.log('[Hunt] 已返回地表，繼續狩獵')
@@ -327,3 +347,8 @@ async function _ensureSurfaceIfNeeded(bot, expectedGen = null) {
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 module.exports = { startHunting, stopHunting, isActive: () => isHunting }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

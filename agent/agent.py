@@ -14,7 +14,6 @@ from agent.brain import LLMClient, build_client
 from agent.logger import init_logger, set_task_id
 from agent.skills import inventory as inventory_skill
 from agent.skills import craft_decision as craft_decision_skill
-from agent.skills import activity_stuck as activity_stuck_skill
 from agent.skills import coordinator as coordinator_skill
 from agent.skills import food as food_skill
 from agent.skills import planner as planner_skill
@@ -23,6 +22,8 @@ from agent.skills import task_arbitration as task_arbitration_skill
 from agent.skills import respawn as respawn_skill
 from agent.skills import tool_durability as tool_durability_skill
 from agent.executor import PlanExecutor
+from agent.recovery import RecoverySupervisor
+from agent.skills import recovery as recovery_skill
 from agent import task_memory
 from agent import exploration_memory
 from agent import history_db
@@ -47,10 +48,14 @@ _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 llm: LLMClient = build_client()
 
 executor = PlanExecutor()
+recovery = RecoverySupervisor(decision_timeout=float(os.environ.get('RECOVERY_DECISION_TIMEOUT', '60')))
+executor.recovery_timeout = 2 * recovery.decision_timeout + 2 * recovery.pause_timeout + 20
 
 
 def _launch_plan(commands: list, ws, **kwargs) -> None:
     """Start a plan and assign a new task_id for log tracing."""
+    if not kwargs.pop('_recovery', False):
+        recovery.invalidate()
     set_task_id(uuid.uuid4().hex[:8])
     asyncio.create_task(executor.execute(commands, ws, **kwargs))
 
@@ -58,15 +63,65 @@ def _launch_plan(commands: list, ws, **kwargs) -> None:
 async def _on_verify_failed(state: dict, ws) -> None:
     """Callback for executor post-action verification failures.
     Routes a synthetic activity_stuck state through the normal LLM pipeline.
-    If LLM only chats (no replan/skip/resume), force-skip the failed step."""
-    await _handle_and_send(state, activity_stuck_skill.handle, ws)
-    # If executor is still waiting (LLM sent chat but didn't replan/skip/resume), fail closed
-    if executor.is_in_stuck_recovery():
-        print('[Agent] 驗證失敗後 LLM 未明確回 replan/skip，強制 skip 此步驟')
-        executor.skip_step(path_taken='verify_fail_auto_skip')
+    A failed decision preserves the task in an explicit waiting state."""
+    await _handle_and_send(state, recovery_skill.handle, ws)
 
 
 executor._verify_failed_callback = _on_verify_failed
+
+
+async def _handle_recovery(state: dict, ws) -> None:
+    if recovery.busy or recovery.held:
+        return
+    print(f"[Recovery] {state.get('reason')}: stopping old activity before strategy decision")
+    _recent_stuck_events.append({k: state.get(k) for k in ('activity', 'reason', 'detail', 'remaining')})
+    task_memory.record_event('activity_stuck', reason=state.get('reason'), details={
+        k: state.get(k) for k in ('activity', 'navigation', 'progress_evidence')
+    }, db_only=True)
+    task = task_memory.load() or {}
+    steps = task.get('steps') or []
+    idx = task.get('currentStep', 0)
+    state = {**state, 'plan_context': {
+        'goal': task.get('goal') or state.get('goal'),
+        'current_cmd': steps[idx]['cmd'] if idx < len(steps) else None,
+        'done_steps': [s['cmd'] for s in steps if s.get('status') == 'done'],
+        'pending_steps': [s['cmd'] for s in steps[idx + 1:] if s.get('status') != 'done'],
+    }}
+    # Keep executor/coordinator ownership while replacing the remaining strategy.
+    # Completion events are ignored until a recovery decision is applied.
+    if executor.is_running():
+        executor.notify_stuck()
+    elif task:
+        task_memory.interrupt('recovery')
+
+    async def apply(result):
+        task_memory.record_event('recovery_plan', reason=state.get('reason'), details=result)
+        if executor.is_running():
+            executor.replan(result['commands'], path_taken='supervised_recovery')
+        else:
+            executor.claim()
+            _launch_plan(result['commands'], ws, goal=task.get('goal') or '恢復中斷活動',
+                         final_goal=task.get('finalGoal'), source=task.get('source'), _recovery=True)
+
+    async def blocked(reason):
+        if executor.is_running():
+            executor.abort(preserve_task=True, reason='recovery_blocked')
+        task_memory.interrupt('recovery_blocked')
+        task_memory.update_runtime({'supervision': recovery.status()})
+        task_memory.record_event('recovery_blocked', reason=reason)
+        await asyncio.wait_for(_send_chat(ws, '任務已保留，暫停等待協助：' + reason[:180]), 5)
+
+    async def decide(snapshot):
+        started = time.monotonic()
+        try:
+            return await recovery_skill.handle(snapshot, llm)
+        finally:
+            task_memory.record_event('llm_call', reason=state.get('reason'), details={
+                'skill': 'recovery', 'latency_ms': round((time.monotonic() - started) * 1000),
+            }, db_only=True)
+
+    await recovery.recover(state, ws, decide=decide, apply=apply, blocked=blocked)
+    print(f"[Recovery] {recovery.status()}")
 
 
 def _write_live_state() -> None:
@@ -75,6 +130,7 @@ def _write_live_state() -> None:
     try:
         snapshot = {
             **_latest_state,
+            'supervision': recovery.status(),
             'bot_id': BOT_ID,
             'mc_connected': bool(_latest_state.get('mc_connected')),
             'ws_connected': _latest_state.get('health') is not None,
@@ -109,6 +165,8 @@ def _record_to_exploration_memory(state: dict) -> None:
 
 
 async def _on_done(_state: dict, _llm: LLMClient):
+    if recovery.busy or recovery.held:
+        return None
     if executor.is_running() and executor.is_in_stuck_recovery():
         executor.signal_done_after_stuck(_state)
     else:
@@ -149,6 +207,9 @@ async def _on_task_started(state: dict, _llm: LLMClient):
 
 async def _on_task_stopped(state: dict, _llm: LLMClient):
     """JS 手動停止 activity 時標記 interrupted。"""
+    recovery.invalidate()
+    if executor.is_running():
+        executor.abort(preserve_task=True, reason='manual_stop')
     task_memory.interrupt('manual_stop')
     return None
 
@@ -282,7 +343,7 @@ async def _on_test_plan(state: dict, _llm: LLMClient):
 HANDLERS = {
     "inventory_full": inventory_skill.handle,
     "craft_decision": craft_decision_skill.handle,
-    "activity_stuck": activity_stuck_skill.handle,
+    "activity_stuck": recovery_skill.handle,
     "food_low":       food_skill.handle,
     "tick":           self_task_skill.handle,
     "action_done":    _on_done,
@@ -297,7 +358,6 @@ HANDLERS = {
 }
 
 _NO_LLM_HANDLERS = {"agent", "food"}
-_SELF_REPORTING_LLM = {"activity_stuck"}
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
 _planner_lock: "asyncio.Lock | None" = None  # unified executor ownership — initialized in run()
@@ -474,13 +534,6 @@ def _stack_activity_names(state: dict) -> list[str]:
     return [frame.get("activity") for frame in (state.get("stack") or []) if frame.get("activity")]
 
 
-def _extract_path_meta(result: list[dict]) -> tuple[str | None, int | None]:
-    for item in result:
-        if '_path' in item:
-            return item.pop('_path'), item.pop('_latency_ms', None)
-    return None, None
-
-
 def _summarize_result(result) -> list | None:
     if not result:
         return None
@@ -621,6 +674,10 @@ async def _send_chat(ws, text: str) -> None:
 async def _enqueue_player_task(goal: str, interrupt: bool, ws) -> None:
     """Submit a player task to the coordinator queue.
     Falls back to direct planner execution if COORDINATOR_URL is not set."""
+    if not COORDINATOR_URL or interrupt or recovery.held:
+        if recovery.busy and executor.is_running():
+            executor.abort(preserve_task=True, reason='player_interrupt')
+        recovery.invalidate()
     if not COORDINATOR_URL:
         state = _augment_state({"type": "chat", "message": goal}, player_task=goal)
         await _handle_and_send(state, planner_skill.handle, ws)
@@ -655,6 +712,7 @@ async def _dispatch_result(item: dict, state: dict, ws) -> None:
 
 
 async def _apply_manual_abort(state: dict, ws) -> None:
+    recovery.invalidate()
     if executor.is_running():
         print("[TaskArb] 手動 abort：中止目前計畫")
         executor.abort(preserve_task=True, reason="manual_abort")
@@ -840,6 +898,7 @@ async def _planner_transition(
         if preempt_fn is not None:
             await preempt_fn()
 
+        recovery.invalidate()
         executor.claim()
         if _acquired_here:
             _acquired_here = False
@@ -1004,8 +1063,14 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
     global _coordinator_poll_running
     _thinking.add(event_type)
     _lock_acquired = False
+    request_revision = recovery.revision
     try:
+        if event_type == 'activity_stuck':
+            await _handle_recovery(state, ws)
+            return
         if event_type == "tick":
+            if recovery.busy or recovery.held:
+                return
             now = asyncio.get_running_loop().time()
             if COORDINATOR_URL:
                 if now - _last_heartbeat_at > HEARTBEAT_INTERVAL:
@@ -1057,57 +1122,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             if executor.is_running() or _latest_state.get("activity", "idle") != "idle":
                 return
             _last_self_task_at = now
-        # Inject plan context before activity_stuck handler if executor is running
-        if event_type == "activity_stuck" and executor.is_running():
-            task = task_memory.load()
-            if task and task.get("steps"):
-                state = dict(state)
-                idx = task.get("currentStep", 0)
-                steps = task["steps"]
-                state["plan_context"] = {
-                    "goal": task.get("goal"),
-                    "total_steps": len(steps),
-                    "current_step": idx,
-                    "current_cmd": steps[idx]["cmd"] if idx < len(steps) else None,
-                    "done_steps": [s["cmd"] for s in steps if s["status"] == "done"],
-                    # Use slice from idx+1 so order is guaranteed and failed steps
-                    # (previously skipped) are included — they must not be silently dropped.
-                    "pending_steps": [
-                        s["cmd"] for s in steps[idx + 1:]
-                        if s["status"] in ("pending", "failed")
-                    ],
-                }
-                print(f"[Agent] 注入 plan_context: 第 {idx+1}/{len(steps)} 步")
-            else:
-                state = dict(state)
-            _recent_stuck_events.append({
-                "activity": state.get("activity_name", state.get("activity")),
-                "reason": state.get("reason"),
-                "detail": state.get("detail"),
-                "remaining": state.get("remaining"),
-            })
-            state["recent_stuck"] = list(_recent_stuck_events)
-            executor.notify_stuck()
-            task_memory.record_event(
-                "activity_stuck",
-                reason=state.get("reason"),
-                command=(state.get("plan_context") or {}).get("current_cmd"),
-                step=(state.get("plan_context") or {}).get("current_step"),
-                details={
-                    "activity": state.get("activity_name", state.get("activity")),
-                    "detail": state.get("detail"),
-                    "watchdog": state.get("watchdog", False),
-                    "suggested_actions": state.get("suggested_actions"),
-                    "progress": state.get("progress"),
-                },
-                db_only=True,
-            )
-
         skill_name = handler.__module__.split('.')[-1]
         if skill_name not in _NO_LLM_HANDLERS:
             print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         t0 = time.monotonic()
         result = await handler(state, llm)
+        if request_revision != recovery.revision:
+            return
         # If coordinator took over while LLM was running, it released the lock — discard result
         if event_type == "tick" and _lock_acquired and (_planner_lock is None or not _planner_lock.locked()):
             print("[Agent] tick LLM 結果已被 coordinator 搶佔，丟棄")
@@ -1115,22 +1136,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             return
         latency_ms = int((time.monotonic() - t0) * 1000)
         path_taken = None
-        path_latency_ms = None
-        if event_type == "activity_stuck" and result:
-            path_taken, path_latency_ms = _extract_path_meta(result if isinstance(result, list) else [result])
-            if path_taken == 'llm':
-                task_memory.record_event(
-                    'llm_call',
-                    reason=state.get('reason'),
-                    details={
-                        'skill': 'activity_stuck',
-                        'latency_ms': path_latency_ms,
-                        'activity': state.get('activity'),
-                        'llm_response': _summarize_result(result),
-                    },
-                    db_only=True,
-                )
-        if skill_name not in _NO_LLM_HANDLERS and skill_name not in _SELF_REPORTING_LLM:
+        if skill_name not in _NO_LLM_HANDLERS:
             task_memory.record_event(
                 'llm_call',
                 details={'skill': skill_name, 'latency_ms': latency_ms, 'llm_response': _summarize_result(result)},
@@ -1169,6 +1175,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                     if _planner_lock is not None:
                         await _planner_lock.acquire()
                         _lock_acquired = True
+                if request_revision != recovery.revision:
+                    return
                 if executor.is_running():
                     if preserve_task:
                         print('[Agent] 暫停舊計畫，插入臨時 recovery 計畫')
@@ -1195,20 +1203,6 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             return
         # Standard response: send immediately
         actions = result if isinstance(result, list) else [result]
-
-        # During activity_stuck handling, control-flow actions like replan/skip
-        # must be applied before any chat/action side effects. Otherwise a chat
-        # action_done can prematurely unblock the executor and skip the first
-        # replan step.
-        if event_type == "activity_stuck":
-            prioritized = []
-            deferred = []
-            for a in actions:
-                if isinstance(a, dict) and a.get("action") in {"plan", "replan", "skip"}:
-                    prioritized.append(a)
-                else:
-                    deferred.append(a)
-            actions = prioritized + deferred
 
         for a in actions:
             if isinstance(a, dict) and a.get("action") == "plan":
@@ -1361,6 +1355,9 @@ async def run():
         elif _startup_status == "interrupted" and _startup_interrupted_by in _RESUMABLE_INTERRUPTS:
             # Transient interruption — will auto-resume on first tick
             print(f"[Agent] 啟動：發現被 {_startup_interrupted_by} 暫時中斷的任務「{_startup_task.get('goal')}」，待連線後恢復")
+        elif _startup_status == 'interrupted' and _startup_interrupted_by == 'recovery_blocked':
+            recovery.phase = 'waiting_player'
+            recovery.reason = '上次恢復失敗，任務已保留，等待玩家指示。'
 
     if os.environ.get('DASHBOARD_PORT') or BOT_ID == 'bot0':
         _dashboard.init(_latest_state, _thinking, [],
@@ -1406,6 +1403,13 @@ async def run():
                     _latest_state.clear()
                     _latest_state.update(state)
                     event_type = state.get("type")
+                    if event_type == 'recovery_paused':
+                        recovery.acknowledge(state)
+                        continue
+                    if event_type in {'player_died', 'task_stopped'}:
+                        recovery.invalidate()
+                    if event_type == 'task_started' and not state.get('command_id'):
+                        recovery.invalidate()
                     if event_type == "tick":
                         executor.heartbeat()
                     _write_live_state()
@@ -1416,6 +1420,11 @@ async def run():
                           f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})  "
                           f"hp={state.get('health')}  food={state.get('food')}")
 
+                    if event_type == 'tick':
+                        unexpected = recovery.unexpected_idle(state, task_memory.load(), timeout=executor.idle_timeout())
+                        if unexpected:
+                            state = unexpected
+                            event_type = 'activity_stuck'
                     handler = HANDLERS.get(event_type)
                     if event_type in {"task_started", "task_stopped", "activity_done", "player_died", "player_respawned"}:
                         _active = task_memory.load()
@@ -1453,6 +1462,14 @@ async def run():
                     session_tasks.append(asyncio.create_task(_handle_and_send(state, handler, ws)))
         except Exception as e:
             print(f"[Agent] 連線中斷: {e}，{reconnect_delay:.0f} 秒後重連...")
+            interrupted_recovery = recovery.busy or recovery.held
+            recovery.invalidate()
+            if executor.is_running():
+                executor.abort(preserve_task=True, reason='connection_lost')
+            if interrupted_recovery:
+                recovery.phase = 'waiting_player'
+                recovery.reason = '恢復過程連線中斷，任務保留，等待重新指示。'
+                task_memory.interrupt('recovery_blocked')
             _thinking.clear()
             _coordinator_poll_running = False
             for t in session_tasks:

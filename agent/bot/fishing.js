@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const { goals } = require('mineflayer-pathfinder')
 const { findNearestEntity, findNearestWater, findFishableWater, isWater, scanAreaMap } = require('./world')
 const bridge = require('./bridge')
@@ -18,6 +19,7 @@ const PITCH_MAX = 0.5    // ~+28°
 activityStack.register('fishing', _pause)
 
 function _pause(bot) {
+    _loopGen++
     isFishing = false
     _isPaused = true
     if (bot.fishing) bot.activateItem()
@@ -38,6 +40,7 @@ async function startFishing(bot, goal = {}) {
     }
 
     await bot.equip(rod, 'hand')
+    if (!execution.isCurrent()) return
     console.log('[Fish] 釣竿已裝備，開始釣魚')
 
     isFishing = true
@@ -77,7 +80,7 @@ async function _loop(bot, goal = {}) {
     let noBobberStreak = 0
     const startTime = Date.now()
 
-    while (isFishing) {
+    while (isFishing && execution.isCurrent() && _loopGen === _myGen) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Fish] 達到時間目標 ${goal.duration}s，停止`)
             isFishing = false
@@ -94,6 +97,7 @@ async function _loop(bot, goal = {}) {
         if (!water) {
             console.log('[Fish] 找不到合適的拋竿位置，走向水邊')
             await _walkToWater(bot)
+            if (!execution.isCurrent()) return
             water = findFishableWater(bot, 16)
         }
         if (!water) {
@@ -104,11 +108,14 @@ async function _loop(bot, goal = {}) {
 
         console.log(`[Fish] 目標水面 (${water.position.x}, ${water.position.y}, ${water.position.z})`)
         await _faceTarget(bot, water.position)
+        if (!execution.isCurrent()) return
 
         await bot.activateItem()
+        if (!execution.isCurrent()) return
         console.log(`[Fish] 拋竿 (yaw=${(bot.entity.yaw * 57.3).toFixed(1)}° pitch=${((_savedPitch ?? 0) * 57.3).toFixed(1)}°)`)
 
         await _sleep(2000)
+        if (!execution.isCurrent()) return
 
         const bobber = findNearestEntity(bot, 'fishing_bobber')
         if (!bobber) {
@@ -116,21 +123,25 @@ async function _loop(bot, goal = {}) {
             console.log(`[Fish] 找不到浮標（第 ${noBobberStreak} 次）`)
             if (noBobberStreak >= 3) {
                 const repositioned = await _tryLocalReposition(bot)
+                if (!execution.isCurrent()) return
                 if (repositioned) {
                     noBobberStreak = 0
                     failStreak = 0
                     continue
                 }
                 const handled = await _handleFishingStuck(bot, 'no_bobber', water)
+                if (!execution.isCurrent()) return
                 if (!handled) {
                     console.log('[Fish] LLM 超時，走向水邊')
                     _savedPitch = null
                     await _walkToWater(bot)
+                    if (!execution.isCurrent()) return
                 }
                 noBobberStreak = 0
                 failStreak = 0
             } else {
                 await _sleep(500)
+                if (!execution.isCurrent()) return
             }
             continue
         }
@@ -138,6 +149,7 @@ async function _loop(bot, goal = {}) {
 
         if (!isWater(bot, bobber.position)) {
             await bot.activateItem()
+            if (!execution.isCurrent()) return
             failStreak++
             console.log(`[Fish] 拋竿未落水（第 ${failStreak} 次）`)
 
@@ -147,21 +159,26 @@ async function _loop(bot, goal = {}) {
                 console.log(`[Fish] 調整仰角至 ${(tryPitch * 57.3).toFixed(1)}°`)
                 _savedPitch = tryPitch
                 await bot.look(bot.entity.yaw, tryPitch, true)
+                if (!execution.isCurrent()) return
                 await _sleep(300)
+                if (!execution.isCurrent()) return
                 continue
             }
 
             // 角度試完還是失敗 → 統一走 activity_stuck
             const repositioned = await _tryLocalReposition(bot)
+            if (!execution.isCurrent()) return
             if (repositioned) {
                 failStreak = 0
                 continue
             }
             const handled = await _handleFishingStuck(bot, 'bad_cast', water)
+            if (!execution.isCurrent()) return
             if (!handled) {
                 console.log('[Fish] LLM 超時，走向水邊')
                 _savedPitch = null
                 await _walkToWater(bot)
+                if (!execution.isCurrent()) return
                 failStreak = 0
                 continue
             }
@@ -171,7 +188,10 @@ async function _loop(bot, goal = {}) {
 
         // 成功落水
         failStreak = 0
+        activityStack.waitFor('fish_bite', 35000)
         const bitten = await _waitForBite(bot, bobber)
+        if (!execution.isCurrent()) return
+        activityStack.endWait()
         if (!isFishing) break
 
         const before = new Map()
@@ -179,9 +199,11 @@ async function _loop(bot, goal = {}) {
             before.set(item.name, (before.get(item.name) ?? 0) + item.count)
         }
         await bot.activateItem()
+        if (!execution.isCurrent()) return
 
         if (bitten) {
             await _sleep(1000)
+            if (!execution.isCurrent()) return
             const after = new Map()
             for (const item of bot.inventory.items()) {
                 after.set(item.name, (after.get(item.name) ?? 0) + item.count)
@@ -192,14 +214,18 @@ async function _loop(bot, goal = {}) {
             console.log(caught.length > 0
                 ? `[Fish] 收竿！釣到：${caught.join(', ')}`
                 : '[Fish] 收竿！（物品未進背包）')
-            _catches++
-            activityStack.updateProgress({ catches: _catches })
+            if (caught.length > 0) {
+                _catches++
+                activityStack.updateProgress({ catches: _catches })
+            }
         } else {
             console.log('[Fish] 超時，重新拋竿')
             await _sleep(500)
+            if (!execution.isCurrent()) return
         }
     }
 
+    if (!execution.isCurrent() || _loopGen !== _myGen) return
     if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
@@ -214,6 +240,7 @@ async function _handleFishingStuck(bot, reason, water) {
     })
 
     const decision = await _waitForLLMDecision(20000)
+    if (!execution.isCurrent()) return
     if (!decision) return false
 
     if (decision.action === 'stop') {
@@ -232,11 +259,13 @@ async function _handleFishingStuck(bot, reason, water) {
         }
         try {
             await bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1))
+            if (!execution.isCurrent()) return
         } catch (e) {
             console.log(`[Fish] LLM 移動失敗: ${e.message}`)
             return false
         }
         await _sleep(500)
+        if (!execution.isCurrent()) return
     }
 
     return true
@@ -290,6 +319,7 @@ function _waitForBite(bot, bobber, timeoutMs = 30000) {
 // 面向目標水面：lookAt 取得正確 yaw，pitch 同目標時沿用，否則重置
 async function _faceTarget(bot, targetPos) {
     await bot.lookAt(targetPos)
+    if (!execution.isCurrent()) return
     const waterKey = `${Math.floor(targetPos.x)},${Math.floor(targetPos.y)},${Math.floor(targetPos.z)}`
     if (_lastWaterKey !== waterKey) {
         _lastWaterKey = waterKey
@@ -297,6 +327,7 @@ async function _faceTarget(bot, targetPos) {
     }
     const pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, _savedPitch ?? 0))
     await bot.look(bot.entity.yaw, pitch, true)
+    if (!execution.isCurrent()) return
 }
 
 async function _walkToWater(bot) {
@@ -305,7 +336,9 @@ async function _walkToWater(bot) {
         console.log(`[Fish] 走向本地釣魚站位 (${stand.x}, ${stand.y}, ${stand.z})`)
         try {
             await bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1))
+            if (!execution.isCurrent()) return
             await _sleep(500)
+            if (!execution.isCurrent()) return
             return
         } catch (e) {
             console.log(`[Fish] 前往本地釣魚站位失敗: ${e.message}`)
@@ -316,7 +349,9 @@ async function _walkToWater(bot) {
     console.log(`[Fish] 走向水邊 (${water.position.x}, ${water.position.y}, ${water.position.z})`)
     try {
         await bot.pathfinder.goto(new goals.GoalNear(water.position.x, water.position.y, water.position.z, 3))
+        if (!execution.isCurrent()) return
         await _sleep(500)
+        if (!execution.isCurrent()) return
     } catch (e) {
         console.log(`[Fish] 前往水邊失敗: ${e.message}`)
     }
@@ -335,7 +370,9 @@ async function _tryLocalReposition(bot) {
     _savedPitch = null
     try {
         await bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1))
+        if (!execution.isCurrent()) return
         await _sleep(400)
+        if (!execution.isCurrent()) return
         return true
     } catch (_) {
         return false
@@ -448,3 +485,8 @@ function isActive() {
 }
 
 module.exports = { startFishing, stopFishing, applyLLMDecision, isActive }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

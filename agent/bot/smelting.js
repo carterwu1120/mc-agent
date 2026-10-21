@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
@@ -72,17 +73,18 @@ const REPLACEABLE_BLOCKS = new Set([
 activityStack.register('smelting', _pause)
 
 function _pause(_bot) {
+    _loopGen++
     isSmelting = false
     _isPaused = true
     console.log('[Smelt] 暫停燒製')
 }
 
 function _shouldAbort(expectedGen = null) {
-    return !isSmelting || (expectedGen !== null && _loopGen !== expectedGen)
+    return !execution.isCurrent() || !isSmelting || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
 function _shouldAbortFinalize(expectedGen = null) {
-    return _isPaused || (expectedGen !== null && _loopGen !== expectedGen)
+    return !execution.isCurrent() || _isPaused || (expectedGen !== null && _loopGen !== expectedGen)
 }
 
 function _setOutcome(status, extra = {}) {
@@ -103,6 +105,7 @@ async function _tryUncrackCoalBlock(bot) {
     if (!bot.inventory.items().some(i => i.name === 'coal_block')) return false
     const { ensureCraftingTable } = require('./crafting')
     const table = await ensureCraftingTable(bot)
+    if (!execution.isCurrent()) return
     if (!table) return false
     const coalItem = bot.registry.itemsByName['coal']
     if (!coalItem) return false
@@ -113,6 +116,7 @@ async function _tryUncrackCoalBlock(bot) {
     }
     try {
         await bot.craft(recipe, 1, table)
+        if (!execution.isCurrent()) return
         console.log('[Smelt] 解開 coal_block → 9 coal')
         return true
     } catch (e) {
@@ -203,7 +207,7 @@ async function _loop(bot, goal = {}) {
     _isPaused = false
     const startTime = Date.now()
 
-    while (isSmelting) {
+    while (isSmelting && execution.isCurrent() && _loopGen === _myGen) {
         // 停止條件
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Smelt] 達到時間目標 ${goal.duration}s，停止`)
@@ -222,6 +226,7 @@ async function _loop(bot, goal = {}) {
 
         // 找或放置熔爐
         const furnaceBlock = await _findOrPlaceFurnace(bot)
+        if (!execution.isCurrent()) return
         if (!furnaceBlock) {
             console.log('[Smelt] 找不到熔爐，停止')
             isSmelting = false
@@ -245,6 +250,7 @@ async function _loop(bot, goal = {}) {
             const p = furnaceBlock.position
             activityStack.touch('smelting', 'goto_furnace')
             await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 2))
+            if (!execution.isCurrent()) return
             _gotoFurnaceFailures = 0
             if (_shouldAbort(_myGen)) return
         } catch (e) {
@@ -254,14 +260,17 @@ async function _loop(bot, goal = {}) {
                 try {
                     const { ensurePickaxe } = require('./crafting')
                     await ensurePickaxe(bot)
+                    if (!execution.isCurrent()) return
                 } catch (_) {}
                 const nearPlaced = await _placeFurnace(bot, bot.registry.blocksByName['furnace']?.id, { preferNearby: true })
+                if (!execution.isCurrent()) return
                 if (nearPlaced) {
                     console.log('[Smelt] 連續無法走到既有熔爐，改為就地放置新熔爐')
                     _gotoFurnaceFailures = 0
                 }
             }
             await _sleep(2000)
+            if (!execution.isCurrent()) return
             if (_shouldAbort(_myGen)) return
             continue
         }
@@ -280,6 +289,7 @@ async function _loop(bot, goal = {}) {
         } catch (e) {
             console.log('[Smelt] 開啟熔爐失敗:', e.message)
             await _sleep(2000)
+            if (!execution.isCurrent()) return
             if (_shouldAbort(_myGen)) return
             continue
         }
@@ -290,6 +300,7 @@ async function _loop(bot, goal = {}) {
             if (prevOut) {
                 try {
                     await furnace.takeOutput()
+                    if (!execution.isCurrent()) return
                     if (_shouldAbort(_myGen)) {
                         try { furnace.close() } catch (_) {}
                         return
@@ -297,6 +308,7 @@ async function _loop(bot, goal = {}) {
                     _smeltedCount += prevOut.count
                     activityStack.touch('smelting', 'take_output')
                     _inputPending = !!furnace.slots[0]
+                    activityStack.endWait()
                     activityStack.updateProgress({ smelted: _smeltedCount })
                     console.log(`[Smelt] 取出遺留產物 ${prevOut.name} x${prevOut.count}（共 ${_smeltedCount}）`)
                 } catch (e) {
@@ -308,7 +320,8 @@ async function _loop(bot, goal = {}) {
                         _isPaused = false
                         activityStack.pop(bot)
                         const { handleFull } = require('./inventory')
-                        await handleFull(bot)
+                        await execution.run(() => handleFull(bot), execution.commandId())
+                        if (!execution.isCurrent()) return
                         return
                     }
                     console.log(`[Smelt] takeOutput 失敗（${invSlots}/36）: ${e.message}`)
@@ -345,6 +358,7 @@ async function _loop(bot, goal = {}) {
                     furnace.close()
                     if (_shouldAbort(_myGen)) return
                     const uncrafted = await _tryUncrackCoalBlock(bot)
+                    if (!execution.isCurrent()) return
                     _coalBlockUncrackTried = true  // 無論成敗，下次直接用 coal_block，避免迴圈
                     if (_shouldAbort(_myGen)) return
                     continue  // 重新走熔爐流程：成功 → 用 coal；失敗 → _getPreferredFuelItem 允許 coal_block
@@ -354,6 +368,7 @@ async function _loop(bot, goal = {}) {
                     const fuelCount = _getFuelInsertCount(fuelItem, goal, _smeltedCount, _inputPending)
                     try {
                         await furnace.putFuel(fuelItem.type, null, fuelCount)
+                        if (!execution.isCurrent()) return
                         if (_shouldAbort(_myGen)) {
                             try { furnace.close() } catch (_) {}
                             return
@@ -386,6 +401,7 @@ async function _loop(bot, goal = {}) {
                 if (count > 0) {
                     try {
                         await furnace.putInput(inputItem.type, null, count)
+                        if (!execution.isCurrent()) return
                         if (_shouldAbort(_myGen)) {
                             try { furnace.close() } catch (_) {}
                             return
@@ -408,6 +424,7 @@ async function _loop(bot, goal = {}) {
             let lastProgressAt = Date.now()
             let pollTries = 0
             while (_inputPending && isSmelting) {
+                activityStack.waitFor('furnace_output', 30000)
                 for (let i = 0; i < 10 && isSmelting; i++) await _sleep(1000)
                 if (!isSmelting) break
                 if (_shouldAbort(_myGen)) return
@@ -420,6 +437,7 @@ async function _loop(bot, goal = {}) {
                 try {
                     furnace = await bot.openFurnace(furnaceBlock)
                     await _sleep(300)
+                    if (!execution.isCurrent()) return
                     if (_shouldAbort(_myGen)) {
                         try { furnace.close() } catch (_) {}
                         return
@@ -433,6 +451,7 @@ async function _loop(bot, goal = {}) {
                 if (outputItem) {
                     try {
                         await furnace.takeOutput()
+                        if (!execution.isCurrent()) return
                         if (_shouldAbort(_myGen)) {
                             try { furnace.close() } catch (_) {}
                             return
@@ -440,6 +459,7 @@ async function _loop(bot, goal = {}) {
                         _smeltedCount += outputItem.count
                         _inputPending = !!furnace.slots[0]
                         lastProgressAt = Date.now()
+                        activityStack.endWait()
                         activityStack.updateProgress({ smelted: _smeltedCount })
                         console.log(`[Smelt] 取出 ${outputItem.name} x${outputItem.count}（共 ${_smeltedCount}，爐膛剩餘: ${furnace.slots[0]?.count ?? 0}）`)
                     } catch (e) {
@@ -450,7 +470,8 @@ async function _loop(bot, goal = {}) {
                             _isPaused = false
                             activityStack.pop(bot)
                             const { handleFull } = require('./inventory')
-                            await handleFull(bot)
+                            await execution.run(() => handleFull(bot), execution.commandId())
+                            if (!execution.isCurrent()) return
                             return
                         }
                         console.log(`[Smelt] takeOutput 失敗（${invSlots}/36）: ${e.message}`)
@@ -490,12 +511,14 @@ async function _loop(bot, goal = {}) {
                 try {
                     furnace = await bot.openFurnace(furnaceBlock)
                     await _sleep(300)
+                    if (!execution.isCurrent()) return
                     if (_shouldAbort(_myGen)) {
                         try { furnace.close() } catch (_) {}
                         return
                     }
                     if (furnace.slots[1]) {
                         await furnace.takeFuel()
+                        if (!execution.isCurrent()) return
                         if (_shouldAbort(_myGen)) {
                             try { furnace.close() } catch (_) {}
                             return
@@ -517,24 +540,29 @@ async function _loop(bot, goal = {}) {
                     _isPaused = false
                     activityStack.pop(bot)
                     const { handleFull } = require('./inventory')
-                    await handleFull(bot)
+                    await execution.run(() => handleFull(bot), execution.commandId())
+                    if (!execution.isCurrent()) return
                     return
                 }
                 await _sleep(500)
+                if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
                 continue
             }
         }
     }
 
+    if (!execution.isCurrent() || _loopGen !== _myGen) return
     if (!_isPaused && _loopGen === _myGen) {
         const hadPlaced = !!_placedFurnacePos
         await _reclaimFurnace(bot)
+        if (!execution.isCurrent()) return
         if (_shouldAbortFinalize(_myGen)) return
         if (hadPlaced && !bot.inventory.items().some(i => i.name === 'furnace')) {
             console.log('[Smelt] 背包未收到熔爐，嘗試補撿...')
             for (let attempt = 0; attempt < 8; attempt++) {
                 await _sleep(500)
+                if (!execution.isCurrent()) return
                 if (_shouldAbortFinalize(_myGen)) return
                 if (bot.inventory.items().some(i => i.name === 'furnace')) break
                 const dropped = Object.values(bot.entities).find(
@@ -589,6 +617,7 @@ async function _findOrPlaceFurnace(bot) {
             return null
         }
         const crafted = await _craftFurnace(bot)
+        if (!execution.isCurrent()) return
         if (!crafted) return null
     }
 
@@ -612,6 +641,7 @@ function _reportStuck(bot, stuck) {
 async function _craftFurnace(bot) {
     const { ensureCraftingTable } = require('./crafting')
     const table = await ensureCraftingTable(bot)
+    if (!execution.isCurrent()) return
     if (!table) return false
 
     const item = bot.registry.itemsByName['furnace']
@@ -623,6 +653,7 @@ async function _craftFurnace(bot) {
     }
     try {
         await bot.craft(recipe, 1, table)
+        if (!execution.isCurrent()) return
         console.log('[Smelt] 合成熔爐')
         return true
     } catch (e) {
@@ -635,6 +666,7 @@ async function _placeFurnace(bot, furnaceId) {
     const item = bot.inventory.items().find(i => i.name === 'furnace')
     if (!item) return null
     await bot.equip(item, 'hand')
+    if (!execution.isCurrent()) return
 
     const pos = bot.entity.position.floored()
     const dirs = [[1,0],[0,1],[-1,0],[0,-1]]
@@ -658,6 +690,7 @@ async function _placeFurnace(bot, furnaceId) {
             try {
                 const { ensureToolFor } = require('./crafting')
                 await ensureToolFor(bot, space.name)
+                if (!execution.isCurrent()) return
             } catch (_) {}
             try { await bot.dig(space) } catch (_) { continue }
             const fresh = bot.blockAt(spacePos)
@@ -666,13 +699,17 @@ async function _placeFurnace(bot, furnaceId) {
 
         try {
             await bot.equip(item, 'hand')
+            if (!execution.isCurrent()) return
             await bot.lookAt(ground.position.offset(0.5, 1, 0.5))
+            if (!execution.isCurrent()) return
             try {
                 await bot.placeBlock(ground, new Vec3(0, 1, 0))
+                if (!execution.isCurrent()) return
             } catch (_) {
                 // blockUpdate 事件超時 — 仍需確認方塊是否實際放置成功
             }
             await _sleep(400)
+            if (!execution.isCurrent()) return
             const placed = bot.findBlock({ matching: furnaceId, maxDistance: 4 })
             if (placed) {
                 console.log('[Smelt] 放置熔爐')
@@ -700,8 +737,11 @@ async function _reclaimFurnace(bot) {
     try {
         const { ensurePickaxe } = require('./crafting')
         await ensurePickaxe(bot)
+        if (!execution.isCurrent()) return
         await bot.dig(block)
+        if (!execution.isCurrent()) return
         await _sleep(400)
+        if (!execution.isCurrent()) return
         // 撿起掉落的熔爐
         const dropped = Object.values(bot.entities).find(
             e => e.name === 'item' && e.position.distanceTo(pos) < 3
@@ -709,6 +749,7 @@ async function _reclaimFurnace(bot) {
         if (dropped) {
             try {
                 await bot.pathfinder.goto(new goals.GoalNear(dropped.position.x, dropped.position.y, dropped.position.z, 0))
+                if (!execution.isCurrent()) return
             } catch (_) {}
         }
         console.log('[Smelt] 回收熔爐')
@@ -722,3 +763,8 @@ function _sleep(ms) {
 }
 
 module.exports = { startSmelting, stopSmelting, isActive, consumeLastOutcome }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

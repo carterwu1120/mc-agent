@@ -23,6 +23,7 @@ test('stack resume replans from the current location; stale mining cannot dig or
     }
     const stubs = {
         './activity': activity,
+        './execution': require('../execution'),
         './crafting': { ensureToolFor: async () => true, ensurePickaxeTier: async () => true, ensurePickaxe: async () => true },
         './bridge': { sendState() {}, sendActivityDone() {} },
         './buried': { isBuried: () => false },

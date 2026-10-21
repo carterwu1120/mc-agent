@@ -126,3 +126,32 @@ MC_ADAPTIVE_NAVIGATION=true
 | bot 在世界裡但不理自然語言 | Python 是否連上 WebSocket、CLI 是否登入、聊天是否用了正確 @名稱 |
 
 官方參考：[Minecraft LAN/server 操作](https://www.minecraft.net/en-us/article/how-play-minecraft-server)、[Mineflayer 連線與 Microsoft 認證](https://github.com/PrismarineJS/mineflayer)。
+
+## 停滯與異常閒置恢復測試
+
+恢復監控預設啟用，與 `MC_ADAPTIVE_NAVIGATION` 的尋路開關分開。
+離線驗證：
+
+```powershell
+npm.cmd test --prefix agent/bot
+uv run --group dev pytest test/test_recovery.py test/test_executor_liveness.py test/test_recovery_integration.py -q
+```
+
+回家進遊戲後，優先觀察以下情況：
+
+- 原地卡住或兩點間來回：約 25 秒沒有新位置／產出會暫停，接著等 AI 新策略。
+- 指令沒有啟動卻持續有心跳：未完成採集任務 idle 約 15 秒觸發恢復；裝備／箱子等一次性操作最多等 45 秒。
+- 有移動卻沒取得目標資源：約 180 秒要求策略檢討；挖鑽石時持續取得圓石不會永久掩蓋問題。
+- 釣魚／熔煉的合理等待：有期限的等待應正常完成；到期仍沒有結果才處理。
+- AI 決策途中手動停止或改任務：晚到的舊答案和完成事件不能重新啟動舊工作。
+- CLI 失敗、回傳無效格式或只聊天：最多兩次嘗試，之後保留任務並說明等待協助的原因。
+
+`RECOVERY_DECISION_TIMEOUT=60` 是單次恢復決策的秒數，可依實際 CLI 延遲調整。
+`CLI_AGENT_TIMEOUT` 仍是 provider 的上限，兩者先到者生效。一次恢復最多兩次決策，
+五分鐘內最多三輪恢復，新的明確任務會重設。這是呼叫次數限制，不是精確 token 配額。
+若收到「暫停等待協助」，改善條件後重新給指令或說繼續，不會默默無限重試。
+
+查看 `[Recovery]` 日誌與 `agent/data/live_state.json` 的 `supervision`：
+`stopping`、`waiting_ai`、`executing`、`waiting_player`，以及剩餘秒數、預期結果和阻礙原因。
+停止確認只證明本地控制流程已撤銷，不能撤回已送到伺服器的放置／挖掘封包。
+真實地形、伺服器延遲與其他插件操作，仍需遊戲測試確認。

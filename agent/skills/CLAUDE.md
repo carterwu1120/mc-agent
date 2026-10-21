@@ -47,7 +47,26 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
 ---
 
-## activity_stuck — Deterministic Rules System
+## Supervised recovery (live event handler)
+
+`recovery.py` is the live activity_stuck strategy skill. `agent/recovery.py` owns
+stop acknowledgement, concurrency, timeouts, duplicate-strategy checks and retry
+budgets. The skill makes one CLI call per attempt. It uses commands_ref and
+command_validation; normalizing to an empty plan is an error, not completion.
+The response is either replan with 1-8 commands, text and expected_outcome, or wait
+with a concrete reason. Chat-only/idle/skip do not settle a recovery. Current state,
+original goal/pending steps, navigation failures, progress samples and bounded recent
+attempts are supplied. An explicit wait is persisted and communicated to the player.
+
+`expected_outcome` is descriptive context, not an arbitrary executable assertion.
+Actual step/goal verification stays in PlanExecutor. No inference is made on every
+heartbeat. Timeout cancels the CLI subprocess through its existing cancellation
+cleanup. Tests use fake model/transport responses, never paid inference.
+
+## activity_stuck — Legacy deterministic rules / replay reference
+
+The following module remains for existing replay tests and reference. The live
+agent router now uses the supervised recovery skill above.
 
 `stuck/prompt_builder.py` includes the bounded `state.navigation` diagnostic when
 present (adaptive mining pilot), so the model sees failed movement profiles and

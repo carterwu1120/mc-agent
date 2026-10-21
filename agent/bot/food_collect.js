@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
 const { RAW_FOOD_ITEMS } = require('./eating')
@@ -26,6 +27,7 @@ let _loopGen = 0
 activityStack.register('getfood', _pause)
 
 function _pause(_bot) {
+    _loopGen++
     isGettingFood = false
     _isPaused = true
     console.log('[Food] 暫停蒐集食物')
@@ -69,7 +71,7 @@ async function _loop(bot, goal = {}) {
     const _myGen = ++_loopGen
     const targetCooked = goal.count ?? 8
 
-    while (isGettingFood) {
+    while (isGettingFood && execution.isCurrent() && _loopGen === _myGen) {
         const cookedCount = _countItems(bot, COOKED_FOOD_ITEMS)
         const cookedProduced = Math.max(0, cookedCount - _startingCookedCount)
 
@@ -103,6 +105,7 @@ async function _loop(bot, goal = {}) {
         break
     }
 
+    if (!execution.isCurrent() || _loopGen !== _myGen) return
     if (!_isPaused && !isGettingFood && _loopGen === _myGen) activityStack.pop(bot)
     _isPaused = false
 }
@@ -120,3 +123,8 @@ function _findRawFood(bot) {
 }
 
 module.exports = { startGetFood, stopGetFood, isActive }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

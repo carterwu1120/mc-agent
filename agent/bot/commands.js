@@ -19,13 +19,47 @@ const { startExploring, stopExploring } = require('./explore')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
 const { setMode } = require('./mode')
 const activityStack = require('./activity')
+const execution = require('./execution')
 
 // smelt exempt from checkFull — used inside inventory recovery plans (smelt before re-equip),
 // blocking it causes the same deadlock as surface did.
 // surface/back also exempt — they are part of the inventory recovery flow itself.
 const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'combat', 'hunt', 'getfood', 'explore'])
+const STOP_ACTIVITIES = { stopfish: 'fishing', stopchop: 'chopping', stopmine: 'mining', stopsmelt: 'smelting',
+    stopcombat: 'combat', stophunt: 'hunting', stopgetfood: 'getfood', stopsurface: 'surface', stopexplore: 'explore' }
+
+function haltActivities(bot) {
+    const errors = []
+    require('./inventory').cancelRecovery()
+    while (activityStack.getActivity() !== 'idle') {
+        const name = activityStack.getActivity()
+        try { activityStack.pause(bot) } catch (err) { errors.push(err.message) }
+        activityStack.remove(bot, name, { resumePrevious: false })
+    }
+    for (const stop of [
+        () => require('./navigation').cancel(bot),
+        () => bot.pathfinder?.setGoal(null),
+        () => bot.stopDigging?.(),
+        () => bot.clearControlStates?.(),
+        () => { if (bot.currentWindow) bot.closeWindow(bot.currentWindow) },
+    ]) {
+        try { stop() } catch (err) { errors.push(err.message) }
+    }
+    return errors
+}
 
 function handle(bot, msg) {
+    if (!execution.isCurrent()) return
+    const stoppingTask = STOP_ACTIVITIES[msg.command] && activityStack.has(STOP_ACTIVITIES[msg.command])
+    if (stoppingTask || msg.command === 'suspend' || msg.command === 'stopall') execution.invalidate()
+    return execution.run(() => {
+        // A manual task stop must not leave paused parent frames that later revive.
+        if (stoppingTask || msg.command === 'stopall') haltActivities(bot)
+        return dispatch(bot, msg)
+    }, msg._command_id)
+}
+
+function dispatch(bot, msg) {
     if (msg._task_id !== undefined) setTaskId(msg._task_id)
     const { _task_id, ...logMsg } = msg
     console.log('[Action]', JSON.stringify(logMsg))
@@ -51,6 +85,13 @@ function handle(bot, msg) {
         return
     }
     switch (msg.command) {
+        case 'suspend': {
+            // Pause every frame without resuming any previous frame. Goals are
+            // retained by Python; a recovery must start a fresh execution.
+            const errors = haltActivities(bot)
+            bridge.sendState(bot, 'recovery_paused', { request_id: msg.request_id, stopped: errors.length === 0, errors })
+            break
+        }
         case 'chat':
             if (msg.text) bot.chat(msg.text)
             break
@@ -455,6 +496,9 @@ function handle(bot, msg) {
             stopSurfacing(bot)
             stopExploring(bot)
             activityStack.clearStack()
+            bot.pathfinder?.setGoal(null)
+            bot.stopDigging?.()
+            bot.clearControlStates?.()
             bridge.sendState(bot, 'action_done')
             break
 

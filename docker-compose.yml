@@ -46,6 +46,7 @@ services:
       LLM_PROVIDER:           ${LLM_PROVIDER:-codex}
       LLM_MODEL:              ${LLM_MODEL:-}
       CLI_AGENT_TIMEOUT:     ${CLI_AGENT_TIMEOUT:-120}
+      RECOVERY_DECISION_TIMEOUT: ${RECOVERY_DECISION_TIMEOUT:-60}
       BOT_WS_URL:             ws://bot0:3001
       BOT_ID:                 bot0
       BOT_DATA_DIR:           /app/agent/data/bot0
@@ -105,6 +106,7 @@ services:
   #     LLM_PROVIDER:           ${LLM_PROVIDER:-codex}
   #     LLM_MODEL:              ${LLM_MODEL:-}
   #     CLI_AGENT_TIMEOUT:     ${CLI_AGENT_TIMEOUT:-120}
+  #     RECOVERY_DECISION_TIMEOUT: ${RECOVERY_DECISION_TIMEOUT:-60}
   #     BOT_WS_URL:             ws://bot1:3003
   #     BOT_ID:                 bot1
   #     BOT_DATA_DIR:           /app/agent/data/bot1

@@ -4,6 +4,7 @@ const { ensureToolFor } = require('./crafting')
 const { compactCompressibleItems } = require('./crafting')
 const { markBuried } = require('./buried')
 const activityStack = require('./activity')
+const execution = require('./execution')
 
 const INVENTORY_FULL = 34  // trigger 2 slots early so there's room to craft/place
 
@@ -80,11 +81,20 @@ async function _handleFull(bot) {
 }
 
 async function _tidyInventory(bot, { forceLlm = false } = {}) {
+    if (!execution.isCurrent()) return
     if (_checking) return
     _checking = true
+    return execution.run(async () => {
+        try { await _runTidyInventory(bot, forceLlm) }
+        finally { if (execution.isCurrent()) _checking = false }
+    }, execution.commandId())
+}
+
+async function _runTidyInventory(bot, forceLlm) {
 
     // 暫停當前行為
     activityStack.pause(bot)
+    activityStack.waitFor('inventory_recovery', 120000)
 
     const beforeSlots = bot.inventory.items().length
     const compacted = await compactCompressibleItems(bot)
@@ -115,6 +125,7 @@ async function _tidyInventory(bot, { forceLlm = false } = {}) {
 
     // 等待 LLM 決策（最多 120 秒，deposit/drop 流程可能需要較長時間）
     const decision = await _waitForDecision(120000)
+    if (!execution.isCurrent()) return
 
     if (!decision || decision.action === 'continue') {
         console.log('[Inv] LLM 決定繼續（或超時）')
@@ -244,6 +255,12 @@ function _sleep(ms) {
 function _waitForDecision(timeoutMs) {
     return new Promise((resolve) => {
         const check = setInterval(() => {
+            if (!execution.isCurrent()) {
+                clearInterval(check)
+                clearTimeout(timer)
+                resolve(null)
+                return
+            }
             if (_decision !== null) {
                 clearInterval(check)
                 clearTimeout(timer)
@@ -281,6 +298,7 @@ async function waitUntilIdle() {
 }
 
 module.exports = {
+    cancelRecovery() { _checking = false; _decision = null },
     startMonitor,
     checkFull,
     waitUntilIdle,

@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const { goals } = require('mineflayer-pathfinder')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
@@ -38,6 +39,7 @@ activityStack.register('combat', _pause)
 activityStack.register('craft_armor', _pauseCraftArmor)
 
 function _pause(_bot) {
+    _loopGen++
     isCombating = false
     _isPaused = true
     console.log('[Combat] 暫停戰鬥')
@@ -70,6 +72,7 @@ async function equipArmor(bot) {
         if (best && _armorTier(best.name) > currentTier) {
             try {
                 await bot.equip(best, dest)
+                if (!execution.isCurrent()) return
                 console.log(`[Combat] 裝備 ${best.name}`)
             } catch (e) {
                 console.log(`[Combat] 裝備失敗 ${best.name}: ${e.message}`)
@@ -90,6 +93,11 @@ function _diamondReserve(bot) {
 }
 
 function craftMissingArmor(bot) {
+    if (!execution.isCurrent()) return
+    return execution.run(() => _startCraftArmor(bot), execution.commandId())
+}
+
+function _startCraftArmor(bot) {
     const currentActivity = activityStack.getActivity()
     if (_isCrafting || (currentActivity !== 'idle' && currentActivity !== 'combat')) {
         console.log(`[CraftArmor] 目前活動為 ${currentActivity}，暫不插入補盔甲決策`)
@@ -156,6 +164,7 @@ async function _craftLoop(bot) {
     }
 
     const table = await ensureCraftingTable(bot)
+    if (!execution.isCurrent()) return
     if (table) {
         try {
             for (const { slot, dest, suffix } of ARMOR_SLOTS) {
@@ -173,6 +182,7 @@ async function _craftLoop(bot) {
                     if (!recipe) continue
                     try {
                         await bot.craft(recipe, 1, table)
+                        if (!execution.isCurrent()) return
                         console.log(`[CraftArmor] 合成 ${pieceName}`)
                         const crafted = bot.inventory.items().find(i => i.name === pieceName)
                         if (crafted) await bot.equip(crafted, dest)
@@ -184,6 +194,7 @@ async function _craftLoop(bot) {
             }
         } finally {
             await reclaimCraftingTable(bot)
+            if (!execution.isCurrent()) return
         }
     }
 
@@ -210,6 +221,7 @@ async function equipWeapon(bot) {
     console.log('[Combat] 背包無劍，嘗試合成...')
     const { ensureSword } = require('./crafting')
     const crafted = await ensureSword(bot)
+    if (!execution.isCurrent()) return
     if (crafted) {
         for (const name of SWORDS) { if (await _tryEquip(name)) return true }
     }
@@ -259,7 +271,7 @@ async function _loop(bot, goal = {}) {
     let gotoFailStreak = 0
     const MAX_GOTO_FAILS = 5
 
-    while (isCombating) {
+    while (isCombating && execution.isCurrent() && _loopGen === _myGen) {
         if (goal.duration && Date.now() - startTime >= goal.duration * 1000) {
             console.log(`[Combat] 達到時間目標 ${goal.duration}s，停止`)
             break
@@ -273,6 +285,7 @@ async function _loop(bot, goal = {}) {
                 break
             }
             await _sleep(500)
+            if (!execution.isCurrent()) return
             continue
         }
         activityStack.touch('combat', 'target_acquired')
@@ -280,11 +293,13 @@ async function _loop(bot, goal = {}) {
 
         // 若腳下或身體位置有蜘蛛網，先挖掉脫身
         await _clearCobwebs(bot)
+        if (!execution.isCurrent()) return
 
         // 每次攻擊前確認手持武器（其他模組可能切換了手上物品）
         const handItem = bot.heldItem
         if (!handItem || !WEAPON_PRIORITY.includes(handItem.name)) {
             await equipWeapon(bot)
+            if (!execution.isCurrent()) return
         }
 
         const dist = target.position.distanceTo(bot.entity.position)
@@ -316,6 +331,7 @@ async function _loop(bot, goal = {}) {
 
         try {
             await bot.lookAt(target.position.offset(0, (target.height ?? 1.8) / 2, 0))
+            if (!execution.isCurrent()) return
             bot.attack(target)
             activityStack.touch('combat', 'attack')
         } catch (e) {
@@ -323,11 +339,13 @@ async function _loop(bot, goal = {}) {
         }
 
         await _sleep(600)
+        if (!execution.isCurrent()) return
     }
 
+    if (!execution.isCurrent() || _loopGen !== _myGen) return
     isCombating = false
     if (!_isPaused && _loopGen === _myGen) {
-        setTimeout(async () => { await craftMissingArmor(bot); await equipArmor(bot) }, 1000)
+        execution.run(() => setTimeout(async () => { await craftMissingArmor(bot); await equipArmor(bot) }, 1000), execution.commandId())
         activityStack.pop(bot)
     }
     _isPaused = false
@@ -357,6 +375,7 @@ async function _clearCobwebs(bot) {
                 const tool = bot.pathfinder.bestHarvestTool(b)
                 if (tool) await bot.equip(tool, 'hand')
                 await bot.dig(b)
+                if (!execution.isCurrent()) return
                 console.log('[Combat] 清除蜘蛛網')
             } catch (_) {}
         }
@@ -393,3 +412,8 @@ function startMonitor(bot) {
 }
 
 module.exports = { startCombat, stopCombat, isActive, equipArmor, equipWeapon, craftMissingArmor, startMonitor }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

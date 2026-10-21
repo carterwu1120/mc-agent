@@ -1,3 +1,4 @@
+const execution = require('./execution')
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
@@ -1391,3 +1392,8 @@ function resumeMining() { isMining = true }
 function getGoal() { return _currentGoal }
 
 module.exports = { startMining, stopMining, isActive, resumeMining, getGoal }
+
+// Each activity has its own cancellable async scope, including nested activities.
+for (const [name, fn] of Object.entries(module.exports)) {
+    if (name.startsWith('start') && name !== 'startMonitor') module.exports[name] = execution.owned(fn)
+}

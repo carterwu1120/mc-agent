@@ -13,6 +13,7 @@ const inventory = require('./inventory')
 const combat = require('./combat')
 const water = require('./water')
 const watchdog = require('./watchdog')
+const execution = require('./execution')
 const { applyMovements } = require('./movement_prefs')
 
 initLogger('bot')
@@ -92,6 +93,7 @@ bot.once('spawn', () => {
     )
 
     _wrapPathfinderDebug(bot)
+    execution.install(bot)
     applyMovements(bot)
     bridge.init(bot, (msg) => handle(bot, msg))
     eating.startMonitor(bot)
