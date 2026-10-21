@@ -74,6 +74,9 @@ def build_activity_prompt(
         extra_lines.append("注意：目前看起來不是單純缺資源，而是 craft 流程可能異常失敗")
     if detail:
         extra_lines.append(f"補充說明：{detail}")
+    if state.get("navigation"):
+        extra_lines.append("最近導航結果（相同位置/地形下失敗的方法暫停重試；不要只重新送相同 mine 指令）："
+                           + json.dumps(state["navigation"], ensure_ascii=False))
 
     # #2 — underground sequencing constraint
     if y < 40:

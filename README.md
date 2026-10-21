@@ -386,12 +386,17 @@ curl http://localhost:8000/metrics/goal-completion
 
 ### Local Development
 
+For Java single-player LAN setup, authentication, local-vs-Docker addresses,
+offline navigation tests and the home test checklist, see
+[本機連線與挖礦導航測試](docs/local-testing.md).
+
 ```powershell
 # JS Bot 0
-cd agent/bot && node index.js
+npm.cmd ci --prefix agent/bot
+node agent/bot/index.js
 
 # Python Agent 0
-$env:BOT_ID="bot0"; $env:BOT_DATA_DIR="agent/data/bot0"; python -m agent.agent
+uv run -m agent.agent # another terminal, also at the repository root
 ```
 
 ### Environment Variables

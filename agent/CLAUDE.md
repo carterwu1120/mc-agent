@@ -58,6 +58,13 @@ For Python skill internals (skill pattern, LLM format, task_memory): see agent/s
 
 ## Key Modules
 
+Mining navigation pilot: `bot/navigation.js` is opt-in via
+`MC_ADAPTIVE_NAVIGATION=true`, plans short walk/dig/build segments and records
+bounded failure memory. Mining cancellation uses loop generations; adaptive stack
+resume replans from the current location. Latest results are attached as `navigation`
+in bridge state and stuck prompts. See `bot/CLAUDE.md` and
+`docs/local-testing.md` for offline-vs-live validation boundaries and setup.
+
 | Module | Purpose |
 |--------|---------|
 | `bot/bridge.js` | WebSocket server, `sendState(bot, type, extra)` — includes `mode` field |

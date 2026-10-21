@@ -6,6 +6,30 @@ For architecture overview and event types, see agent/CLAUDE.md
 
 ## Activity Module Pattern
 
+### Adaptive mining navigation pilot
+
+`MC_ADAPTIVE_NAVIGATION=true` routes mining `_goto` calls through `navigation.js`.
+Pathfinder generates local walk/dig/build candidates; execute only the next
+stand position and re-observe. Walking/digging profiles cannot scaffold; build
+uses non-gravity full blocks. `movement_prefs.js` must map scaffold names to
+**item IDs**, because Pathfinder counts inventory items, not block states.
+Each segment verifies actual arrival and has cancellation/time budgets. Failed
+strategies are cached per position/goal/local terrain/inventory for 120 seconds,
+up to 128 entries, across stack resume and repeated mine commands in one process.
+Cancellation only clears the goal owned by that operation. Mining loop generations
+are propagated through AsyncLocalStorage, so resumed flags cannot revive old helpers.
+Adaptive resume retains the resource objective but discards the old resume-position route.
+The pilot does not replace all manual tunnel/descent/escape routines or coordinate
+every other activity's movement. Keep it opt-in until Minecraft integration tests pass.
+Bridge state includes the last bounded `navigation` result, consumed by stuck prompts.
+Offline tests use real Pathfinder planning and simulated action application:
+`npm.cmd test --prefix agent/bot`. They do not validate live physics/server placement.
+
+`index.js` loads project-root `.env` through `config.js` before environment-reading
+modules. Explicit process variables win. Node.js 22+ is required. `MC_FORGE=false`
+disables the previously unconditional Forge handshake for vanilla LAN testing.
+`npm.cmd run check --prefix agent/bot` prints connection settings without connecting.
+
 Every activity follows this exact pattern:
 
 ```js

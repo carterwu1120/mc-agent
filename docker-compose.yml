@@ -27,6 +27,8 @@ services:
       MC_USERNAME: ${MC_USERNAME_0:-Agent0}
       MC_VERSION:  ${MC_VERSION:-1.20.1}
       MC_AUTH:     ${MC_AUTH:-offline}
+      MC_FORGE:    ${MC_FORGE:-true}
+      MC_ADAPTIVE_NAVIGATION: ${MC_ADAPTIVE_NAVIGATION:-false}
       BOT_WS_PORT: 3001
       BOT_DATA_DIR: /app/agent/data/bot0
       BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
@@ -85,6 +87,8 @@ services:
   #     MC_USERNAME: ${MC_USERNAME_1:-Agent1}
   #     MC_VERSION:  ${MC_VERSION:-1.20.1}
   #     MC_AUTH:     ${MC_AUTH:-offline}
+  #     MC_FORGE:    ${MC_FORGE:-true}
+  #     MC_ADAPTIVE_NAVIGATION: ${MC_ADAPTIVE_NAVIGATION:-false}
   #     BOT_WS_PORT: 3003
   #     BOT_DATA_DIR: /app/agent/data/bot1
   #     BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}

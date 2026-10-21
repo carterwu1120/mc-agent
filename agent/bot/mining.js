@@ -9,6 +9,9 @@ const eating = require('./eating')
 const water = require('./water')
 const hazards = require('./hazards')
 const { applyMovements } = require('./movement_prefs')
+const navigation = require('./navigation')
+const { AsyncLocalStorage } = require('node:async_hooks')
+const loopContext = new AsyncLocalStorage()
 
 let isMining = false
 let _isPaused = false
@@ -83,6 +86,7 @@ function _hasAdjacentWater(bot, pos) {
 
 // 嘗試用背包裡的方塊封堵岩漿（最佳努力，不保證成功）
 async function _tryBlockLava(bot, lavaPos) {
+    if (_shouldAbort()) return
     const filler = bot.inventory.items().find(i =>
         ['cobblestone', 'cobbled_deepslate', 'dirt', 'stone', 'gravel'].includes(i.name)
     )
@@ -98,6 +102,7 @@ async function _tryBlockLava(bot, lavaPos) {
         if (!_isLava(bot.blockAt(lavaPos))) return  // 已被封
         try {
             await bot.lookAt(lavaPos.offset(0.5, 0.5, 0.5))
+            if (_shouldAbort()) return
             await bot.placeBlock(ref, new Vec3(-dx, -dy, -dz))
             console.log('[Mine] 封堵岩漿成功')
             return
@@ -145,11 +150,12 @@ function _countBySuffix(bot, suffix) {
 }
 
 async function _equipToolForDig(bot, block) {
-    if (!block) return
+    if (!block || _shouldAbort()) return
     try {
         const equipped = await ensureToolFor(bot, block.name, false)
         if (equipped) return
     } catch (_) {}
+    if (_shouldAbort()) return
     try {
         const tool = bot.pathfinder.bestHarvestTool(block)
         if (tool) await bot.equip(tool, 'hand')
@@ -236,7 +242,7 @@ async function _clearClimbablesAround(bot, positions) {
         if (!block || !CLEARABLE_CLIMBABLES.has(block.name)) continue
         try {
             await _equipToolForDig(bot, block)
-            await bot.dig(block)
+            await _dig(bot, block)
             console.log(`[Mine] 清除 ${block.name} at (${pos.x}, ${pos.y}, ${pos.z})`)
             await _sleep(100)
         } catch (e) {
@@ -246,11 +252,13 @@ async function _clearClimbablesAround(bot, positions) {
 }
 
 function _setMovements(bot) {
+    if (_shouldAbort()) return
     const movements = applyMovements(bot, { canDig: true })
     movements.maxDropDown = 8
 }
 
 function _setEscapeMovements(bot) {
+    if (_shouldAbort()) return
     applyMovements(bot, {
         canDig: true,
         scaffoldBlockNames: ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'gravel', 'sand'],
@@ -258,7 +266,15 @@ function _setEscapeMovements(bot) {
 }
 
 function _shouldAbort(expectedGen = null) {
-    return !isMining || (expectedGen !== null && _loopGen !== expectedGen)
+    if (expectedGen < 0) expectedGen = null
+    expectedGen ??= loopContext.getStore()
+    return !isMining || (expectedGen !== undefined && expectedGen !== null && _loopGen !== expectedGen)
+}
+
+async function _dig(bot, block) {
+    if (_shouldAbort()) throw new Error('mining aborted')
+    await bot.dig(block)
+    if (_shouldAbort()) throw new Error('mining aborted')
 }
 
 function _hasPickaxe(bot) {
@@ -270,6 +286,7 @@ function _resetStaleMining(bot, reason = 'stale') {
     isMining = false
     _isPaused = false
     _loopGen++
+    navigation.cancel(bot)
     _currentGoal = {}
     _digFailed.clear()
     _unavailablePickaxe.clear()
@@ -297,6 +314,10 @@ function _pause(_bot) {
     }
     isMining = false
     _isPaused = true
+    _loopGen++ // In-flight helpers must not become active again after resume.
+    navigation.cancel(_bot)
+    try { _bot.pathfinder?.setGoal(null) } catch (_) {}
+    try { _bot.stopDigging?.() } catch (_) {}
     console.log('[Mine] 暫停挖礦')
 }
 
@@ -328,7 +349,8 @@ function _resumeMining(bot, originalGoal) {
         ? Math.max(1, originalGoal.count - _targetCount)
         : undefined
     const top = activityStack.getTopFrame()
-    const resumePos = top?.activity === 'mining' ? top.resumePos : null
+    // Resume the resource goal, not an obsolete route to the interruption site.
+    const resumePos = !navigation.enabled() && top?.activity === 'mining' ? top.resumePos : null
     isMining = true
     activityStack.markStarted('mining', 'resume')
     activityStack.updateTopGoal(remaining ? { ...originalGoal, count: remaining } : originalGoal)
@@ -341,6 +363,8 @@ function stopMining(bot) {
     isMining = false
     _isPaused = false
     _loopGen++  // invalidate current loop so it skips its own pop
+    navigation.cancel(bot)
+    try { bot.stopDigging?.() } catch (_) {}
     _currentGoal = {}
     _digFailed.clear()
     _unavailablePickaxe.clear()
@@ -356,8 +380,24 @@ function stopMining(bot) {
     activityStack.remove(bot, 'mining', { resumePrevious: false })
 }
 
-async function _loop(bot, goal = {}, resumePos = null) {
+function _loop(bot, goal = {}, resumePos = null) {
     const _myGen = ++_loopGen
+    return loopContext.run(_myGen, async () => {
+        try {
+            await _runLoop(bot, goal, resumePos, _myGen)
+        } catch (e) {
+            if (_shouldAbort(_myGen)) return
+            isMining = false
+            bridge.sendState(bot, 'activity_stuck', {
+                activity: 'mining', reason: 'no_blocks', detail: e.message,
+                navigation: navigation.lastResult(bot),
+            })
+            if (activityStack.isTopActivity('mining')) activityStack.pop(bot)
+        }
+    })
+}
+
+async function _runLoop(bot, goal, resumePos, _myGen) {
     _isPaused = false
     const startTime = Date.now()
     let tunnelYaw = bot.entity.yaw
@@ -401,7 +441,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
         }
     }
 
-    while (isMining) {
+    while (!_shouldAbort(_myGen)) {
         _rememberResumePos(bot)
         if (eating.isEating()) {
             await _sleep(250)
@@ -464,7 +504,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                         _sendNoToolsStuck(bot)
                         break
                     }
-                    await bot.dig(fresh)
+                    await _dig(bot, fresh)
                     if (_shouldAbort(_myGen)) return
                     _digFailed.delete(pos.toString())
                     _targetCount++
@@ -477,6 +517,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                     await _collectNearby(bot, pos, 4)
                     if (_shouldAbort(_myGen)) return
                 } catch (e) {
+                    if (_shouldAbort(_myGen)) return
                     console.log(`[Mine] 挖石頭失敗: ${e.message}`)
                     _digFailed.add(pos.toString())
                     stoneSearchFails++
@@ -543,7 +584,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                         _sendNoToolsStuck(bot)
                         break
                     }
-                    await bot.dig(fresh)
+                    await _dig(bot, fresh)
                     if (_shouldAbort(_myGen)) return
                     _digFailed.delete(pos.toString())
                     _targetCount++
@@ -555,6 +596,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                     await _collectNearby(bot, pos, 4)
                     if (_shouldAbort(_myGen)) return
                 } catch (e) {
+                    if (_shouldAbort(_myGen)) return
                     console.log(`[Mine] cobblestone 挖石失敗: ${e.message}`)
                     _digFailed.add(pos.toString())
                 }
@@ -646,7 +688,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                 .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
 
             for (const orePos of nearbyOres) {
-                if (!isMining) return
+                if (_shouldAbort()) return
                 if (eating.isEating()) {
                     await _sleep(250)
                     continue
@@ -669,7 +711,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                     const ok = await ensurePickaxeTier(bot, required)
                     if (_shouldAbort(_myGen)) return
                     if (!ok) continue
-                    await bot.dig(fresh)
+                    await _dig(bot, fresh)
                     if (_shouldAbort(_myGen)) return
                     const isTarget = goal.target && fresh.name.includes(goal.target)
                     if (isTarget) {
@@ -725,8 +767,9 @@ async function _loop(bot, goal = {}, resumePos = null) {
                 try {
                     await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 12000)
                 } catch (e) {
+                    if (_shouldAbort(_myGen)) return
                     if (e.message.includes('goal was changed') || e.message.includes('goal changed')) {
-                        while (water.isEscaping()) await _sleep(300)
+                        while (water.isEscaping() && !_shouldAbort()) await _sleep(300)
                         await _sleep(200)
                         try {
                             await _goto(bot, new goals.GoalNear(pos.x, pos.y, pos.z, 1), 12000)
@@ -764,7 +807,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                         _lavaOres.add(pos.toString())
                         continue
                     }
-                    await bot.dig(fresh)
+                    await _dig(bot, fresh)
                     if (_shouldAbort(_myGen)) return
                     _digFailed.delete(pos.toString())
                     const isTarget = goal.target && fresh.name.includes(goal.target)
@@ -811,7 +854,7 @@ async function _loop(bot, goal = {}, resumePos = null) {
                                 const required = _requiredPickaxe(freshWide.name)
                                 await ensurePickaxeTier(bot, required)
                                 if (_shouldAbort(_myGen)) return
-                                await bot.dig(freshWide)
+                                await _dig(bot, freshWide)
                                 if (_shouldAbort(_myGen)) return
                                 _digFailed.delete(wp.toString())
                                 const isTarget = goal.target && freshWide.name.includes(goal.target)
@@ -932,8 +975,10 @@ async function _loop(bot, goal = {}, resumePos = null) {
         }
     }
 
-    if (!_isPaused && _loopGen === _myGen) activityStack.pop(bot)
-    _isPaused = false
+    if (_loopGen === _myGen) {
+        if (!_isPaused) activityStack.pop(bot)
+        _isPaused = false
+    }
 }
 
 function _rememberResumePos(bot) {
@@ -964,7 +1009,7 @@ async function _stairDown(bot, yaw, steps) {
     const dz = Math.round(-Math.cos(yaw))
 
     for (let i = 0; i < steps; i++) {
-        if (!isMining) return
+        if (_shouldAbort()) return
         if (water.isEscaping()) return
         if (eating.isEating()) {
             await _sleep(250)
@@ -1000,7 +1045,7 @@ async function _stairDown(bot, yaw, steps) {
         for (const off of [[dx, 1, dz], [dx, 0, dz], [dx, -1, dz]]) {
             const b = bot.blockAt(feet.offset(...off))
             if (!b || b.boundingBox !== 'block') continue
-            try { await _equipToolForDig(bot, b); await bot.dig(b) } catch (_) {}
+            try { await _equipToolForDig(bot, b); await _dig(bot, b) } catch (_) {}
         }
 
         // 走到前方低一格的位置（pathfinder 會自然掉落）
@@ -1013,6 +1058,7 @@ async function _stairDown(bot, yaw, steps) {
 }
 
 async function _stepDown(bot, targetY, yaw) {
+    if (_shouldAbort()) return
     const pick = bot.inventory.items().find(i => i.name.endsWith('_pickaxe'))
     if (!pick) {
         console.log('[Mine] 沒有稿子，無法下潛')
@@ -1027,7 +1073,7 @@ async function _stepDown(bot, targetY, yaw) {
 }
 
 async function _digStraightDown(bot, targetY) {
-    while (isMining) {
+    while (!_shouldAbort()) {
         const feet = bot.entity.position.floored()
         if (feet.y <= targetY) return
 
@@ -1042,7 +1088,7 @@ async function _digStraightDown(bot, targetY) {
 
         const below = bot.blockAt(feet.offset(0, -1, 0))
         if (below && below.boundingBox === 'block' && below.hardness >= 0) {
-            try { await _equipToolForDig(bot, below); await bot.dig(below) } catch (e) {
+            try { await _equipToolForDig(bot, below); await _dig(bot, below) } catch (e) {
                 console.log(`[Mine] 直挖失敗: ${e.message}`)
                 return
             }
@@ -1138,7 +1184,7 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
                     console.log(`[Tunnel] ${pos} 在工具切換後變為岩漿，中止`)
                     return false
                 }
-                await bot.dig(b)
+                await _dig(bot, b)
                 progressed = true
                 if (goal.target && b.name.includes(goal.target)) {
                     _targetCount++
@@ -1176,7 +1222,7 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
         } catch (e) {
             if (e.message.includes('goal was changed') || e.message.includes('goal changed')) {
                 // water/lava escape cancelled pathfinder — wait and retry once
-                while (water.isEscaping()) await _sleep(300)
+                while (water.isEscaping() && !_shouldAbort()) await _sleep(300)
                 await _sleep(200)
                 try {
                     await _goto(bot, new goals.GoalBlock(feetPos.x, feetPos.y, feetPos.z), 5000)
@@ -1222,7 +1268,7 @@ async function _collectNearby(bot, nearPos, maxDistance) {
         return true
     })
     for (const e of items) {
-        if (!isMining) return
+        if (_shouldAbort()) return
         if (eating.isEating()) {
             await _sleep(250)
             continue
@@ -1248,6 +1294,7 @@ async function _digEscape(bot, stopY = 60) {
     let stuckTicks = 0
 
     for (let i = 0; i < 120 && Math.floor(bot.entity.position.y) < stopY; i++) {
+        if (_shouldAbort()) return
         if (eating.isEating()) {
             await _sleep(250)
             continue
@@ -1261,7 +1308,7 @@ async function _digEscape(bot, stopY = 60) {
         for (const dy of [2, 1]) {
             const b = bot.blockAt(feet.offset(0, dy, 0))
             if (!b || b.hardness < 0 || b.boundingBox !== 'block') continue
-            try { await _equipToolForDig(bot, b); await bot.dig(b) } catch (_) {}
+            try { await _equipToolForDig(bot, b); await _dig(bot, b) } catch (_) {}
         }
 
         _setEscapeMovements(bot)
@@ -1289,8 +1336,22 @@ function _sleep(ms) {
 
 // pathfinder.goto 若超過 ms 毫秒沒有結果就拋出 timeout，並取消 pathfinder
 function _goto(bot, goal, ms = 8000) {
-    if (!isMining) {
+    if (_shouldAbort()) {
         return Promise.reject(new Error('mining aborted'))
+    }
+    if (navigation.enabled()) {
+        const gen = loopContext.getStore() ?? _loopGen
+        return navigation.navigate(bot, goal, {
+            timeoutMs: ms,
+            shouldContinue: () => !_shouldAbort(gen) && !water.isEscaping() && activityStack.isTopActivity('mining'),
+            onProgress: () => activityStack.touch('mining', 'navigation_waypoint'),
+        }).then(result => {
+            if (result.status !== 'success') {
+                const e = new Error(`navigation ${result.status}: ${result.reason}`)
+                e.navigation = result
+                throw e
+            }
+        })
     }
     let done = false
     let timer = null
@@ -1298,7 +1359,7 @@ function _goto(bot, goal, ms = 8000) {
         v => {
             done = true
             if (timer) clearTimeout(timer)
-            if (!isMining) throw new Error('mining aborted')
+            if (_shouldAbort()) throw new Error('mining aborted')
             return v
         },
         e => {

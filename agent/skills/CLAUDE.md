@@ -49,6 +49,10 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
 ## activity_stuck — Deterministic Rules System
 
+`stuck/prompt_builder.py` includes the bounded `state.navigation` diagnostic when
+present (adaptive mining pilot), so the model sees failed movement profiles and
+does not treat resending the identical mine command as terrain recovery.
+
 `activity_stuck.py` 實作四層規則系統，確保規則在系統層強制執行，不依賴 LLM 記憶。
 
 ### 架構

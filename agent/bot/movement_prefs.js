@@ -15,7 +15,7 @@ function createMovements(bot, options = {}) {
 
     if (Array.isArray(scaffoldBlockNames)) {
         movements.scafoldingBlocks = scaffoldBlockNames
-            .map(n => bot.registry.blocksByName[n]?.id)
+            .map(n => bot.registry.itemsByName[n]?.id)
             .filter(id => id !== undefined)
     }
 

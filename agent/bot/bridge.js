@@ -3,6 +3,7 @@ const { getActivity, getStack, getTopFrame } = require('./activity')
 const { getChests } = require('./chest')
 const { getHome } = require('./home')
 const { getMode } = require('./mode')
+const navigation = require('./navigation')
 
 const TREE_BLOCK_NAMES = [
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
@@ -81,6 +82,7 @@ function sendState(bot, type, extra = {}) {
         mode: getMode(),
         activity: getActivity(),
         stack: getStack(),
+        navigation: navigation.lastResult(bot),
         mc_connected: _mcConnected,
         pos: bot.entity ? bot.entity.position : null,
         health: bot.health,

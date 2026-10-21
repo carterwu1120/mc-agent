@@ -1,3 +1,5 @@
+const { loadProjectEnv, connectionOptions } = require('./config')
+loadProjectEnv() // Before bridge/mode modules read environment variables.
 const mineflayer = require('mineflayer')
 const minecraftProtocolForge = require('minecraft-protocol-forge')
 const { pathfinder } = require('mineflayer-pathfinder')
@@ -18,16 +20,11 @@ initLogger('bot')
 const _STRICT_CHAT_ADDRESSING = String(process.env.STRICT_CHAT_ADDRESSING || 'true').toLowerCase() !== 'false'
 const _IS_COORDINATOR = String(process.env.COORDINATOR_BOT || 'false').toLowerCase() === 'true'
 
-const bot = mineflayer.createBot({
-    host: process.env.MC_HOST || 'localhost',
-    port: parseInt(process.env.MC_PORT || '25565'),
-    username: process.env.MC_USERNAME || 'Agent',
-    version: process.env.MC_VERSION || '1.20.1',
-    auth: process.env.MC_AUTH || 'offline',
-    forgeHandshake: true,
-})
+const bot = mineflayer.createBot(connectionOptions())
 
-minecraftProtocolForge.forgeHandshake(bot._client, { forge: true })
+if (String(process.env.MC_FORGE || 'true').toLowerCase() === 'true') {
+    minecraftProtocolForge.forgeHandshake(bot._client, { forge: true })
+}
 bot.loadPlugin(pathfinder)
 
 function _pathfinderCallerLabel() {
