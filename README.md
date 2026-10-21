@@ -4,6 +4,8 @@ An autonomous Minecraft bot powered by Codex or Claude Code using subscription l
 
 > **Side project** | Node.js · Python · mineflayer · aiohttp · Docker
 
+**回家啟動：**先看 [Windows 本機快速啟動](#windows-local-quick-start)。完整連線排錯與遊戲驗收見 [本機測試指南](docs/local-testing.md)。
+
 ---
 
 ## Demo
@@ -96,7 +98,10 @@ JS bot mining... gets stuck
   │
   │  [WebSocket]  { type: "activity_stuck", reason: "no_progress" }
   ▼
-Python agent — routes to activity_stuck.py → asks LLM for recovery
+Python RecoverySupervisor — suspends old actions, waits for acknowledgement
+  │
+  ▼
+skills/recovery.py — asks the CLI agent for a replacement strategy
   │
   │  [WebSocket]  { command: "explore" }  ← LLM decides to explore first
   ▼
@@ -136,20 +141,20 @@ Not everything goes to the LLM. Decisions are layered:
 ```
 Event arrives
   │
-  ├─ Deterministic shortcut?  ──────────────────→ Execute immediately
-  │  (food low, tool broken, known pattern)
+  ├─ Local movement / bounded navigation ──────→ Execute and observe
   │
-  ├─ System-layer rules (pre/post LLM)
-  │  _enforce_pending_steps()
-  │  _block_invalid_skip()
-  │  _deduplicate_adjacent_cmds()
+  ├─ Stuck / unexpected idle / failed verification
+  │  Suspend old actions → wait for acknowledgement
+  │  CLI recovery decision with deadlines and retry limits
   │
-  └─ LLM decision
+  └─ Plan validation
        ↓
-     Response validated and filtered by rules
+     Replace remaining steps, or preserve task and wait for player
 ```
 
-This approach keeps LLM costs low and prevents the model from making structurally invalid decisions (e.g., skipping a step that a later step depends on).
+Local observations do not call the model. Recovery decisions use bounded CLI calls;
+invalid plans and repeated strategies are rejected. The old deterministic stuck
+rules remain as replay/reference code, not the live recovery handler.
 
 ### 3. PlanExecutor
 
@@ -161,7 +166,7 @@ When the LLM returns a multi-step plan, `PlanExecutor` sequences the commands, w
 - **Deterministic remediation** (`_build_goal_remediation`): if goal verification fails, computes the deficit and emits the minimum fix (e.g. `smelt raw_iron 8` short by 3 with 1 in inventory → `['mine iron 2', 'smelt raw_iron 3']`). Retries once; further shortfalls are recorded as `goalVerified: false` for `self_task` to pick up
 - **Replan during execution**: the LLM can replace remaining steps mid-plan via `{"action": "replan", ...}`
 - **Step skip / abort**: granular control without losing the overall task context
-- **Dropped-command detection**: if a sent activity command never starts (JS stays idle for 90s), automatically retransmits once
+- **Dropped-command detection**: unfinished activity commands idle for 15s trigger supervised recovery; instant actions have a 45s completion deadline. Heartbeats alone do not prove progress.
 
 ### 4. Working Memory (`task_memory`)
 
@@ -191,11 +196,17 @@ Three-layer recovery model:
 
 | Layer | Who handles it | Example |
 |-------|---------------|---------|
-| Mechanical | JS watchdog | Bot is stuck against a wall → pathfind around |
-| Orchestration | Python executor | Plan step timed out → replan or skip |
-| Strategic | LLM via `activity_stuck` | No animals found → decide whether to explore or switch strategy |
+| Mechanical | JS navigation + watchdog | Try bounded local routes; report lack of progress |
+| Orchestration | Python RecoverySupervisor + executor | Stop old actions, correlate completion events, preserve task ownership |
+| Strategic | CLI agent via `skills/recovery.py` | Choose a new plan or explicitly wait for player help |
 
-The LLM is only called for strategic decisions. Mechanical issues are resolved in JS without ever involving Python.
+Recovery supervision is enabled by default. No progress for about 25s, unexpected
+idle for 15s, or resource work without relevant output for 180s can request review;
+fishing and named waits have separate deadlines. Each recovery allows at most two
+decisions, with at most three episodes per rolling five minutes between explicit
+tasks. Missing stop acknowledgement or exhausted retries preserves the task in
+`waiting_player`. See [recovery testing](docs/local-testing.md#停滯與異常閒置恢復測試)
+for timing details and live-game validation limits.
 
 ### 6. Observability Dashboard
 
@@ -322,6 +333,7 @@ you intend to sign in again. Authentication is interactive setup; the running
 Minecraft agent uses noninteractive CLI calls.
 
 Default services in the current MVP:
+- `postgres` (shared history database)
 - `bot0`
 - `agent0` (dashboard page on `:3002`, coordinator on `:3010`)
 - `backend` (public API on `:8000`)
@@ -386,18 +398,76 @@ curl http://localhost:8000/metrics/goal-completion
 
 ### Local Development
 
-For Java single-player LAN setup, authentication, local-vs-Docker addresses,
-offline navigation tests and the home test checklist, see
-[本機連線與挖礦導航測試](docs/local-testing.md).
+<a id="windows-local-quick-start"></a>
+
+#### Windows 本機快速啟動（單人世界開 LAN）
+
+以下指令都在專案根目錄的 PowerShell 執行。需要 **Node.js 22+**、
+**Python 3.10–3.12**、**uv**，以及已安裝、登入訂閱帳號的 Codex 或 Claude Code CLI。
+
+1. 安裝專案依賴並建立設定檔；已有 `.env` 時保留原檔：
 
 ```powershell
-# JS Bot 0
+uv sync --group dev
 npm.cmd ci --prefix agent/bot
-node agent/bot/index.js
-
-# Python Agent 0
-uv run -m agent.agent # another terminal, also at the repository root
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
+
+2. 開 Minecraft **Java Edition** 單人世界 → `Esc` → **開放至區域網路**，記下顯示的 port。
+   編輯的是 **`.env`**，不是 `.env.example`。遊戲與 bot 同一台電腦時，例如：
+
+```dotenv
+MC_HOST=127.0.0.1
+MC_PORT=51234
+MC_USERNAME=Agent
+MC_VERSION=1.20.1
+MC_AUTH=offline
+MC_FORGE=false
+MC_ADAPTIVE_NAVIGATION=true
+BOT_WS_URL=ws://localhost:3001
+LLM_PROVIDER=codex
+LLM_MODEL=
+CLI_AGENT_TIMEOUT=120
+RECOVERY_DECISION_TIMEOUT=60
+```
+
+`51234` 要換成這次 LAN 的 port，版本也要符合實際世界。`MC_AUTH=offline`
+只適用接受 offline 登入的環境；需要正版驗證時，請依
+[登入設定](docs/local-testing.md#回家先連進原本的單人世界)改用 `microsoft` 與獨立 bot 帳號。
+使用 Claude Code 時把 `LLM_PROVIDER` 改成 `claude`。
+
+`MC_ADAPTIVE_NAVIGATION=true` 啟用實驗性的挖礦導航；卡住／閒置恢復監控預設就有，
+不依賴這個開關。改設定後需重啟對應程序。
+
+3. 第一個終端機檢查設定、啟動身體：
+
+```powershell
+npm.cmd run check --prefix agent/bot
+node agent/bot/index.js
+```
+
+4. 第二個終端機啟動大腦（CLI 登入方式見上方 [planning providers](#codex--claude-code-planning-providers)）：
+
+```powershell
+uv run -m agent.agent
+```
+
+5. 遊戲聊天先切成陪伴模式，避免閒置時自行接任務，再下測試指令：
+
+```text
+@Agent !setmode companion
+@Agent 幫我挖 3 個鐵
+```
+
+`@Agent` 必須換成 bot 的實際遊戲名稱。直接測腳本可用 `@Agent !mine stone 3`，
+停止挖礦用 `@Agent !stopmine`。結束測試時，在兩個終端機各按 `Ctrl+C`。
+
+本機最小測試不需要設定 `DATABASE_URL`、`COORDINATOR_PORT` 或 `COORDINATOR_URL`。
+完整 dashboard 資料與歷史查詢需要 backend 和 PostgreSQL；想一次啟動完整服務，
+使用上方 [Docker Compose](#docker-compose) 流程。Docker 連主機遊戲時
+`MC_HOST=host.docker.internal`，名稱用 `MC_USERNAME_0=Agent0`，聊天則用 `@Agent0`。
+
+離線測試、連線排錯與回家驗收清單見 [本機連線與挖礦導航測試](docs/local-testing.md)。
 
 ### Environment Variables
 
@@ -415,6 +485,8 @@ uv run -m agent.agent # another terminal, also at the repository root
 | `LLM_PROVIDER` | `codex` | `codex` or `claude`; restart after changing |
 | `LLM_MODEL` | CLI default | Optional model supported by your subscription |
 | `CLI_AGENT_TIMEOUT` | `120` | Maximum seconds per CLI call |
+| `RECOVERY_DECISION_TIMEOUT` | `60` | Seconds per recovery decision; the earlier CLI/recovery deadline wins |
+| `MC_ADAPTIVE_NAVIGATION` | `false` | Opt-in experimental mining navigation; recovery supervision is always enabled |
 | `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` | PATH lookup | Optional executable path |
 
 ---
@@ -578,12 +650,14 @@ agent/
     ...
   skills/           # Python skill handlers (one per event type)
     planner.py      # Natural language → command plan
-    activity_stuck/ # Layered stuck recovery
+    recovery.py     # Validated CLI recovery decisions
+    stuck/          # Legacy rules and shared helpers; replay/reference
     inventory.py    # Inventory management decisions
     self_task.py    # Autonomous task planning (workflow mode)
     ...
   agent.py          # Event router, WebSocket client
   executor.py       # PlanExecutor — sequences multi-step plans
+  recovery.py       # Bounded recovery supervision and idle detection
   task_memory.py    # Working memory (task.json)
   dashboard.py      # Live observability server
   dashboard.html    # Single-file dark theme UI
