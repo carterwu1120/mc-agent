@@ -2,12 +2,14 @@ const execution = require('./execution')
 const activityStack = require('./activity')
 const bridge = require('./bridge')
 const { noteTeleportLikeAction } = require('./crafting')
-
-const NON_SOLID = new Set([
-    'air', 'cave_air', 'void_air', 'water', 'lava',
-    'grass', 'tall_grass', 'fern', 'large_fern',
-    'snow', 'vine', 'weeping_vines', 'twisting_vines',
-])
+const {
+    isPassableSpace,
+    isSafeGround,
+    isSafeStandable,
+    skyLightAt,
+    teleportCommand,
+    waitForSafeLanding,
+} = require('./safe_spot')
 
 let isExploring = false
 let _isPaused = false
@@ -25,40 +27,6 @@ function _worldMinY(bot) {
 function _worldMaxY(bot) {
     const minY = _worldMinY(bot)
     return minY + (bot.game?.height ?? 384) - 1
-}
-
-function _isPassable(name) {
-    if (!name) return true
-    return NON_SOLID.has(name) || name.includes('leaves')
-}
-
-function _isSolidGround(name) {
-    if (!name) return false
-    return !_isPassable(name)
-}
-
-function _skyLightAt(bot, pos) {
-    try {
-        return bot.world?.getSkyLight?.(pos) ?? 0
-    } catch (_) {
-        return 0
-    }
-}
-
-function _isSurfaceLike(bot, pos) {
-    const feet = pos ?? bot.entity.position.floored()
-    const sky = _skyLightAt(bot, feet)
-    const head = bot.blockAt(feet.offset(0, 1, 0))
-    const above = bot.blockAt(feet.offset(0, 2, 0))
-    return sky >= 14 && _isPassable(head?.name) && _isPassable(above?.name)
-}
-
-function _isStandable(bot, pos) {
-    const feet = pos ?? bot.entity.position.floored()
-    const head = bot.blockAt(feet.offset(0, 1, 0))
-    const above = bot.blockAt(feet.offset(0, 2, 0))
-    const ground = bot.blockAt(feet.offset(0, -1, 0))
-    return _isPassable(head?.name) && _isPassable(above?.name) && _isSolidGround(ground?.name)
 }
 
 function _candidateScore(bot, pos) {
@@ -111,9 +79,9 @@ function _findSurfaceSpotNear(bot, center, searchRadius = 8, requireSky = true) 
                     const ground = bot.blockAt(base.offset(dx, y - 1 - base.y, dz))
 
                     if (!feet || !head || !ground) continue
-                    if (!_isPassable(feet.name) || !_isPassable(head.name)) continue
-                    if (!_isSolidGround(ground.name)) continue
-                    if (requireSky && _skyLightAt(bot, feet.position) < 14) continue
+                    if (!isPassableSpace(feet) || !isPassableSpace(head)) continue
+                    if (!isSafeGround(ground)) continue
+                    if (requireSky && skyLightAt(bot, feet.position) < 14) continue
 
                     candidates.push({
                         pos: feet.position.clone(),
@@ -308,15 +276,14 @@ async function _run(bot, goal = {}, token) {
             } catch (_) {}
             console.log(`[Explore] 傳送到探索點 (${target.x}, ${target.y}, ${target.z})`)
             noteTeleportLikeAction()
-            bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
-            await _sleep(500)
+            bot.chat(teleportCommand(bot.username, target))
+            const landed = await waitForSafeLanding(bot, target, {
+                requireSky: targetType === 'trees',
+                timeoutMs: 3500,
+            })
             if (!execution.isCurrent()) return
             if (token !== _runToken || !isExploring) return
 
-            const pos = bot.entity.position
-            const arrived = Math.abs(pos.x - target.x) <= 1
-                && Math.abs(pos.y - target.y) <= 1
-                && Math.abs(pos.z - target.z) <= 1
             const nearbyLogs = targetType === 'trees'
                 ? _countNearbyLogs(bot, bot.entity.position.floored(), scanRadius)
                 : 0
@@ -325,10 +292,10 @@ async function _run(bot, goal = {}, token) {
                 : 0
 
             const reachedGoal = targetType === 'trees'
-                ? (arrived && _isSurfaceLike(bot) && nearbyLogs > 0)
+                ? (landed && isSafeStandable(bot, landed, { requireSky: true }) && nearbyLogs > 0)
                 : (targetType === 'animals'
-                    ? (arrived && _isStandable(bot) && nearbyAnimals > 0)
-                    : (arrived && _isStandable(bot)))
+                    ? (landed && isSafeStandable(bot, landed) && nearbyAnimals > 0)
+                    : (landed && isSafeStandable(bot, landed)))
 
             if (reachedGoal) {
                 if (targetType === 'trees') {

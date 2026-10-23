@@ -82,6 +82,25 @@ async function _safeEquip(bot, item, slot = 'hand', label = '裝備物品') {
     }
 }
 
+async function _gotoNearWithTimeout(bot, pos, range = 3, timeoutMs = 8000) {
+    let timer = null
+    try {
+        await Promise.race([
+            bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, range)),
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('tree navigation timeout')), timeoutMs)
+            }),
+        ])
+        return true
+    } catch (e) {
+        try { bot.pathfinder?.setGoal(null) } catch (_) {}
+        console.log(`[Wood] 無法靠近木頭 (${pos.x}, ${pos.y}, ${pos.z}): ${e.message}`)
+        return false
+    } finally {
+        if (timer) clearTimeout(timer)
+    }
+}
+
 async function _equipToolForDig(bot, block) {
     if (!block) return
     try {
@@ -252,6 +271,7 @@ async function _loop(bot, goal = {}) {
 
         for (const pos of treeBlocks) {
             if (!isChopping) return
+            if (skipped.has(_posKey(pos))) continue
 
             const block = bot.blockAt(pos)
             if (!block || !block.name.endsWith('_log')) continue
@@ -266,12 +286,12 @@ async function _loop(bot, goal = {}) {
             }
             bot.pathfinder.setMovements(movements)
 
-            // 先水平走近（遇到樹葉可以挖開，但不挖礦石）
-            try {
-                await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3))
+            // 已在互動距離內就直接砍，避免為頭頂木頭建立無法完成的路徑。
+            if (bot.entity.position.distanceTo(pos.offset(0.5, 0.5, 0.5)) > 4.5) {
+                await _gotoNearWithTimeout(bot, pos, 3, 8000)
                 if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
-            } catch (e) { /* 走不到也繼續，試試疊方塊 */ }
+            }
 
             // 如果目標比現在高超過 2 格，手動疊方塊上去
             const heightDiff = pos.y - Math.floor(bot.entity.position.y)
@@ -281,12 +301,18 @@ async function _loop(bot, goal = {}) {
                 if (_shouldAbort(_myGen)) return
             }
 
-            reachedAny = true
-
             if (!isChopping) return
 
             const fresh = bot.blockAt(pos)
             if (!fresh || !fresh.name.endsWith('_log')) continue
+
+            if (bot.entity.position.distanceTo(pos.offset(0.5, 0.5, 0.5)) > 5) {
+                console.log(`[Wood] 木頭仍超出互動距離，略過 (${pos.x}, ${pos.y}, ${pos.z})`)
+                skipped.add(_posKey(pos))
+                continue
+            }
+
+            reachedAny = true
 
             await ensureToolFor(bot, fresh.name)
             if (!execution.isCurrent()) return

@@ -4,12 +4,14 @@ const bridge = require('./bridge')
 const { sendActivityDone } = bridge
 const { noteTeleportLikeAction } = require('./crafting')
 const { applyMovements } = require('./movement_prefs')
-
-const NON_SOLID = new Set([
-    'air', 'cave_air', 'void_air', 'water', 'lava',
-    'grass', 'tall_grass', 'fern', 'large_fern',
-    'snow', 'vine', 'weeping_vines', 'twisting_vines',
-])
+const {
+    isPassableSpace,
+    isSafeGround,
+    isSafeStandable,
+    skyLightAt,
+    teleportCommand,
+    waitForSafeLanding,
+} = require('./safe_spot')
 
 let isSurfacing = false
 let _isPaused = false
@@ -24,24 +26,6 @@ function _worldMaxY(bot) {
     return minY + (bot.game?.height ?? 384) - 1
 }
 
-function _isPassable(name) {
-    if (!name) return true
-    return NON_SOLID.has(name) || name.includes('leaves')
-}
-
-function _isSolidGround(name) {
-    if (!name) return false
-    return !_isPassable(name)
-}
-
-function _skyLightAt(bot, pos) {
-    try {
-        return bot.world?.getSkyLight?.(pos) ?? 0
-    } catch (_) {
-        return 0
-    }
-}
-
 function _candidateScore(bot, pos) {
     const dist = bot.entity.position.distanceTo(pos.offset(0.5, 0, 0.5))
     const dyPenalty = Math.max(0, pos.y - bot.entity.position.y) * 0.35
@@ -53,18 +37,6 @@ function _setEscapeMovements(bot) {
         canDig: true,
         scaffoldBlockNames: ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'gravel', 'sand'],
     })
-}
-
-function _isSurfaceLike(bot) {
-    const feet = bot.entity.position.floored()
-    const sky = _skyLightAt(bot, feet)
-    const head = bot.blockAt(feet.offset(0, 1, 0))
-    const above = bot.blockAt(feet.offset(0, 2, 0))
-    return sky >= 14 && _isPassable(head?.name) && _isPassable(above?.name)
-}
-
-async function _sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function findSurfaceSpot(bot, maxRadius = 24) {
@@ -89,10 +61,10 @@ function findSurfaceSpot(bot, maxRadius = 24) {
                     const ground = bot.blockAt(base.offset(dx, y - 1 - base.y, dz))
 
                     if (!feet || !head || !ground) continue
-                    if (!_isPassable(feet.name) || !_isPassable(head.name)) continue
-                    if (!_isSolidGround(ground.name)) continue
+                    if (!isPassableSpace(feet) || !isPassableSpace(head)) continue
+                    if (!isSafeGround(ground)) continue
 
-                    const light = _skyLightAt(bot, feet.position)
+                    const light = skyLightAt(bot, feet.position)
                     if (light < 14) continue
 
                     candidates.push({
@@ -172,17 +144,15 @@ async function _run(bot, goal = {}, token) {
         bot.pathfinder?.setGoal(null)
         console.log(`[Surface] 傳送到地表 (${target.x}, ${target.y}, ${target.z})`)
         noteTeleportLikeAction()
-        bot.chat(`/tp ${bot.username} ${target.x} ${target.y} ${target.z}`)
-        await _sleep(500)
+        bot.chat(teleportCommand(bot.username, target))
+        const landed = await waitForSafeLanding(bot, target, {
+            requireSky: true,
+            timeoutMs: 3500,
+        })
         if (!execution.isCurrent()) return
         if (token !== _runToken || !isSurfacing) return
 
-        const pos = bot.entity.position
-        const arrived = Math.abs(pos.x - target.x) <= 1
-            && Math.abs(pos.y - target.y) <= 1
-            && Math.abs(pos.z - target.z) <= 1
-
-        if (arrived && _isSurfaceLike(bot)) {
+        if (landed && isSafeStandable(bot, landed, { requireSky: true })) {
             console.log('[Surface] 已抵達地表')
             sendActivityDone(bot, 'surface')
             return
