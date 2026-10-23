@@ -3,6 +3,7 @@ import time
 
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
+from agent.prompt_logging import log_prompt
 from agent.skills.llm_response import parse_llm_json
 from agent import task_memory as _task_memory
 from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
@@ -362,7 +363,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     response = None
     _latency_ms = None
     try:
-        print(f"[Skill/activity_stuck] Prompt:\n{prompt}\n---")
+        log_prompt("Skill/activity_stuck", prompt)
         t0 = time.monotonic()
         response = await llm.chat(
             [{"role": "user", "content": prompt}],

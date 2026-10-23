@@ -3,6 +3,7 @@ import re
 from agent import task_memory
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
+from agent.prompt_logging import log_prompt
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import equipment_summary
 
@@ -223,7 +224,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
 
     response = None
     try:
-        print(f"[Skill/inventory] Prompt:\n{prompt}\n---")
+        log_prompt("Skill/inventory", prompt)
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=SYSTEM_PROMPT,

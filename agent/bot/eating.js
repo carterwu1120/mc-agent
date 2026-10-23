@@ -33,7 +33,9 @@ const FOOD_ITEMS = new Set([
 let _isEating = false
 let _lastEatTime = 0
 let _lastFoodLowTime = 0
+let _lastNoFoodLogTime = 0
 const EAT_COOLDOWN = 4000  // 吃完後 4 秒內不再觸發
+const NO_FOOD_LOG_COOLDOWN = 60000
 let _monitorTimer = null
 
 function _sleep(ms) {
@@ -79,7 +81,10 @@ async function _tryEat(bot) {
 
     const food = bot.inventory.items().find(i => FOOD_ITEMS.has(i.name))
     if (!food) {
-        console.log('[Eat] 沒有食物可以吃')
+        if (Date.now() - _lastNoFoodLogTime >= NO_FOOD_LOG_COOLDOWN) {
+            _lastNoFoodLogTime = Date.now()
+            console.log('[Eat] 沒有食物可以吃（60 秒內不重複記錄）')
+        }
         return
     }
 

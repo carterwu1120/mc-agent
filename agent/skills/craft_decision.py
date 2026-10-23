@@ -3,6 +3,10 @@ import re
 from agent import task_memory
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
+from agent.plan_utils import normalize_commands
+from agent.prompt_logging import log_prompt
+from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
+from agent.skills.commands_ref import command_list
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json
 
@@ -35,28 +39,24 @@ SYSTEM_PROMPT = """你是 Minecraft 機器人的合成決策助手。
 - 如果背包有可燒製的原礦（raw_iron 等），考慮是否先燒成錠再合成更好的工具
 """
 
-SYSTEM_PROMPT_MATERIAL = """你是 Minecraft 機器人的合成材料決策助手。
-機器人想合成某樣物品，但缺少必要材料，請根據缺少的材料類型決定下一步行動。
-每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{"command": "chop", "text": "..."}
-{"command": "mine", "args": ["iron"], "text": "..."}
-{"command": "mine", "args": ["diamond"], "text": "..."}
-{"command": "mine", "args": ["stone"], "text": "..."}
-{"command": "combat", "text": "..."}
-{"command": "idle", "text": "..."}
-{"command": "chat", "text": "..."}
+_MATERIAL_ALLOWED = PLAN_ALLOWED_COMMANDS - {"equip"}
 
-決策原則：
-- 缺木材（log、planks、stick）→ chop
-- 缺礦石或金屬（cobblestone、stone）→ mine stone
-- 缺鐵材料（iron_ingot、raw_iron）→ mine iron
-- 缺鑽石（diamond）→ mine diamond
-- 缺需要戰鬥才能獲得的材料（皮革、骨粉、經驗等）→ combat
-- 目前已在執行相關任務（正在挖礦/砍樹）→ idle，等當前任務完成
-- 材料無法自動取得（需要玩家介入）→ chat 說明
-- 禁止回覆 fish、smelt
-"""
+SYSTEM_PROMPT_MATERIAL = """你是 Minecraft 合成前置條件規劃者。
+機器人缺少合成材料。請根據完整狀態中的 inventory、capabilities、environment、目前任務與近期失敗，規劃可執行的材料取得路徑，不要套用固定的單一步驟對照表。
+只輸出以下其中一種 JSON，不要加其他文字：
+{"action":"plan","commands":["..."],"text":"策略理由"}
+{"action":"wait","text":"目前無可行路徑，以及需要玩家提供什麼"}
+
+原則：
+- 使用 1–6 個短而可觀察的步驟；考慮工具、工作台、燃料、地形與資源鏈的前置需求。
+- 不要再次使用 equip：目前正是 equip/crafting 缺料才觸發本決策。
+- `getfood` 只會處理背包已有的生食；沒有生食時應 hunt，附近沒有動物時可先 explore animals。
+- 可以使用 smelt，但必須確認背包已有原料且具備熔爐/燃料條件，或計畫先取得它們。
+- 不要重送近期已失敗且狀態沒有新證據的策略。
+- 若原任務仍存在，系統會在前置步驟完成後自動接回，不要輸出 resumetask。
+
+可用指令：
+""" + command_list(sorted(_MATERIAL_ALLOWED))
 
 SMELTABLE = {
     'raw_iron': 'iron_ingot', 'iron_ore': 'iron_ingot', 'deepslate_iron_ore': 'iron_ingot',
@@ -98,7 +98,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         )
         response = None
         try:
-            print(f"[Skill/craft_decision/material] Prompt:\n{prompt}\n---")
+            log_prompt("Skill/craft_decision/material", prompt)
             response = await llm.chat(
                 [{"role": "user", "content": prompt}],
                 system=SYSTEM_PROMPT_MATERIAL,
@@ -106,14 +106,31 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
             clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
             decision = parse_llm_json(_parse_json(clean), "Skill/craft_decision/material")
-            result = []
             text = decision.get("text", "").strip()
-            if text:
-                result.append({"command": "chat", "text": text})
-            if decision.get("command") != "idle":
-                cmd = {k: v for k, v in decision.items() if k != "text"}
-                result.append(cmd)
-            return result if result else None
+            if not text:
+                raise ValueError("material decision needs a reason")
+            if decision.get("action") == "wait":
+                return {"command": "chat", "text": text}
+            commands = decision.get("commands")
+            if decision.get("action") != "plan" or not isinstance(commands, list) or not 1 <= len(commands) <= 6:
+                raise ValueError("material decision must be plan with 1-6 commands, or wait")
+            commands = normalize_commands(commands)
+            errors = validate_commands(commands, allowed_commands=_MATERIAL_ALLOWED)
+            if errors:
+                raise ValueError(str(errors))
+            active_task = task_memory.load()
+            preserve_task = bool(active_task and active_task.get("status") == "running")
+            if preserve_task:
+                commands.append("resumetask")
+            return [
+                {"command": "chat", "text": text},
+                {
+                    "action": "plan",
+                    "commands": commands,
+                    "goal": f"取得 {goal} 所需材料",
+                    "preserve_task": preserve_task,
+                },
+            ]
         except Exception as e:
             print(f"[Skill/craft_decision/material] 解析失敗: {e}\n原始回應: {response!r}")
             return None
@@ -147,7 +164,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
 
     response = None
     try:
-        print(f"[Skill/craft_decision] Prompt:\n{prompt}\n---")
+        log_prompt("Skill/craft_decision", prompt)
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=SYSTEM_PROMPT,

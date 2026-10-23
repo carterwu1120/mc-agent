@@ -4,6 +4,8 @@ const { Vec3 } = require('vec3')
 let _craftDecision = null
 let _placedTablePos = null
 let _lastTeleportLikeAt = 0
+let _lastNoTableMaterialsLogAt = 0
+const NO_TABLE_MATERIALS_LOG_COOLDOWN = 30000
 
 const REPLACEABLE_BLOCKS = new Set([
     'air', 'cave_air', 'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
@@ -292,7 +294,10 @@ async function ensureCraftingTable(bot) {
             await convertLogsToPlanks(bot, 2)
         }
         if (_countPlanks(bot) < 4) {
-            console.log('[Craft] 木板不夠，無法製作工作檯')
+            if (Date.now() - _lastNoTableMaterialsLogAt >= NO_TABLE_MATERIALS_LOG_COOLDOWN) {
+                _lastNoTableMaterialsLogAt = Date.now()
+                console.log('[Craft] 木板不夠，無法製作工作檯（30 秒內不重複記錄）')
+            }
             return null
         }
         const ok = await _craft(bot, 'crafting_table', null)

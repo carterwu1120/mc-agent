@@ -35,6 +35,7 @@ init_logger("brain")
 WS_URL = os.environ.get("BOT_WS_URL", "ws://localhost:3001")
 BOT_ID = os.environ.get("BOT_ID", "bot0")
 BOT_DATA_DIR = pathlib.Path(os.environ.get("BOT_DATA_DIR", str(pathlib.Path(__file__).parent / "data")))
+AGENT_LOG_TICKS = os.environ.get("AGENT_LOG_TICKS", "false").strip().lower() in {"1", "true", "yes", "on"}
 COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "")
 DEATH_FILE = BOT_DATA_DIR / 'death.json'
 _last_heartbeat_at: float = 0.0
@@ -45,6 +46,7 @@ _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 # LLM_PROVIDER=codex|claude (default: codex; no direct model API fallback)
 # LLM_MODEL=<model>                         (optional, overrides provider default)
 # CLI_AGENT_TIMEOUT=<seconds>               (default: 120)
+# CLI_SESSION_REUSE=true|false               (default: true)
 llm: LLMClient = build_client()
 
 executor = PlanExecutor()
@@ -357,7 +359,10 @@ HANDLERS = {
     "chat":           planner_skill.handle,
 }
 
-_NO_LLM_HANDLERS = {"agent", "food"}
+_LLM_EVENT_TYPES = {
+    "inventory_full", "craft_decision", "tick", "player_respawned",
+    "tool_low_durability",
+}
 
 _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call LLM
 _planner_lock: "asyncio.Lock | None" = None  # unified executor ownership — initialized in run()
@@ -739,6 +744,14 @@ def _distance_sq(a: dict | None, b: dict | None) -> float:
     return (ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2
 
 
+def _inventory_fingerprint(state: dict) -> tuple[tuple[str, int], ...]:
+    return tuple(sorted(
+        (str(item.get("name", "")), int(item.get("count", 0) or 0))
+        for item in (state.get("inventory") or [])
+        if item.get("name")
+    ))
+
+
 def _is_stale_response(event_type: str, request_state: dict) -> bool:
     if not _latest_state:
         return False
@@ -753,6 +766,18 @@ def _is_stale_response(event_type: str, request_state: dict) -> bool:
     moved_far = _distance_sq(current_pos, request_pos) > 12 ** 2
 
     if event_type == "craft_decision":
+        if request_state.get("reason") == "material_missing":
+            # The JS craft_armor activity intentionally pops immediately after
+            # sending this event. Idle therefore means "waiting for a plan", not
+            # that the response is stale. Resource/death/activity changes are the
+            # meaningful invalidation signals.
+            inventory_changed = (
+                _inventory_fingerprint(_latest_state)
+                != _inventory_fingerprint(request_state)
+            )
+            unsafe_activity = current_activity not in {request_activity, "idle"}
+            dead = float(_latest_state.get("health", 0) or 0) <= 0
+            return moved_far or inventory_changed or unsafe_activity or dead
         return current_activity != request_activity or moved_far
 
     if event_type == "activity_stuck":
@@ -1123,7 +1148,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 return
             _last_self_task_at = now
         skill_name = handler.__module__.split('.')[-1]
-        if skill_name not in _NO_LLM_HANDLERS:
+        if event_type in _LLM_EVENT_TYPES:
             print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         t0 = time.monotonic()
         result = await handler(state, llm)
@@ -1136,7 +1161,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             return
         latency_ms = int((time.monotonic() - t0) * 1000)
         path_taken = None
-        if skill_name not in _NO_LLM_HANDLERS:
+        if event_type in _LLM_EVENT_TYPES:
             task_memory.record_event(
                 'llm_call',
                 details={'skill': skill_name, 'latency_ms': latency_ms, 'llm_response': _summarize_result(result)},
@@ -1333,6 +1358,7 @@ async def run():
     print(
         f"[Agent] 啟動 BOT_ID={BOT_ID} | WS={WS_URL} | MC_USERNAME={_mc_username} | "
         f"CLI_AGENT={_provider}/{_model} | CLI_TIMEOUT={getattr(llm, 'timeout', 120)}s | "
+        f"CLI_SESSION={'reuse' if getattr(llm, 'session_reuse', True) else 'fresh'} | "
         f"BOT_USERNAMES={_bot_usernames} | "
         f"STRICT_CHAT={_strict_chat} | COORDINATOR={_is_coord}"
     )
@@ -1416,9 +1442,10 @@ async def run():
                     executor.update_state(state)
                     _sync_task_context(state)
                     pos = state.get("pos") or {}
-                    print(f"[State] type={event_type}  "
-                          f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})  "
-                          f"hp={state.get('health')}  food={state.get('food')}")
+                    if event_type != "tick" or AGENT_LOG_TICKS:
+                        print(f"[State] type={event_type}  "
+                              f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})  "
+                              f"hp={state.get('health')}  food={state.get('food')}")
 
                     if event_type == 'tick':
                         unexpected = recovery.unexpected_idle(state, task_memory.load(), timeout=executor.idle_timeout())
@@ -1451,7 +1478,8 @@ async def run():
                     if not handler:
                         continue
                     if event_type in _thinking:
-                        print(f"[Agent] {event_type} LLM 仍在處理中，跳過")
+                        if event_type != "tick":
+                            print(f"[Agent] {event_type} 仍在處理中，跳過重複事件")
                         continue
 
                     if event_type == "chat":

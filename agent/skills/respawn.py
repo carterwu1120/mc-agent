@@ -3,49 +3,33 @@ import re
 from agent import task_memory
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
+from agent.plan_utils import normalize_commands
+from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
 from agent.skills.llm_response import parse_llm_json
-from agent.skills.state_summary import equipment_summary
+from agent.skills.state_summary import equipment_summary, summary_json
 from agent.skills.commands_ref import command_list
 
-_RESPAWN_COMMANDS = command_list(["tp", "equip", "home", "chat", "idle"])
+_RESPAWN_COMMANDS = command_list(sorted(PLAN_ALLOWED_COMMANDS))
 
-SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡復活處理助手。
-機器人剛剛死亡並重生，請根據死因、剩餘任務與當前狀態決定「恢復原任務前」需要做的前置動作。
-主任務會在這些前置動作完成後自動從中斷步驟繼續，不需要你重寫剩餘任務。
-每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只有在 deterministic 規則無法決定時，才回覆以下其中一種 JSON（不要加任何其他文字）：
+SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡後恢復規劃者。
+機器人剛重生。請利用完整狀態、環境、能力、剩餘任務與近期失敗，規劃恢復原任務前真正需要的前置步驟。
+系統會在這些步驟完成後接回中斷任務，所以 commands 不要重寫主任務，也不要加入 resumetask。
+只輸出以下其中一種 JSON，不要加其他文字：
+{{"action":"plan","commands":[],"text":"可直接恢復的理由"}}
+{{"action":"plan","commands":["..."],"text":"前置策略與理由"}}
+{{"action":"wait","text":"目前無法安全恢復，以及需要玩家提供什麼"}}
 
-{{"action": "plan", "commands": [], "text": "...理由..."}}
-{{"action": "plan", "commands": ["tp 13 5 105"], "text": "...理由..."}}
-{{"action": "plan", "commands": ["tp 13 5 105", "equip"], "text": "...理由..."}}
-{{"action": "plan", "commands": ["equip"], "text": "...理由..."}}
-{{"command": "chat", "text": "...告知玩家無法繼續的原因..."}}
-{{"command": "idle", "text": "...理由..."}}
+決策原則：
+- commands 可為空（直接恢復）或最多 6 個前置步驟。
+- 先看 capabilities、inventory、equipment 與 environment，再判斷要蒐集、探索、撤離、取物或裝備。
+- `equip` 不是萬用恢復；只有已有裝備，或現有資源確實能合成時才使用。
+- 死亡位置與工作位置只是線索。危險未解除時不要盲目 tp 回去；安全且有明確價值時才返回。
+- 如果缺少生食且附近沒有動物，不要直接重試 getfood；可先 explore animals 或 hunt。
+- 不要重送近期已失敗、而且狀態沒有新增資源或環境變化的策略。
+- 優先選短而可觀察的計畫。資訊不足或沒有可行路徑時使用 wait，清楚告知玩家。
 
-【重生機制說明】
-- 機器人重生點一定在地表（床或世界出生點），不需要 surface 指令
-- 重生後直接在地表，可立即繼續任務
-
-【可選前置指令】（視情況加在任務指令之前）
+可用前置指令：
 {_RESPAWN_COMMANDS}
-
-【裝備判斷規則】
-- 死因 lava → 裝備可能被岩漿燒毀，檢查背包/身上是否有武器、工具、盔甲；若有缺損才加 equip
-- 死因 other（被怪打、摔死）→ 通常有防噴裝，裝備掉在死亡地點；可考慮 tp 回去撿裝備再繼續
-- 若 prompt 中顯示目前身上裝備齊全，不需要加 equip
-
-【決策原則】
-- 重生已在地表，優先直接繼續剩餘任務
-- 若 prompt 中有「中斷步驟當前位置（優先續接點）」→ 這比舊 activity 的 startPos 更重要，優先以它作為 tp 目標
-- 若沒有中斷步驟當前位置，才退回使用 workPos 或 startPos
-- 死因 other 且有有效續接點 → 考慮先 tp 回該位置（撿裝備或繼續任務）
-- 死因 lava 或 drowning → 不要 tp 回原位（危險），直接從重生點繼續
-- 若任務明確無法繼續（例如工具全燒光且無法補充）→ chat 告知玩家
-- 優先想辦法繼續任務，只有真的無法繼續才選 idle 或 chat
-- commands 中只放實際需要的前置指令，不要多餘的步驟
-- 不要把剩餘主任務指令再寫進 commands；系統會自動接回原本中斷的 task
-- 禁止憑空捏造新的主活動指令
-- 中斷步驟目標（taskGoal）比 lastGoal 更能反映目前真正要做的事
 """
 
 
@@ -68,64 +52,6 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
     if not remaining:
         return None
-
-    def _fmt_pos(pos: dict | None) -> str:
-        if not pos:
-            return "（無）"
-        return f"({pos['x']:.0f}, {pos['y']:.0f}, {pos['z']:.0f})"
-
-    def _tp_cmd(pos: dict | None) -> str | None:
-        if not pos:
-            return None
-        return f"tp {round(pos['x'])} {round(pos['y'])} {round(pos['z'])}"
-
-    # Deterministic recovery priority:
-    # other -> currentPos > workPos > startPos
-    # dangerous deaths -> workPos > startPos (avoid returning to likely hazard point)
-    dangerous_causes = {"lava", "drowning"}
-    recovery_target = None
-    recovery_label = ""
-    if cause == "other":
-        if task_current_pos:
-            recovery_target = task_current_pos
-            recovery_label = "中斷步驟當前位置"
-        elif task_work_pos:
-            recovery_target = task_work_pos
-            recovery_label = "中斷步驟工作位置"
-        elif start_pos:
-            recovery_target = start_pos
-            recovery_label = "舊 activity startPos"
-    elif cause in dangerous_causes:
-        pass  # Don't TP back — the location is likely still dangerous
-    else:
-        if task_work_pos:
-            recovery_target = task_work_pos
-            recovery_label = "中斷步驟工作位置"
-        elif task_current_pos:
-            recovery_target = task_current_pos
-            recovery_label = "中斷步驟當前位置"
-        elif start_pos:
-            recovery_target = start_pos
-            recovery_label = "舊 activity startPos"
-
-    deterministic_commands = []
-    tp_command = _tp_cmd(recovery_target)
-    if tp_command:
-        deterministic_commands.append(tp_command)
-    if cause == "other" or cause in dangerous_causes:
-        deterministic_commands.append("equip")
-
-    if deterministic_commands:
-        text = (
-            f"死亡原因為 {cause}，先回到{recovery_label}{_fmt_pos(recovery_target)}"
-            f"{'並重新裝備' if cause == 'other' else ''}，再接回原本任務。"
-        )
-        deterministic_commands.append("resumetask")
-        print(f"[Respawn] deterministic recovery: {deterministic_commands}")
-        return [
-            {"command": "chat", "text": text},
-            {"action": "plan", "commands": deterministic_commands, "goal": "", "preserve_task": True},
-        ]
 
     inv_summary = "\n".join(f"- {i['name']} x{i['count']}" for i in inventory) or "（空背包）"
     start_pos_str = f"({start_pos['x']:.0f}, {start_pos['y']:.0f}, {start_pos['z']:.0f})" if start_pos else "（無）"
@@ -153,8 +79,9 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
         f"目前裝備：\n{equip_summary}\n\n"
         f"背包內容：\n{inv_summary}\n\n"
         f"血量={health}/20，飢餓={food}/20\n\n"
+        f"完整決策狀態（JSON）：\n{summary_json(state)}\n"
+        f"{build_for_skill('respawn', task_memory.recent_events(), task_memory.recent_failures(), task_memory.interrupted_tasks())}\n"
         f"請決定機器人重生後要怎麼繼續。"
-        f"{build_for_skill('respawn', task_memory.recent_events(), task_memory.recent_failures(), task_memory.interrupted_tasks())}"
     )
 
     response = None
@@ -173,20 +100,24 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
         if decision.get("action") == "plan":
             commands = decision.get("commands", [])
+            if not isinstance(commands, list) or len(commands) > 6:
+                raise ValueError("respawn plan commands must be a list with at most 6 items")
+            commands = normalize_commands(commands)
+            if commands:
+                errors = validate_commands(commands, allowed_commands=PLAN_ALLOWED_COMMANDS)
+                if errors:
+                    raise ValueError(str(errors))
             if text:
                 result.append({"command": "chat", "text": text})
-            recovery_commands = list(commands or [])
+            recovery_commands = list(commands)
             recovery_commands.append("resumetask")
             result.append({"action": "plan", "commands": recovery_commands, "goal": "", "preserve_task": True})
             return result or None
 
-        if decision.get("command") == "chat":
+        if decision.get("action") == "wait":
             return [{"command": "chat", "text": text}] if text else None
 
-        if decision.get("command") == "idle":
-            if text:
-                result.append({"command": "chat", "text": text})
-            return result or None
+        raise ValueError("respawn decision must be plan or wait")
 
     except Exception as e:
         print(f"[Respawn] 解析失敗: {e}\n原始回應: {response!r}")

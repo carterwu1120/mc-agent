@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 
 import aiohttp
 from agent.brain import LLMClient
+from agent.prompt_logging import log_prompt
 
 _STALE_THRESHOLD = timedelta(seconds=30)
 
@@ -112,7 +113,7 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
 
     prompt = _build_prompt(request, bots)
     print(f"[Coordinator] 調度請求: {request}")
-    print(f"[Coordinator] Prompt:\n{prompt}\n---")
+    log_prompt("Coordinator", prompt)
 
     try:
         response = await llm.chat([{"role": "user", "content": prompt}], system=SYSTEM_PROMPT)

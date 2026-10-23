@@ -1,5 +1,6 @@
 import json
 from agent.brain import LLMClient
+from agent.prompt_logging import log_prompt
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的釣魚決策助手。
 你會收到釣魚卡住的狀態與周圍地圖，請決定下一步行動。
@@ -52,7 +53,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     prompt = build_prompt(state)
     response = None
     try:
-        print(f"[Skill/fishing] Prompt:\n{prompt}\n---")
+        log_prompt("Skill/fishing", prompt)
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=SYSTEM_PROMPT,

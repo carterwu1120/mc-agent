@@ -34,6 +34,10 @@ let _loopGen     = 0
 
 let _isCrafting      = false
 let _isCraftPaused   = false
+let _lastWeaponCraftAttemptAt = 0
+let _lastArmorMaterialDecisionAt = 0
+const WEAPON_CRAFT_COOLDOWN = 30000
+const ARMOR_MATERIAL_DECISION_COOLDOWN = 60000
 
 activityStack.register('combat', _pause)
 activityStack.register('craft_armor', _pauseCraftArmor)
@@ -151,11 +155,14 @@ async function _craftLoop(bot) {
             return
         }
         if (rawIron === 0) {
-            console.log('[CraftArmor] 缺少鐵材料，通知 Python 決策')
-            bridge.sendState(bot, 'craft_decision', {
-                goal: 'iron_armor', options: [], reason: 'material_missing',
-                missing_materials: [{ name: 'iron_ingot', count: stillNeed }],
-            })
+            if (Date.now() - _lastArmorMaterialDecisionAt >= ARMOR_MATERIAL_DECISION_COOLDOWN) {
+                _lastArmorMaterialDecisionAt = Date.now()
+                console.log('[CraftArmor] 缺少鐵材料，通知 Python 決策')
+                bridge.sendState(bot, 'craft_decision', {
+                    goal: 'iron_armor', options: [], reason: 'material_missing',
+                    missing_materials: [{ name: 'iron_ingot', count: stillNeed }],
+                })
+            }
             _isCrafting = false
             if (!_isCraftPaused) activityStack.pop(bot)
             _isCraftPaused = false
@@ -218,10 +225,14 @@ async function equipWeapon(bot) {
     for (const name of SWORDS) { if (await _tryEquip(name)) return true }
 
     // 2. 沒劍 → 嘗試合成
-    console.log('[Combat] 背包無劍，嘗試合成...')
-    const { ensureSword } = require('./crafting')
-    const crafted = await ensureSword(bot)
-    if (!execution.isCurrent()) return
+    let crafted = false
+    if (Date.now() - _lastWeaponCraftAttemptAt >= WEAPON_CRAFT_COOLDOWN) {
+        _lastWeaponCraftAttemptAt = Date.now()
+        console.log('[Combat] 背包無劍，嘗試合成（30 秒內最多一次）...')
+        const { ensureSword } = require('./crafting')
+        crafted = await ensureSword(bot)
+        if (!execution.isCurrent()) return
+    }
     if (crafted) {
         for (const name of SWORDS) { if (await _tryEquip(name)) return true }
     }
