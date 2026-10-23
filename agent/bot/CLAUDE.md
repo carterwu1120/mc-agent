@@ -30,6 +30,13 @@ modules. Explicit process variables win. Node.js 22+ is required. `MC_FORGE=fals
 disables the previously unconditional Forge handshake for vanilla LAN testing.
 `npm.cmd run check --prefix agent/bot` prints connection settings without connecting.
 
+Routine monitors must not flood logs or retry impossible crafting on every loop.
+`eating.js` reports an empty food inventory at most once per minute;
+`combat.js` attempts sword crafting at most once per 30 seconds and emits an armor
+material decision at most once per minute; `crafting.js` rate-limits the missing
+workbench-material message. These cooldowns suppress identical attempts only;
+inventory, capability and environment state remains present in bridge snapshots.
+
 Every activity follows this exact pattern:
 
 ```js

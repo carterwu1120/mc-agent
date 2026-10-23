@@ -85,6 +85,9 @@ BOT_WS_URL=ws://localhost:3001
 LLM_PROVIDER=codex
 LLM_MODEL=
 CLI_AGENT_TIMEOUT=120
+CLI_SESSION_REUSE=true
+AGENT_LOG_PROMPTS=false
+AGENT_LOG_TICKS=false
 RECOVERY_DECISION_TIMEOUT=60
 ```
 
@@ -142,6 +145,12 @@ python -m agent.agent
 The CLI uses its subscription login and built-in default model. `LLM_MODEL` can
 override the model. Optional `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` selects an
 executable (not a shell command); `CLI_AGENT_TIMEOUT` defaults to 120 seconds.
+`CLI_SESSION_REUSE=true` resumes one provider conversation per bot. The session
+identifier is stored in `BOT_DATA_DIR/cli_session.json`, so it also survives an
+agent container recreation. Provider or model changes start a separate session.
+Normal logs omit two-second tick lines and full prompt bodies. Set
+`AGENT_LOG_TICKS=true` or `AGENT_LOG_PROMPTS=true` only for focused debugging;
+these settings change terminal verbosity, not the state sent to the model.
 No model API key is required. Codex is restricted to ChatGPT login and Claude
 selects claude.ai login. Inherited model API keys, custom API URLs and cloud
 provider overrides are excluded from the CLI environment; there is no API
@@ -156,9 +165,12 @@ their Python SDKs and implementations have been removed.
 
 This is a planning adapter: existing skills send game state to `codex exec` or
 `claude --print`, then validate and execute the returned JSON through
-PlanExecutor and Mineflayer. Each request starts a fresh session; Python task
-memory supplies continuity. Claude built-in tools and MCP are disabled. Codex
-runs in a temporary directory with a read-only sandbox and ignores user CLI config. This does not expose Minecraft tools to a persistent CLI agent.
+PlanExecutor and Mineflayer. Each decision still uses a bounded CLI subprocess,
+but it resumes that bot's saved provider session by default; Python task memory
+remains the durable source of game-task state. Set `CLI_SESSION_REUSE=false` to
+restore isolated fresh sessions. Claude built-in tools and MCP are disabled.
+Codex starts in a temporary directory with a read-only sandbox and ignores user
+CLI config. Session reuse does not expose Minecraft tools to the CLI agent.
 
 For the simplest setup, sign in to Codex using `codex login` (ChatGPT account)
 or run `claude` and choose your Claude subscription, then run the Python agent
@@ -275,6 +287,9 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 | `LLM_PROVIDER` | `codex` | `codex` or `claude`; restart after changing |
 | `LLM_MODEL` | CLI default | Optional model supported by your subscription |
 | `CLI_AGENT_TIMEOUT` | `120` | Maximum seconds per CLI call |
+| `CLI_SESSION_REUSE` | `true` | Resume one Codex/Claude conversation per bot and persist its ID in `BOT_DATA_DIR` |
+| `AGENT_LOG_PROMPTS` | `false` | Print complete model prompts instead of compact character counts |
+| `AGENT_LOG_TICKS` | `false` | Print every two-second state tick |
 | `RECOVERY_DECISION_TIMEOUT` | `60` | Seconds per recovery decision; the earlier CLI/recovery deadline wins |
 | `MC_ADAPTIVE_NAVIGATION` | `false` | Opt-in experimental mining navigation; recovery supervision is always enabled |
 | `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` | PATH lookup | Optional executable path |

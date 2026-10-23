@@ -27,11 +27,24 @@ CLI planning providers: `LLM_PROVIDER=codex|claude` selects `brain/cli_agent.py`
 through `brain/factory.py` (default: Codex). Direct model API providers and SDK
 dependencies have been removed on this branch; invalid/old providers fail with
 migration instructions instead of falling back to another provider.
-Each skill call starts an isolated noninteractive CLI process, forwards its prompt
-via stdin, and returns the final decision to the existing skill parser. Python
-retains task memory, event routing, and PlanExecutor ownership; CLI sessions do
-not directly control Minecraft. CLI calls are serialized, with timeout and
-cancellation cleanup. Install and authenticate the CLI in the agent's runtime.
+Each skill call starts a bounded noninteractive CLI process, forwards its prompt
+via stdin, and returns the final decision to the existing skill parser. By
+default, `CLI_SESSION_REUSE=true` resumes one provider conversation per bot;
+`BOT_DATA_DIR/cli_session.json` stores the provider/model/session ID across
+container recreation. Codex uses its emitted thread ID with `exec resume`, while
+Claude uses `--session-id` and `--resume`. A provider/model mismatch starts a new
+session, and the old isolated behavior remains available with
+`CLI_SESSION_REUSE=false`. Python retains task memory, event routing, and
+PlanExecutor ownership; CLI sessions do not directly control Minecraft. CLI
+calls are serialized, with timeout and cancellation cleanup. Install and
+authenticate the CLI in the agent's runtime.
+Full state summaries still go to the selected CLI, but routine logs are compact:
+tick lines and prompt bodies are opt-in through `AGENT_LOG_TICKS` and
+`AGENT_LOG_PROMPTS`. Completion events must not be labeled as LLM calls.
+Material-missing and respawn handlers use capability/environment/task history to
+produce validated short prerequisite plans rather than fixed resource mappings
+or unconditional `tp -> equip -> resumetask` sequences. The runtime appends the
+task resume only after those prerequisites pass command validation.
 CLI subprocesses omit inherited API keys and third-party provider overrides;
 Codex forces ChatGPT login, Claude selects claude.ai login. Claude auth status
 must report a logged-in claude.ai account before inference; saved API/Console
@@ -40,6 +53,10 @@ explicit model override. Subscription usage limits
 and any account-level extra usage settings still apply.
 The Docker agent image includes both CLIs. Its HOME is persisted in the cli_home
 volume; authenticate inside that runtime before starting the agent.
+The image installs production dependencies at build time and starts with
+`/app/.venv/bin/python` directly. Do not use a syncing `uv run` in the runtime
+CMD; it can reinstall the dev group into the container writable layer on every
+recreation and create avoidable disk I/O.
 
 Two-process system connected by WebSocket on port 3001:
 
