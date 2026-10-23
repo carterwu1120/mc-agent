@@ -1,38 +1,38 @@
 # Minecraft LLM Agent
 
-以 Mineflayer 控制 Minecraft bot，透過 Codex 或 Claude Code CLI 規劃任務。
-支援多步驟執行、背包管理與有限次數的卡住恢復；模型決策與遊戲內行動仍需實測驗證。
+A Minecraft bot controlled through Mineflayer, with task planning powered by Codex or Claude Code CLI.
+Supports multi-step execution, inventory management, and bounded recovery attempts.
+Model decisions and in-game behavior still require live validation.
 
-本機測試固定使用 **Minecraft Java Edition 1.20.1 + Java 17**。
-先依下方建立測試伺服器，再啟動 bot；也可使用單人世界開 LAN。
-連線排錯與導航／恢復驗收見 [本機測試指南](docs/local-testing.md)。
+The local test environment uses **Minecraft Java Edition 1.20.1 + Java 17**.
+Start a dedicated test server as described below, or open a single-player world to LAN.
+See the [local testing guide](docs/local-testing.md) for connection troubleshooting and navigation/recovery checks (in Chinese).
 
 ## Local Development
 
-### 固定版本的本機測試伺服器（Vanilla 1.20.1）
+### Dedicated local test server (Vanilla 1.20.1)
 
-若要使用固定 port 的獨立測試世界，可用此流程取代下方的「單人世界開 LAN」。
-遊戲客戶端、伺服器與 bot 統一使用 **Minecraft Java Edition 1.20.1**；
-伺服器使用 **Java 17**，可先執行 `java -version` 確認。
+Use this setup for a separate test world with a fixed port instead of opening a world to LAN.
+Use **Minecraft Java Edition 1.20.1** for the game client, server, and bot.
+The server requires **Java 17**; check your installation with `java -version`.
 
-1. 到 [Minecraft 官方 1.20.1 發布頁](https://www.minecraft.net/en-us/article/minecraft--java-edition-1-20-1)，
-   點選 **Cross-platform server jar** 下的 **Minecraft server jar**。
-2. 在專案根目錄建立 `local-server/`，將下載的檔案放成 `local-server/server.jar`。
-3. 在專案根目錄開啟 PowerShell，執行：
+1. Open the [official Minecraft 1.20.1 release page](https://www.minecraft.net/en-us/article/minecraft--java-edition-1-20-1)
+   and select **Minecraft server jar** under **Cross-platform server jar**.
+2. Create `local-server/` in the repository root and save the download as `local-server/server.jar`.
+3. From the repository root, open PowerShell and run:
 
 ```powershell
 cd local-server
 java -Xms1G -Xmx2G -jar server.jar nogui
 ```
 
-首次啟動會解壓縮依賴、產生設定檔，並因尚未同意 EULA 而停止。
-閱讀 `eula.txt` 中的條款連結，同意後自行將 `eula=false` 改成 `eula=true`，
-再執行相同的 Java 指令。看到 `Done` 表示伺服器已就緒。
-保持終端機開啟；結束時輸入 `stop`，讓世界正常儲存。
+The first launch extracts dependencies, creates configuration files, and stops because the EULA has not been accepted.
+Read the terms linked in `eula.txt`. If you agree, change `eula=false` to `eula=true`, then run the same Java command again.
+Wait for `Done` before connecting. Keep the terminal open; enter `stop` to save the world and shut down cleanly.
 
-用 **1.20.1** 遊戲客戶端選擇「多人遊戲 → 直接連線」，輸入 `localhost:25565`。
-若同一台電腦還有其他使用 `25565` 的伺服器，請先關閉它。
-專案根目錄 `.env` 的連線設定為：
+In the **1.20.1** game client, select **Multiplayer → Direct Connection** and enter `localhost:25565`.
+Stop any other server already using port `25565` on the same computer.
+Set the connection options in the repository-root `.env`:
 
 ```dotenv
 MC_HOST=127.0.0.1
@@ -41,27 +41,28 @@ MC_VERSION=1.20.1
 MC_FORGE=false
 ```
 
-登入方式必須配合 `local-server/server.properties`：
+Match the bot's authentication settings to `local-server/server.properties`:
 
-- 預設 `online-mode=true`：bot 使用 `MC_AUTH=microsoft`，並以另一個具備 Java 遊戲資格的帳號登入；
-  `MC_USERNAME` 填該帳號的登入識別，通常是 email。
-- 僅供同機離線測試：關服後設 `online-mode=false`、`server-ip=127.0.0.1`，重啟伺服器；
-  bot 使用 `MC_AUTH=offline`、`MC_USERNAME=Agent`。此設定只接受同機連線，不適用朋友或虛擬機連線。
+- Default `online-mode=true`: use `MC_AUTH=microsoft` and a separate bot account that owns Java Edition.
+  Set `MC_USERNAME` to that account's login identifier, usually its email address.
+- Same-computer offline testing only: stop the server, set `online-mode=false` and `server-ip=127.0.0.1`, then restart.
+  Use `MC_AUTH=offline` and `MC_USERNAME=Agent`. This accepts only local connections, not friends or virtual machines.
 
-接著依下方快速啟動流程安裝依賴、啟動 JS bot 與 Python agent；略過開 LAN 與 LAN port 設定。
+Follow the quick start below to install dependencies and launch the JS bot and Python agent.
+Skip the LAN setup and keep the dedicated server's port and authentication settings.
 
-**Git 只保存重建環境的說明。** `.gitignore` 排除整個 `/local-server/`，
-包括伺服器 JAR、依賴、EULA、本機設定、日誌、玩家資料與世界存檔。
-每台電腦自行下載指定版本並接受 EULA；不將伺服器程式或存檔提交至 Git。
+**Git stores the instructions for recreating this environment.** `.gitignore` excludes all of `/local-server/`,
+including server binaries, dependencies, EULA acceptance, local settings, logs, player data, and worlds.
+Download the specified version and accept the EULA on each computer; do not commit server binaries or saves.
 
 <a id="windows-local-quick-start"></a>
 
-### Windows 本機快速啟動（單人世界開 LAN）
+### Windows quick start (single-player LAN world)
 
-以下指令都在專案根目錄的 PowerShell 執行。需要 **Node.js 22+**、
-**Python 3.10–3.12**、**uv**，以及已安裝、登入訂閱帳號的 Codex 或 Claude Code CLI。
+Run these commands in PowerShell from the repository root.
+Requires **Node.js 22+**, **Python 3.10–3.12**, **uv**, and either Codex or Claude Code CLI installed and signed in with a subscription account.
 
-1. 安裝專案依賴並建立設定檔；已有 `.env` 時保留原檔：
+1. Install dependencies and create the configuration file, preserving an existing `.env`:
 
 ```powershell
 uv sync --group dev
@@ -69,8 +70,8 @@ npm.cmd ci --prefix agent/bot
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-2. 開 Minecraft **Java Edition** 單人世界 → `Esc` → **開放至區域網路**，記下顯示的 port。
-   編輯的是 **`.env`**，不是 `.env.example`。遊戲與 bot 同一台電腦時，例如：
+2. Open a **Java Edition** single-player world, press `Esc`, select **Open to LAN**, and note the displayed port.
+   Edit **`.env`**, not `.env.example`. For a game and bot on the same computer:
 
 ```dotenv
 MC_HOST=127.0.0.1
@@ -87,43 +88,45 @@ CLI_AGENT_TIMEOUT=120
 RECOVERY_DECISION_TIMEOUT=60
 ```
 
-`51234` 要換成這次 LAN 的 port，版本也要符合實際世界。`MC_AUTH=offline`
-只適用接受 offline 登入的環境；需要正版驗證時，請依
-[登入設定](docs/local-testing.md#回家先連進原本的單人世界)改用 `microsoft` 與獨立 bot 帳號。
-使用 Claude Code 時把 `LLM_PROVIDER` 改成 `claude`。
+Replace `51234` with the current LAN port and match `MC_VERSION` to your world.
+`MC_AUTH=offline` only works where offline login is accepted. For authenticated servers,
+use `microsoft` with a separate bot account as described in the [local testing guide](docs/local-testing.md).
+Set `LLM_PROVIDER=claude` to use Claude Code.
 
-`MC_ADAPTIVE_NAVIGATION=true` 啟用實驗性的挖礦導航；卡住／閒置恢復監控預設就有，
-不依賴這個開關。改設定後需重啟對應程序。
+`MC_ADAPTIVE_NAVIGATION=true` enables experimental mining navigation.
+Stuck/idle recovery supervision is enabled by default and does not depend on this option.
+Restart the relevant process after changing settings.
 
-3. 第一個終端機檢查設定、啟動身體：
+3. In one terminal, check the configuration and start the JS bot:
 
 ```powershell
 npm.cmd run check --prefix agent/bot
 node agent/bot/index.js
 ```
 
-4. 第二個終端機啟動大腦（CLI 登入方式見下方 [planning providers](#codex--claude-code-planning-providers)）：
+4. In another terminal, start the Python agent (see [planning providers](#codex--claude-code-planning-providers) for CLI login):
 
 ```powershell
 uv run -m agent.agent
 ```
 
-5. 遊戲聊天先切成陪伴模式，避免閒置時自行接任務，再下測試指令：
+5. In game chat, switch to companion mode to prevent autonomous idle tasks, then send a test request:
 
 ```text
 @Agent !setmode companion
-@Agent 幫我挖 3 個鐵
+@Agent Please mine 3 iron ore
 ```
 
-`@Agent` 必須換成 bot 的實際遊戲名稱。直接測腳本可用 `@Agent !mine stone 3`，
-停止挖礦用 `@Agent !stopmine`。結束測試時，在兩個終端機各按 `Ctrl+C`。
+Replace `@Agent` with the bot's actual in-game name.
+Use `@Agent !mine stone 3` to test an action directly, and `@Agent !stopmine` to stop mining.
+Press `Ctrl+C` in each bot/agent terminal when finished.
 
-本機最小測試不需要設定 `DATABASE_URL`、`COORDINATOR_PORT` 或 `COORDINATOR_URL`。
-完整 dashboard 資料與歷史查詢需要 backend 和 PostgreSQL；想一次啟動完整服務，
-使用下方 [Docker Compose](#docker-compose) 流程。Docker 連主機遊戲時
-`MC_HOST=host.docker.internal`，名稱用 `MC_USERNAME_0=Agent0`，聊天則用 `@Agent0`。
+Minimal local testing does not require `DATABASE_URL`, `COORDINATOR_PORT`, or `COORDINATOR_URL`.
+Full dashboard data and history queries require the backend and PostgreSQL; use [Docker Compose](#docker-compose) for the complete stack.
+For Docker connecting to a game on the host, use `MC_HOST=host.docker.internal`,
+`MC_USERNAME_0=Agent0`, and address the bot as `@Agent0` in chat.
 
-離線測試、連線排錯與回家驗收清單見 [本機連線與挖礦導航測試](docs/local-testing.md)。
+See the [local testing guide](docs/local-testing.md) for offline tests, troubleshooting, and in-game acceptance checks.
 
 ## Codex / Claude Code planning providers
 
@@ -170,21 +173,21 @@ and [Claude Code programmatic usage](https://code.claude.com/docs/en/headless).
 
 ## Tests
 
-在專案根目錄執行（依賴安裝見上方快速啟動）：
+Run from the repository root after installing dependencies as described above:
 
 ```powershell
 uv run --group dev pytest test -q
 npm.cmd test --prefix agent/bot
 ```
 
-只測 CLI provider 轉接器：
+To test only the CLI provider adapter:
 
 ```powershell
 uv run --group dev pytest test/test_cli_agent.py -q
 ```
 
-CLI provider 測試使用模擬 CLI，不需要登入或呼叫模型；JS 測試不會啟動 Minecraft。
-自動測試不能取代真實登入、伺服器連線與遊戲內操作驗收。
+CLI provider tests use fake CLIs and require no login or model requests. JS tests do not start Minecraft.
+Automated tests do not replace live authentication, server connection, and in-game validation.
 
 ## Docker Compose
 
@@ -261,19 +264,19 @@ Minecraft server ↔ Mineflayer bot ↔ Python agent ↔ Codex / Claude Code CLI
 Dashboard :3002 → Backend API :8000 → Coordinator :3010 / state files / PostgreSQL
 ```
 
-- `agent/bot/`：遊戲連線、移動、採集、活動堆疊與停滯偵測。
-- `agent/brain/`、`agent/skills/`：CLI 轉接器與規劃技能。
-- `agent/executor.py`、`agent/recovery.py`：依序執行計畫、驗證結果、限制恢復重試；必要時等待玩家協助。
-- `agent/task_memory.py`：保留任務目標、執行進度與近期事件。
-- `backend/`：公開 API；dashboard 只提供頁面，資料由 backend 取得。
+- `agent/bot/`: game connection, movement, gathering, activity stack, and stall detection.
+- `agent/brain/`, `agent/skills/`: CLI adapters and planning skills.
+- `agent/executor.py`, `agent/recovery.py`: plan execution, result verification, and bounded recovery retries; waits for player help when needed.
+- `agent/task_memory.py`: task goals, execution progress, and recent events.
+- `backend/`: public API; the dashboard serves the page and fetches data from the backend.
 
-多 bot 使用獨立 `BOT_ID` 與資料目錄，透過 coordinator 註冊及領取任務。
-聊天以 `@Agent0`、`@Agent1` 指定對象；`BOT_USERNAMES` 用來忽略其他 bot 的聊天。
+Each bot uses a separate `BOT_ID` and data directory, and registers with the coordinator to pull tasks.
+Address bots with `@Agent0` or `@Agent1`; `BOT_USERNAMES` identifies other bots whose chat should be ignored.
 
 ## Backend API
 
-完整端點、請求與回應格式見 [Backend API Contract](docs/backend-api.md)。
-使用完整 Docker stack 時，可先檢查：
+See the [Backend API Contract](docs/backend-api.md) for endpoints and request/response schemas.
+With the full Docker stack running, check:
 
 ```powershell
 curl.exe http://localhost:8000/health
@@ -281,12 +284,12 @@ curl.exe http://localhost:8000/ready
 curl.exe http://localhost:8000/bots
 ```
 
-Dashboard：<http://localhost:3002>；公開 API：<http://localhost:8000>。
-Coordinator 的 `3010` port 為內部服務，不作為用戶端 API。
+Dashboard: <http://localhost:3002>. Public API: <http://localhost:8000>.
+Coordinator port `3010` is internal and is not a client-facing API.
 
 ## Known limitations
 
-- 每次模型決策都啟動 CLI 子程序，會有延遲，也受訂閱使用量限制。
-- Forge 握手不代表完整模組相容；新增方塊、物品或封包需另外驗證。
-- `MC_ADAPTIVE_NAVIGATION` 是實驗性挖礦導航，合成地形測試不能保證所有實際地形都能通過。
-- 多 bot 尚可能競爭同一資源；目前沒有跨工作階段的完整世界地圖。
+- Each model decision starts a CLI subprocess, adding latency and consuming subscription usage.
+- Forge handshaking does not imply full mod compatibility; custom blocks, items, and packets need separate validation.
+- `MC_ADAPTIVE_NAVIGATION` is experimental mining navigation; synthetic terrain tests do not guarantee success in every real world.
+- Multiple bots may compete for the same resources; there is no complete world map persisted across sessions.
