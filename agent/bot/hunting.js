@@ -73,6 +73,14 @@ async function _safeEquip(bot, item, slot = 'hand', label = '裝備武器') {
 
 async function startHunting(bot, goal = {}) {
     if (isHunting) return
+    const targetCount = Number(goal.count)
+    if (!Number.isInteger(targetCount) || targetCount <= 0) {
+        console.log('[Hunt] 缺少有效的狩獵數量，拒絕啟動 hunt')
+        bridge.sendState(bot, 'activity_stuck', {
+            activity: 'hunting', reason: 'invalid_goal', goal,
+        })
+        return
+    }
     isHunting = true
     _killCount = 0
     activityStack.push(bot, 'hunting', goal, (b) => _resumeHunting(b, goal))
@@ -100,7 +108,7 @@ function stopHunting(bot) {
 async function _loop(bot, goal) {
     const _myGen = ++_loopGen
     _isPaused = false
-    const maxCount = goal.count ?? 3
+    const maxCount = goal.count
     let noAnimalTicks = 0
 
     try {
@@ -218,7 +226,7 @@ async function _killAnimal(bot, animal, expectedGen = null) {
 
 async function _reportNoWeaponStuck(bot, goal = {}, expectedGen = null) {
     if (_shouldAbort(expectedGen)) return
-    const remaining = Math.max(1, (goal.count ?? 3) - _killCount)
+    const remaining = Math.max(1, goal.count - _killCount)
     console.log(`[Hunt] 沒有可用武器且無法合成，改由上層重新規劃（剩餘 ${remaining}）`)
     isHunting = false
     _isPaused = false

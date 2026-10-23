@@ -2,31 +2,36 @@ import json
 import re
 from agent.brain import LLMClient
 from agent.skills.llm_response import parse_llm_json
-from agent.skills.state_summary import summary_json
+from agent.skills.state_summary import summary_json, summarize_state
 from agent.skills.commands_ref import command_list
+from agent.skills.command_validation import validate_commands
 from agent import task_memory
 from agent import exploration_memory
 from agent.context_builder import (
     build_for_skill,
 )
 
-_SELF_TASK_COMMANDS = command_list(["getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "tp", "idle"])
+_SELF_TASK_COMMAND_KEYS = [
+    "hunt", "fish", "getfood", "chop", "mine", "smelt", "equip",
+    "home", "deposit", "explore", "tp", "idle",
+]
+_SELF_TASK_COMMANDS = command_list(_SELF_TASK_COMMAND_KEYS)
 
 SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手。
 機器人目前沒有玩家直接指定的新任務，請根據它自己的狀態，決定下一個最合理的生存/補給任務。
 
 只能回覆以下其中一種 JSON（不要加其他文字）：
-{{"command":"getfood","goal":{{"count":8}},"text":"..."}}
 {{"command":"idle","text":"..."}}
+{{"command":"equip","text":"..."}}
 
 或 plan（步驟數根據需求決定，不設上限）：
-{{"action":"plan","commands":["tp 376 -55 -1078","mine diamond 10","equip"],"goal":"補充鑽石工具","text":"..."}}
+{{"action":"plan","commands":["..."],"goal":"...","text":"..."}}
 
 【可用指令】
 {_SELF_TASK_COMMANDS}
 
 【優先順序】
-1. 食物危機（cooked_total < 3）→ 立即 getfood
+1. 真正的食物危機（飢餓值低，且缺少可直接食用的食物）→ 優先建立可完成的補給計畫
 2. 裝備損壞（low_durability_equipment 不為空）→ equip
 3. 工具鏈補充（有明確缺口）→ 規劃 plan 補齊
 4. 背包有已分類箱子且空間快滿 → home + deposit
@@ -36,7 +41,13 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 收到需求前先檢查背包，確認缺什麼才加對應步驟：
 - 缺鐵鎬（iron_pickaxe）→ mine iron 16 → smelt iron 16 → equip
 - 缺石鎬（stone_pickaxe）→ mine stone 16 → equip
-- 缺食物 → getfood 或 smelt（若有 raw food + 燃料）
+- 缺食物 → 先依飢餓、熟食庫存與下一個任務風險決定需要多少；沒有固定數量
+- `getfood count <n>` 只會處理背包已有的生食，不能取得生食
+- raw_total 足夠目標數量時，才可直接 getfood
+- raw_total 不足時，先用 hunt 補足；附近沒有動物時可先 explore animals
+- 只有背包已有 fishing_rod 時才可 fish，之後再 getfood
+- 每個 hunt / fish / getfood 都必須帶明確的正整數數量
+- 飢餓值接近 20、沒有玩家任務且沒有近期高風險計畫時，熟食為 0 本身不構成危機，可以 idle
 - 缺木材（logs < 16）→ chop logs 32
 - 有大量原礦未冶煉（raw_iron > 16）→ smelt iron <count>
 
@@ -51,16 +62,16 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 若 prompt 中有「已知資源位置」段落，代表 bot 過去找到過這些資源：
 - 需要挖礦時：優先 tp 到已知礦物位置，再執行 mine，而不是隨機 explore
 - 需要砍樹時：優先 tp 到已知森林位置
-- 需要補食物時：若有已知動物區域，可加 tp 再 hunt/getfood
+- 需要補食物時：若有已知動物區域，可加 tp，再 hunt 與 getfood
 - tp 格式：tp <x> <y> <z>（整數座標）
 
 【禁止】
-- 不要輸出 chat、follow、withdraw、combat、fish
+- 不要輸出 chat、follow、withdraw、combat
 - 不要規劃沒有明確缺口的步驟（背包夠用就 idle）
 - 不要假設缺少實際上已有的物品（先看 inventory）
 """
 
-ALLOWED_COMMANDS = {"getfood", "chop", "mine", "smelt", "equip", "home", "deposit", "explore", "tp", "idle"}
+ALLOWED_COMMANDS = set(_SELF_TASK_COMMAND_KEYS)
 
 
 def _extract_first_json_object(text: str) -> dict:
@@ -78,15 +89,17 @@ def _extract_first_json_object(text: str) -> dict:
 
 
 def _normalize_result(result: dict) -> dict:
-    if result.get("command") == "getfood" and "goal" not in result:
-        result = {**result, "goal": {"count": 8}}
-    if result.get("command") == "chop" and "goal" not in result and "args" not in result:
-        result = {**result, "goal": {"logs": 8}}
-    if result.get("command") == "mine":
-        args = result.get("args") or []
-        if len(args) == 1:
-            result = {**result, "args": [args[0], "8"]}
+    """Normalize shape only; never invent an action quantity."""
     return result
+
+
+def _positive_int(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and int(value) == value
+        and value > 0
+    )
 
 
 def _is_valid_command_result(result: dict) -> bool:
@@ -94,13 +107,17 @@ def _is_valid_command_result(result: dict) -> bool:
     if command not in ALLOWED_COMMANDS:
         return False
 
-    if command == "getfood":
+    if command in {"getfood", "hunt"}:
         goal = result.get("goal") or {}
-        return isinstance(goal, dict) and isinstance(goal.get("count"), int | float)
+        return isinstance(goal, dict) and _positive_int(goal.get("count"))
+
+    if command == "fish":
+        goal = result.get("goal") or {}
+        return isinstance(goal, dict) and _positive_int(goal.get("catches"))
 
     if command == "chop":
         goal = result.get("goal") or {}
-        return isinstance(goal, dict) and isinstance(goal.get("logs"), int | float)
+        return isinstance(goal, dict) and _positive_int(goal.get("logs"))
 
     if command == "mine":
         args = result.get("args") or []
@@ -109,6 +126,8 @@ def _is_valid_command_result(result: dict) -> bool:
             and len(args) >= 2
             and isinstance(args[0], str)
             and isinstance(args[1], str)
+            and args[1].isdigit()
+            and int(args[1]) > 0
         )
 
     if command == "smelt":
@@ -116,7 +135,7 @@ def _is_valid_command_result(result: dict) -> bool:
         return (
             isinstance(goal, dict)
             and isinstance(goal.get("target"), str)
-            and isinstance(goal.get("count"), int | float)
+            and _positive_int(goal.get("count"))
         )
 
     return True
@@ -128,13 +147,62 @@ def _is_valid_plan_result(result: dict) -> bool:
     commands = result.get("commands")
     if not isinstance(commands, list) or not commands:
         return False
-    for cmd in commands:
-        if not isinstance(cmd, str):
-            return False
-        parts = cmd.split()
-        if not parts or parts[0] not in ALLOWED_COMMANDS - {"idle"}:
-            return False
-    return True
+    return not validate_commands(commands, allowed_commands=ALLOWED_COMMANDS - {"idle"})
+
+
+def _food_decision_error(result: dict, state: dict) -> str | None:
+    """Reject food actions that cannot make progress from the current inventory."""
+    summary = summarize_state(state)
+    food = summary["resources"]["food"]
+    raw_total = int(food.get("raw_total", 0) or 0)
+    inventory_names = {
+        item.get("name") for item in (state.get("inventory") or []) if item.get("name")
+    }
+
+    if result.get("action") == "plan":
+        commands = result.get("commands") or []
+    else:
+        command = result.get("command")
+        if command == "getfood":
+            commands = [f"getfood count {int(result['goal']['count'])}"]
+        elif command == "hunt":
+            commands = [f"hunt count {int(result['goal']['count'])}"]
+        elif command == "fish":
+            commands = [f"fish catches {int(result['goal']['catches'])}"]
+        else:
+            commands = []
+
+    planned_raw = raw_total
+    for command in commands:
+        parts = command.split()
+        name = parts[0] if parts else ""
+        if name == "fish":
+            if "fishing_rod" not in inventory_names:
+                return "背包沒有 fishing_rod，不能選擇 fish"
+            planned_raw += int(parts[2])
+        elif name == "hunt":
+            # Use a conservative one-food-per-target estimate. Actual drops may
+            # be higher, but a plan must not depend on that luck to be viable.
+            planned_raw += int(parts[2])
+        elif name == "getfood":
+            requested = int(parts[2])
+            if planned_raw < requested:
+                return (
+                    f"getfood 需要足夠生食：目前 raw_total={raw_total}，"
+                    f"計畫最多準備 {planned_raw}，但要求製作 {requested}；"
+                    "請增加 hunt/fish 數量，必要時先 explore animals"
+                )
+            planned_raw -= requested
+    return None
+
+
+def _decision_error(decision: dict, state: dict) -> str | None:
+    if decision.get("action") == "plan":
+        if not _is_valid_plan_result(decision):
+            return "plan 含有不合法、缺少數量或格式錯誤的指令"
+    elif not _is_valid_command_result(decision):
+        return "command 不合法或缺少明確的正整數 goal"
+    return _food_decision_error(decision, state)
 
 
 async def handle(state: dict, llm: LLMClient) -> dict | None:
@@ -178,28 +246,38 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     response = None
     try:
         print("[SelfTask] 進行自主任務評估")
-        response = await llm.chat(
-            [{"role": "user", "content": prompt}],
-            system=SYSTEM_PROMPT,
-        )
-        clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
-        clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
-        try:
-            raw = json.loads(clean)
-        except json.JSONDecodeError:
-            raw = _extract_first_json_object(clean)
-        decision = _normalize_result(parse_llm_json(raw, "SelfTask"))
+        decision = None
+        request_prompt = prompt
+        for attempt in range(2):
+            response = await llm.chat(
+                [{"role": "user", "content": request_prompt}],
+                system=SYSTEM_PROMPT,
+            )
+            clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+            clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
+            try:
+                raw = json.loads(clean)
+            except json.JSONDecodeError:
+                raw = _extract_first_json_object(clean)
+            decision = _normalize_result(parse_llm_json(raw, "SelfTask"))
+            error = _decision_error(decision, state)
+            if not error:
+                break
+            print(f"[SelfTask] 決策不可執行: {error}")
+            if attempt == 1:
+                return None
+            request_prompt = (
+                f"{prompt}\n\n上一個決策：{json.dumps(decision, ensure_ascii=False)}\n"
+                f"不可執行原因：{error}\n"
+                "請根據相同狀態重新輸出可完成的 JSON；不要省略數量，也不要直接重複原決策。"
+            )
+
+        if decision is None:
+            return None
 
         if decision.get("action") == "plan":
-            if not _is_valid_plan_result(decision):
-                print(f"[SelfTask] 無效 plan，忽略: {decision}")
-                return None
             print(f"[SelfTask] 計畫: {decision.get('commands')}")
             return decision
-
-        if not _is_valid_command_result(decision):
-            print(f"[SelfTask] 無效 command，忽略: {decision}")
-            return None
 
         if decision.get("command") == "idle":
             print("[SelfTask] 決定保持 idle")

@@ -217,13 +217,21 @@ async def _on_task_stopped(state: dict, _llm: LLMClient):
 
 
 def _build_and_save_task(activity: str, goal: dict) -> None:
+    def _required_positive_int(data: dict, key: str) -> int:
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"missing {key}")
+        if int(value) != value or value <= 0:
+            raise ValueError(f"invalid {key}")
+        return int(value)
+
     resume_cmd_map = {
         'fishing':  lambda g: f"fish catches {g.get('catches', 20)}",
         'chopping': lambda g: f"chop logs {g.get('logs', 32)}",
         'mining':   lambda g: f"mine {g.get('target', 'iron')} {g.get('count', 16)}",
-        'smelting': lambda g: f"smelt {g.get('target', 'iron')} {g.get('count', 8)}",
-        'hunting':  lambda g: f"hunt count {g.get('count', 8)}",
-        'getfood':  lambda g: f"getfood count {g.get('count', 8)}",
+        'smelting': lambda g: f"smelt {g.get('target', 'iron')} {_required_positive_int(g, 'count')}",
+        'hunting':  lambda g: f"hunt count {_required_positive_int(g, 'count')}",
+        'getfood':  lambda g: f"getfood count {_required_positive_int(g, 'count')}",
     }
     fn = resume_cmd_map.get(activity)
     if not fn:

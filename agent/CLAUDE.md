@@ -45,6 +45,10 @@ Material-missing and respawn handlers use capability/environment/task history to
 produce validated short prerequisite plans rather than fixed resource mappings
 or unconditional `tp -> equip -> resumetask` sequences. The runtime appends the
 task resume only after those prerequisites pass command validation.
+Self-task and player-task food planning derive an explicit positive quantity from
+hunger, cooked/raw inventory and task risk. `getfood` only processes raw food
+already in inventory, so insufficient raw food requires a valid acquisition step
+first. No layer may silently invent a food count.
 CLI subprocesses omit inherited API keys and third-party provider overrides;
 Codex forces ChatGPT login, Claude selects claude.ai login. Claude auth status
 must report a logged-in claude.ai account before inference; saved API/Console

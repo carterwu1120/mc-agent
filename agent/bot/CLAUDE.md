@@ -37,6 +37,11 @@ material decision at most once per minute; `crafting.js` rate-limits the missing
 workbench-material message. These cooldowns suppress identical attempts only;
 inventory, capability and environment state remains present in bridge snapshots.
 
+`hunt` and `getfood` require explicit positive count goals. Their JS activities
+reject missing or invalid goals instead of supplying hidden defaults. `getfood`
+only processes raw food already present in inventory; acquiring raw food belongs
+to an earlier hunt/fish/explore plan step.
+
 Every activity follows this exact pattern:
 
 ```js

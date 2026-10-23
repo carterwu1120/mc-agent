@@ -38,6 +38,14 @@ async function startGetFood(bot, goal = {}) {
         console.log('[Food] 已在蒐集食物中')
         return
     }
+    const targetCooked = Number(goal.count)
+    if (!Number.isInteger(targetCooked) || targetCooked <= 0) {
+        console.log('[Food] 缺少有效的熟食數量，拒絕啟動 getfood')
+        bridge.sendState(bot, 'activity_stuck', {
+            activity: 'getfood', reason: 'invalid_goal', goal,
+        })
+        return
+    }
     isGettingFood = true
     _startingCookedCount = _countItems(bot, COOKED_FOOD_ITEMS)
     activityStack.push(bot, 'getfood', goal, (b) => _resumeGetFood(b, goal))
@@ -69,7 +77,7 @@ function isActive() {
 async function _loop(bot, goal = {}) {
     _isPaused = false
     const _myGen = ++_loopGen
-    const targetCooked = goal.count ?? 8
+    const targetCooked = goal.count
 
     while (isGettingFood && execution.isCurrent() && _loopGen === _myGen) {
         const cookedCount = _countItems(bot, COOKED_FOOD_ITEMS)

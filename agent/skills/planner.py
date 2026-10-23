@@ -95,17 +95,16 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - ⚠️ 不要在 mine / chop / fish / smelt 前盲目加 equip：這些活動自己會處理所需工具
 - ⚠️ 不要在缺乏對應裝備的情況下加 equip（例如背包沒有 diamond_pickaxe 就不要加 equip diamond_pickaxe）
 - ⚠️ combat 不是前置步驟，絕對不要把 combat 加進 commands 作為準備動作
-- 若食物不足（cooked_total < 5）：
-  根據主目標決定目標熟食數量（food_target）：
-  - 短暫任務（砍樹、存物品、來回跑腿）→ food_target = 8
-  - 一般任務（挖鐵、挖石）→ food_target = 16
-  - 長時間/危險任務（挖鑽石、下地深挖、combat、長途探索）→ food_target = 32
-  取得方式：
-  - 背包有生食（raw_total > 0）→ 先 getfood count <food_target>（自動冶煉）
-  - 背包無生食 → 先 hunt count <food_target>，再 getfood count <food_target>
-    （不要假設每隻動物會掉 2 個原料；hunt count 與熟食目標先採 1:1 的保守估計）
-  - 不要使用 fish 作為前置步驟，除非玩家明確要求釣魚
-- 若玩家是在「回去 / 恢復 / 繼續」先前的挖礦或挖鑽石任務，且背包熟食已至少 16 份，優先直接接回挖礦鏈；不要重新加入 hunt / getfood，除非玩家明確要求先補食物
+- 評估食物時，同時看目前飢餓值、cooked_total、raw_total、主目標預期時間與危險程度；熟食為 0 不代表一定要中斷短任務補貨
+- 若確實需要補食物：
+  - 先決定這次任務需要的總熟食存量，再扣掉 cooked_total，commands 只處理實際缺口
+  - 每個 hunt / fish / getfood 都必須帶明確正整數數量，不可依賴預設值
+  - raw_total 足以覆蓋缺口 → getfood count <實際缺口>
+  - raw_total 不足 → 先取得缺少的生食，再 getfood count <實際缺口>
+  - 附近沒有動物且沒有可靠的已知動物位置 → explore animals，再 hunt 與 getfood
+  - 只有背包已有 fishing_rod 且路線合理時才可 fish
+  - 不要假設每隻動物固定掉落兩個原料；規劃要保守但不要無條件囤積大量食物
+- 若玩家是在「回去 / 恢復 / 繼續」先前任務，且目前飢餓與熟食存量足以支撐剩餘路程和風險，優先直接接回原任務；不要重新加入 hunt / getfood，除非存在實際缺口或玩家明確要求
 
 工具鏈：
 - 挖鑽石 → 需要鐵鎬（iron_pickaxe）→ 需要鐵錠 → 若背包無鐵錠：先補足做鐵鎬所需的鐵（通常 3 個 iron_ingot），再 mine diamond
@@ -126,9 +125,8 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - 若已經有部分鑽石裝，鑽石數量只補缺口，不要固定一律 24
 
 範例：
-玩家說「幫我準備去挖鑽石」，背包無鐵鎬、食物只剩 2：
-→ ["hunt count 32", "getfood count 32", "mine iron 3", "smelt raw_iron 3", "equip", "mine diamond 10"]
-  （挖鑽石是長時間危險任務 → food_target=32；若只是為了先補鐵鎬，鐵的前置數量應接近實際缺口）
+玩家說「幫我準備去挖鑽石」，背包無鐵鎬且食物不足：
+→ 先根據完整狀態算出食物實際缺口；沒有足夠生食時用 explore/hunt 補足，再 getfood，接著只補製作鐵鎬所缺的鐵，最後 mine diamond <玩家要求數量>
 
 玩家說「我要釣魚」，背包無釣竿、有木材：
 → ["fish catches 20"]  ← bot 會自動製作釣竿，不需要手動加步驟
@@ -469,11 +467,11 @@ def _equipment_goal_shortcut(message: str, state: dict, activity: str) -> dict |
     if activity not in (None, "idle") and stop_cmd:
         commands.append(stop_cmd)
 
-    # Keep armor-goal shortcut consistent with the planner's general food rule:
-    # only add a food-prep step when cooked food is actually low, rather than
-    # always topping up to 32 for every armor request.
+    # Food preparation depends on hunger, inventory, route length and danger.
+    # The deterministic shortcut cannot safely choose that quantity/path.
     if cooked_total < 5:
-        commands.append("getfood count 32")
+        print("[Planner] 熟食偏低，跳過 equipment shortcut → LLM 動態規劃食物缺口")
+        return None
 
     if material == "diamond":
         have_units = int(materials.get("diamond", 0) or 0)

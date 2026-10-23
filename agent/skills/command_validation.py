@@ -80,12 +80,15 @@ def validate_command(command: str, allowed_commands: set[str] | None = None) -> 
             return "`smelt` 格式應為 `smelt <material> <count>`，且 count 必須是正整數"
         return None
 
-    if name in {"hunt", "getfood"}:
-        if not args:
-            return None
+    if name == "hunt":
         if len(args) == 2 and args[0] == "count" and _is_positive_int(args[1]):
             return None
-        return f"`{name}` 格式應為 `{name}` 或 `{name} count <n>`"
+        return "`hunt` 必須明確指定正整數數量：`hunt count <n>`"
+
+    if name == "getfood":
+        if len(args) == 2 and args[0] == "count" and _is_positive_int(args[1]):
+            return None
+        return "`getfood` 必須明確指定正整數數量：`getfood count <n>`"
 
     if name == "deposit":
         if len(args) != 1 or not _is_chest_id_token(args[0]):

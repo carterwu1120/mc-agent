@@ -15,7 +15,7 @@ from agent.skills.stuck import mining as mining_stuck
 from agent.skills.stuck import prompt_builder
 from agent.skills.stuck import prompts as stuck_prompts
 from agent.skills.stuck import smelting as smelting_stuck
-from agent.skills.food import RAW_FOOD_ITEMS
+from agent.skills.state_summary import RAW_FOOD_ITEMS
 
 ALLOWED_COMMANDS = decision_utils.ALLOWED_ACTIVITY_STUCK_COMMANDS
 
