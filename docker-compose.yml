@@ -22,20 +22,23 @@ services:
       context: .
       dockerfile: Dockerfile.bot
     environment:
-      MC_HOST:     ${MC_HOST:-localhost}
+      MC_HOST:     ${MC_HOST:-host.docker.internal}
       MC_PORT:     ${MC_PORT:-25565}
       MC_USERNAME: ${MC_USERNAME_0:-Agent0}
       MC_VERSION:  ${MC_VERSION:-1.20.1}
       MC_AUTH:     ${MC_AUTH:-offline}
-      MC_FORGE:    ${MC_FORGE:-true}
+      MC_FORGE:    ${MC_FORGE:-false}
       MC_ADAPTIVE_NAVIGATION: ${MC_ADAPTIVE_NAVIGATION:-false}
       BOT_WS_PORT: 3001
       BOT_DATA_DIR: /app/agent/data/bot0
       BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}
+      STRICT_CHAT_ADDRESSING: ${STRICT_CHAT_ADDRESSING:-true}
       COORDINATOR_BOT: "true"
     volumes:
       - ./agent/data:/app/agent/data
       - ./agent/logs:/app/agent/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   agent0:
@@ -49,6 +52,9 @@ services:
       RECOVERY_DECISION_TIMEOUT: ${RECOVERY_DECISION_TIMEOUT:-60}
       BOT_WS_URL:             ws://bot0:3001
       BOT_ID:                 bot0
+      MC_USERNAME:            ${MC_USERNAME_0:-Agent0}
+      BOT_USERNAMES:          ${BOT_USERNAMES:-Agent0,Agent1}
+      STRICT_CHAT_ADDRESSING: ${STRICT_CHAT_ADDRESSING:-true}
       BOT_DATA_DIR:           /app/agent/data/bot0
       DASHBOARD_PORT:         3002
       COORDINATOR_PORT:       3010

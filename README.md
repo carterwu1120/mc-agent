@@ -191,6 +191,35 @@ Automated tests do not replace live authentication, server connection, and in-ga
 
 ## Docker Compose
 
+Use Docker Desktop with Linux containers. Node.js, Python, and both planning CLIs
+are installed inside the images; you do not need host npm or uv for this workflow.
+The Minecraft server still runs separately on Windows with Java 17.
+
+For the local Vanilla server, set these values in the repository-root `.env`:
+
+```dotenv
+MC_HOST=host.docker.internal
+MC_PORT=25565
+MC_VERSION=1.20.1
+MC_FORGE=false
+MC_USERNAME_0=Agent0
+LLM_PROVIDER=codex
+```
+
+Compose uses `MC_USERNAME_0`, not the native-launch `MC_USERNAME` setting.
+Keep `server-ip=` blank in `local-server/server.properties` so Docker can connect;
+the loopback-only setting from the native offline example will not work here.
+Match authentication before starting:
+
+- For a private offline test server, set `online-mode=false` and `MC_AUTH=offline`.
+  This disables account verification; keep the server off the public internet.
+- To keep `online-mode=true`, set `MC_AUTH=microsoft` and `MC_USERNAME_0` to the
+  separate bot account's login identifier. Follow the bot logs to complete login;
+  address the bot by its actual in-game name afterward.
+
+Restart Minecraft after changing `server.properties`, and wait for `Done`.
+Run the following commands from the repository root:
+
 ```bash
 # Copy .env.example to .env; set MC_HOST and LLM_PROVIDER=codex or claude.
 # Build the agent image (includes both CLIs).
@@ -205,6 +234,17 @@ docker compose run --rm --no-deps agent0 codex login --device-auth
 # Start the stack.
 docker compose up --build
 ```
+
+Use `docker compose config --quiet` to validate configuration and
+`docker compose logs -f bot0 agent0` to inspect connection/planning errors.
+For the offline example, try `@Agent0 !setmode companion`, then `@Agent0 !mine stone 3`
+before sending a natural-language task. Stop containers with `docker compose down`
+and stop Minecraft separately with `stop`. Avoid `docker compose down -v` unless
+you intend to remove the database and CLI login volumes.
+
+.dockerignore excludes the local Minecraft server, host dependencies, credentials,
+and runtime data from image builds. The data/log bind mounts still persist runtime
+output on the host.
 
 Container CLI login is stored in the named `cli_home` volume and persists
 across restarts. Host CLI login is separate. Do not delete this volume unless
