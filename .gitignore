@@ -17,3 +17,6 @@ training/dataset/**/data_resolved.yaml
 .env
 
 agent/data/
+
+# Local Minecraft server binaries, settings, worlds, and player data
+/local-server/
