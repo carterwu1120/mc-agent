@@ -7,8 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 COPY --from=cli /usr/local/bin/node /usr/local/bin/node
 COPY --from=cli /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -s /usr/local/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex \
-    && ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js /usr/local/bin/claude
+RUN ln -s "/usr/local/lib/node_modules/@openai/codex/$(node -p \
+      "require('/usr/local/lib/node_modules/@openai/codex/package.json').bin.codex")" \
+      /usr/local/bin/codex \
+    && ln -s "/usr/local/lib/node_modules/@anthropic-ai/claude-code/$(node -p \
+      "require('/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json').bin.claude")" \
+      /usr/local/bin/claude
 
 ENV PYTHONUNBUFFERED=1
 
@@ -22,4 +26,4 @@ RUN pip install uv && uv sync --no-dev
 
 COPY agent/ ./agent/
 
-CMD ["sh", "-c", "uv run -m agent.agent 2>> /app/agent/logs/stderr-${BOT_ID:-agent}.log"]
+CMD ["sh", "-c", "exec /app/.venv/bin/python -m agent.agent 2>> /app/agent/logs/stderr-${BOT_ID:-agent}.log"]

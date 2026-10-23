@@ -40,6 +40,187 @@ def test_final_decision_and_stdin(monkeypatch, provider):
     assert not Path(seen["kwargs"]["cwd"]).exists()
 
 
+def test_codex_reuses_persisted_session(monkeypatch, tmp_path):
+    session_id = "0199a213-81c0-7800-8aa1-bbab2a035a53"
+    decision = '{"action":"plan","commands":["mine diamond 3"]}'
+    calls = []
+
+    async def spawn(*args, **kwargs):
+        calls.append(args)
+        Path(args[args.index("--output-last-message") + 1]).write_text(
+            decision, encoding="utf-8"
+        )
+        process = AsyncMock()
+        process.returncode = 0
+        stdout = b""
+        if "resume" not in args:
+            stdout = (json.dumps({
+                "type": "thread.started", "thread_id": session_id,
+            }) + "\n").encode()
+        process.communicate.return_value = (stdout, b"")
+        return process
+
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CLI_SESSION_REUSE", "true")
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    client = CLIAgentClient("codex")
+
+    assert asyncio.run(client.chat([])) == decision
+    assert asyncio.run(client.chat([])) == decision
+    assert "--ephemeral" not in calls[0]
+    assert "--json" in calls[0]
+    assert calls[1][1:3] == ("exec", "resume")
+    assert session_id in calls[1]
+    saved = json.loads((tmp_path / "cli_session.json").read_text(encoding="utf-8"))
+    assert saved == {"provider": "codex", "model": None, "session_id": session_id}
+
+    # A new process-level client resumes the same per-bot session from disk.
+    restarted = CLIAgentClient("codex")
+    assert restarted._session_id == session_id
+
+
+def test_codex_replaces_missing_persisted_session(monkeypatch, tmp_path):
+    old_id = "11111111-1111-4111-8111-111111111111"
+    new_id = "22222222-2222-4222-8222-222222222222"
+    (tmp_path / "cli_session.json").write_text(json.dumps({
+        "provider": "codex", "model": None, "session_id": old_id,
+    }), encoding="utf-8")
+    calls = []
+
+    async def spawn(*args, **kwargs):
+        calls.append(args)
+        process = AsyncMock()
+        if "resume" in args:
+            process.returncode = 1
+            process.communicate.return_value = (
+                b"", f"no rollout found for thread id {old_id}".encode()
+            )
+        else:
+            process.returncode = 0
+            Path(args[args.index("--output-last-message") + 1]).write_text(
+                '{"action":"wait"}', encoding="utf-8"
+            )
+            process.communicate.return_value = ((json.dumps({
+                "type": "thread.started", "thread_id": new_id,
+            }) + "\n").encode(), b"")
+        return process
+
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    client = CLIAgentClient("codex")
+
+    assert asyncio.run(client.chat([])) == '{"action":"wait"}'
+    assert "resume" in calls[0]
+    assert "resume" not in calls[1]
+    saved = json.loads((tmp_path / "cli_session.json").read_text(encoding="utf-8"))
+    assert saved["session_id"] == new_id
+
+
+def test_claude_reuses_persisted_session(monkeypatch, tmp_path):
+    decisions = []
+
+    async def spawn(*args, **kwargs):
+        process = AsyncMock()
+        process.returncode = 0
+        if "auth" in args:
+            process.communicate.return_value = (
+                b'{"loggedIn":true,"authMethod":"claude.ai"}', b""
+            )
+        else:
+            decisions.append(args)
+            process.communicate.return_value = (
+                b'{"result":"{\\"action\\":\\"wait\\"}","is_error":false}', b""
+            )
+        return process
+
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CLI_SESSION_REUSE", "true")
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    client = CLIAgentClient("claude")
+
+    asyncio.run(client.chat([]))
+    asyncio.run(client.chat([]))
+    first_id = decisions[0][decisions[0].index("--session-id") + 1]
+    assert "--no-session-persistence" not in decisions[0]
+    assert decisions[1][decisions[1].index("--resume") + 1] == first_id
+    assert json.loads((tmp_path / "cli_session.json").read_text())["session_id"] == first_id
+
+
+def test_claude_replaces_missing_persisted_session(monkeypatch, tmp_path):
+    old_id = "33333333-3333-4333-8333-333333333333"
+    (tmp_path / "cli_session.json").write_text(json.dumps({
+        "provider": "claude", "model": None, "session_id": old_id,
+    }), encoding="utf-8")
+    decisions = []
+
+    async def spawn(*args, **kwargs):
+        process = AsyncMock()
+        process.returncode = 0
+        if "auth" in args:
+            process.communicate.return_value = (
+                b'{"loggedIn":true,"authMethod":"claude.ai"}', b""
+            )
+        else:
+            decisions.append(args)
+            if "--resume" in args:
+                response = {
+                    "result": f"No conversation found with session ID: {old_id}",
+                    "is_error": True,
+                }
+            else:
+                response = {"result": '{"action":"wait"}', "is_error": False}
+            process.communicate.return_value = (json.dumps(response).encode(), b"")
+        return process
+
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    client = CLIAgentClient("claude")
+
+    assert asyncio.run(client.chat([])) == '{"action":"wait"}'
+    assert "--resume" in decisions[0]
+    new_id = decisions[1][decisions[1].index("--session-id") + 1]
+    assert new_id != old_id
+    saved = json.loads((tmp_path / "cli_session.json").read_text(encoding="utf-8"))
+    assert saved["session_id"] == new_id
+
+
+@pytest.mark.parametrize("provider, fresh_flag", [
+    ("codex", "--ephemeral"),
+    ("claude", "--no-session-persistence"),
+])
+def test_session_reuse_can_be_disabled(monkeypatch, provider, fresh_flag):
+    decision = '{"action":"wait"}'
+    calls = []
+
+    async def spawn(*args, **kwargs):
+        process = AsyncMock()
+        process.returncode = 0
+        if "auth" in args:
+            process.communicate.return_value = (
+                b'{"loggedIn":true,"authMethod":"claude.ai"}', b""
+            )
+        else:
+            calls.append(args)
+            if provider == "codex":
+                Path(args[args.index("--output-last-message") + 1]).write_text(
+                    decision, encoding="utf-8"
+                )
+            process.communicate.return_value = (
+                json.dumps({"result": decision}).encode(), b""
+            )
+        return process
+
+    monkeypatch.setenv("CLI_SESSION_REUSE", "false")
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    asyncio.run(CLIAgentClient(provider).chat([]))
+    assert fresh_flag in calls[0]
+
+
 def test_failure_does_not_leak_diagnostics(monkeypatch):
     process = AsyncMock()
     process.returncode = 1

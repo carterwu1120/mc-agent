@@ -48,7 +48,10 @@ services:
     environment:
       LLM_PROVIDER:           ${LLM_PROVIDER:-codex}
       LLM_MODEL:              ${LLM_MODEL:-}
-      CLI_AGENT_TIMEOUT:     ${CLI_AGENT_TIMEOUT:-120}
+      CLI_AGENT_TIMEOUT:      ${CLI_AGENT_TIMEOUT:-120}
+      CLI_SESSION_REUSE:      ${CLI_SESSION_REUSE:-true}
+      AGENT_LOG_PROMPTS:       ${AGENT_LOG_PROMPTS:-false}
+      AGENT_LOG_TICKS:         ${AGENT_LOG_TICKS:-false}
       RECOVERY_DECISION_TIMEOUT: ${RECOVERY_DECISION_TIMEOUT:-60}
       BOT_WS_URL:             ws://bot0:3001
       BOT_ID:                 bot0
@@ -111,7 +114,10 @@ services:
   #   environment:
   #     LLM_PROVIDER:           ${LLM_PROVIDER:-codex}
   #     LLM_MODEL:              ${LLM_MODEL:-}
-  #     CLI_AGENT_TIMEOUT:     ${CLI_AGENT_TIMEOUT:-120}
+  #     CLI_AGENT_TIMEOUT:      ${CLI_AGENT_TIMEOUT:-120}
+  #     CLI_SESSION_REUSE:      ${CLI_SESSION_REUSE:-true}
+  #     AGENT_LOG_PROMPTS:       ${AGENT_LOG_PROMPTS:-false}
+  #     AGENT_LOG_TICKS:         ${AGENT_LOG_TICKS:-false}
   #     RECOVERY_DECISION_TIMEOUT: ${RECOVERY_DECISION_TIMEOUT:-60}
   #     BOT_WS_URL:             ws://bot1:3003
   #     BOT_ID:                 bot1
