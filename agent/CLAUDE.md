@@ -29,12 +29,14 @@ dependencies have been removed on this branch; invalid/old providers fail with
 migration instructions instead of falling back to another provider.
 Each skill call starts a bounded noninteractive CLI process, forwards its prompt
 via stdin, and returns the final decision to the existing skill parser. By
-default, `CLI_SESSION_REUSE=true` resumes one provider conversation per bot;
-`BOT_DATA_DIR/cli_session.json` stores the provider/model/session ID across
-container recreation. Codex uses its emitted thread ID with `exec resume`, while
-Claude uses `--session-id` and `--resume`. A provider/model mismatch starts a new
-session, and the old isolated behavior remains available with
-`CLI_SESSION_REUSE=false`. Python retains task memory, event routing, and
+default, `CLI_SESSION_REUSE=true` resumes one provider conversation within a
+main task; `BOT_DATA_DIR/cli_session.json` stores the provider/model/session ID,
+turn/token counters, and usage-limit cooldown across container recreation. A
+completed task or configured turn/token threshold rotates the session. Codex
+uses its emitted thread ID with `exec resume`, while Claude uses `--session-id`
+and `--resume`. A provider/model mismatch starts a new session, and the old
+isolated behavior remains available with `CLI_SESSION_REUSE=false`. Python
+retains task memory, event routing, and
 PlanExecutor ownership; CLI sessions do not directly control Minecraft. CLI
 calls are serialized, with timeout and cancellation cleanup. Install and
 authenticate the CLI in the agent's runtime.

@@ -145,9 +145,12 @@ python -m agent.agent
 The CLI uses its subscription login and built-in default model. `LLM_MODEL` can
 override the model. Optional `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` selects an
 executable (not a shell command); `CLI_AGENT_TIMEOUT` defaults to 120 seconds.
-`CLI_SESSION_REUSE=true` resumes one provider conversation per bot. The session
-identifier is stored in `BOT_DATA_DIR/cli_session.json`, so it also survives an
-agent container recreation. Provider or model changes start a separate session.
+`CLI_SESSION_REUSE=true` resumes one provider conversation within a task. The
+session identifier and counters are stored in `BOT_DATA_DIR/cli_session.json`,
+so they survive an agent container recreation. A completed task starts a fresh
+session; the adapter also rotates at `CLI_SESSION_MAX_TURNS` (default 8) or
+`CLI_SESSION_MAX_INPUT_TOKENS` (default 200000). Provider or model changes start
+a separate session.
 Normal logs omit two-second tick lines and full prompt bodies. Set
 `AGENT_LOG_TICKS=true` or `AGENT_LOG_PROMPTS=true` only for focused debugging;
 these settings change terminal verbosity, not the state sent to the model.
@@ -158,6 +161,9 @@ fallback. Codex user configuration is ignored, so use LLM_MODEL to select a mode
 Before each Claude decision, the adapter checks `claude auth status` and refuses
 API/Console authentication before sending the game prompt.
 Subscription usage limits and any account-level extra usage settings still apply.
+Structured `usage_limit_exceeded` failures pause model calls until the reported
+reset time. If no reset time is supplied, `CLI_USAGE_LIMIT_COOLDOWN` (default
+3600 seconds) is used; the cooldown is persisted across container restarts.
 
 If an existing .env sets LLM_PROVIDER=gemini/openai/vertex/ollama, change it to
 codex or claude and clear the old LLM_MODEL. Old providers now fail explicitly;
@@ -288,6 +294,9 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 | `LLM_MODEL` | CLI default | Optional model supported by your subscription |
 | `CLI_AGENT_TIMEOUT` | `120` | Maximum seconds per CLI call |
 | `CLI_SESSION_REUSE` | `true` | Resume one Codex/Claude conversation per bot and persist its ID in `BOT_DATA_DIR` |
+| `CLI_SESSION_MAX_TURNS` | `8` | Rotate a reused CLI session after this many successful model turns |
+| `CLI_SESSION_MAX_INPUT_TOKENS` | `200000` | Rotate when cumulative session input reaches this threshold |
+| `CLI_USAGE_LIMIT_COOLDOWN` | `3600` | Fallback pause in seconds when a usage-limit error has no reset time |
 | `AGENT_LOG_PROMPTS` | `false` | Print complete model prompts instead of compact character counts |
 | `AGENT_LOG_TICKS` | `false` | Print every two-second state tick |
 | `RECOVERY_DECISION_TIMEOUT` | `60` | Seconds per recovery decision; the earlier CLI/recovery deadline wins |

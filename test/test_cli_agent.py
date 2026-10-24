@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent.brain.cli_agent import CLIAgentClient
+from agent.brain.cli_agent import (
+    CLIAgentClient,
+    CLIProviderError,
+    _claude_input_tokens,
+    _codex_input_tokens,
+)
 from agent.brain import build_client
 
 
@@ -73,7 +78,11 @@ def test_codex_reuses_persisted_session(monkeypatch, tmp_path):
     assert calls[1][1:3] == ("exec", "resume")
     assert session_id in calls[1]
     saved = json.loads((tmp_path / "cli_session.json").read_text(encoding="utf-8"))
-    assert saved == {"provider": "codex", "model": None, "session_id": session_id}
+    assert saved["schema_version"] == 2
+    assert saved["provider"] == "codex"
+    assert saved["model"] is None
+    assert saved["session_id"] == session_id
+    assert saved["turns"] == 2
 
     # A new process-level client resumes the same per-bot session from disk.
     restarted = CLIAgentClient("codex")
@@ -84,7 +93,8 @@ def test_codex_replaces_missing_persisted_session(monkeypatch, tmp_path):
     old_id = "11111111-1111-4111-8111-111111111111"
     new_id = "22222222-2222-4222-8222-222222222222"
     (tmp_path / "cli_session.json").write_text(json.dumps({
-        "provider": "codex", "model": None, "session_id": old_id,
+        "schema_version": 2, "provider": "codex", "model": None,
+        "session_id": old_id, "turns": 1, "input_tokens": 10,
     }), encoding="utf-8")
     calls = []
 
@@ -152,7 +162,8 @@ def test_claude_reuses_persisted_session(monkeypatch, tmp_path):
 def test_claude_replaces_missing_persisted_session(monkeypatch, tmp_path):
     old_id = "33333333-3333-4333-8333-333333333333"
     (tmp_path / "cli_session.json").write_text(json.dumps({
-        "provider": "claude", "model": None, "session_id": old_id,
+        "schema_version": 2, "provider": "claude", "model": None,
+        "session_id": old_id, "turns": 1, "input_tokens": 0,
     }), encoding="utf-8")
     decisions = []
 
@@ -230,6 +241,93 @@ def test_failure_does_not_leak_diagnostics(monkeypatch):
     with pytest.raises(RuntimeError, match="exited with code 1") as error:
         asyncio.run(CLIAgentClient("claude").chat([]))
     assert "secret" not in str(error.value)
+
+
+def test_usage_limit_is_classified_and_blocks_repeat_subprocess(monkeypatch, tmp_path):
+    reset_at = 4102444800
+    event = {
+        "type": "task_complete",
+        "error": {
+            "message": "You've hit your usage limit.",
+            "codex_error_info": "usage_limit_exceeded",
+        },
+        "rate_limits": {"primary": {"used_percent": 100, "resets_at": reset_at}},
+    }
+    process = AsyncMock()
+    process.returncode = 1
+    process.communicate.return_value = ((json.dumps(event) + "\n").encode(), b"")
+    spawn = AsyncMock(return_value=process)
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    client = CLIAgentClient("codex")
+
+    with pytest.raises(CLIProviderError, match="usage_limit_exceeded") as error:
+        asyncio.run(client.chat([]))
+    assert error.value.retry_at == reset_at
+    assert not client.is_available()
+    with pytest.raises(CLIProviderError, match="provider is temporarily paused|retry after"):
+        asyncio.run(client.chat([]))
+    assert spawn.call_count == 1
+    saved = json.loads((tmp_path / "cli_session.json").read_text())
+    assert saved["cooldown_until"] == reset_at
+
+
+def test_session_rotates_after_turn_limit(monkeypatch, tmp_path):
+    first_id = "44444444-4444-4444-8444-444444444444"
+    second_id = "55555555-5555-4555-8555-555555555555"
+    calls = []
+
+    async def spawn(*args, **kwargs):
+        calls.append(args)
+        session_id = first_id if len(calls) == 1 else second_id
+        Path(args[args.index("--output-last-message") + 1]).write_text(
+            '{"action":"wait"}', encoding="utf-8"
+        )
+        process = AsyncMock()
+        process.returncode = 0
+        process.communicate.return_value = ((json.dumps({
+            "type": "thread.started", "thread_id": session_id,
+        }) + "\n").encode(), b"")
+        return process
+
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CLI_SESSION_MAX_TURNS", "1")
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    client = CLIAgentClient("codex")
+
+    asyncio.run(client.chat([]))
+    asyncio.run(client.chat([]))
+    assert "resume" not in calls[1]
+    assert client._session_id == second_id
+
+
+def test_legacy_unbounded_session_is_not_resumed(monkeypatch, tmp_path):
+    legacy_id = "66666666-6666-4666-8666-666666666666"
+    (tmp_path / "cli_session.json").write_text(json.dumps({
+        "provider": "codex", "model": None, "session_id": legacy_id,
+    }), encoding="utf-8")
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    client = CLIAgentClient("codex")
+    assert client._session_id is None
+
+
+def test_codex_exec_turn_usage_is_accumulated_when_not_cumulative():
+    stdout = (json.dumps({
+        "type": "turn.completed",
+        "usage": {"input_tokens": 68474, "cached_input_tokens": 65920},
+    }) + "\n").encode()
+    assert _codex_input_tokens(stdout) == (68474, False)
+
+
+def test_claude_usage_includes_cached_context_tokens():
+    envelope = {"usage": {
+        "input_tokens": 100,
+        "cache_creation_input_tokens": 200,
+        "cache_read_input_tokens": 300,
+    }}
+    assert _claude_input_tokens(envelope) == (600, False)
 
 
 def test_timeout_cleans_up(monkeypatch):

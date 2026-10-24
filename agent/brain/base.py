@@ -13,3 +13,13 @@ class LLMClient(ABC):
         system：system prompt（可選）
         """
         ...
+
+    def reset_session(self, reason: str = "task_finished") -> None:
+        """End provider conversation state at a durable task boundary."""
+
+    def is_available(self) -> bool:
+        """Return False while the provider is in a known retry cooldown."""
+        return True
+
+    def unavailable_reason(self) -> str | None:
+        return None
