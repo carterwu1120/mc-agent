@@ -116,7 +116,7 @@ class RecoverySupervisor:
             now = self.clock()
             while self._episodes and now - self._episodes[0] >= 300:
                 self._episodes.popleft()
-            checkpoint = state.get('reason') in {'segment_complete', 'objective_incomplete'}
+            checkpoint = state.get('reason') == 'objective_incomplete'
             if not checkpoint and len(self._episodes) >= 3:
                 raise RuntimeError("recovery_budget_exhausted")
             if not checkpoint:

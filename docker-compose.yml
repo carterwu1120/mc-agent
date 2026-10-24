@@ -29,7 +29,6 @@ services:
       MC_AUTH:     ${MC_AUTH:-offline}
       MC_FORGE:    ${MC_FORGE:-false}
       MC_ADAPTIVE_NAVIGATION: ${MC_ADAPTIVE_NAVIGATION:-false}
-      MINING_SEGMENT_SECONDS: ${MINING_SEGMENT_SECONDS:-60}
       BOT_WS_PORT: 3001
       BOT_DATA_DIR: /app/agent/data/bot0
       BOT_USERNAMES: ${BOT_USERNAMES:-Agent0,Agent1}

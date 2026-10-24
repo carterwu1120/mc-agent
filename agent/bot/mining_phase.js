@@ -16,7 +16,7 @@ function snapshot(bot, target) {
     return { count: count(bot, target), pos: { ...bot.entity.position } }
 }
 function result(bot, goal, before, phase, reason) {
-    return { status: reason === 'segment_complete' ? 'yielded' : 'blocked', phase, reason,
+    return { status: 'blocked', phase, reason,
         target: goal.target, requested: goal.count,
         changes: { target_gained: Math.max(0, count(bot, goal.target) - before.count),
             position: { before: before.pos, after: { ...bot.entity.position } } } }

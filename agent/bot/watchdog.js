@@ -15,6 +15,10 @@ class ProgressWatch {
             this.high = {}
             this.lastEvidence = now
             this.lastOutcome = now
+            this.lastTaskProgress = now
+            this.bestDepthDistance = null
+            this.depthTarget = null
+            this.reported = false
             this.lastReport = -Infinity
             this.lastWarning = -Infinity
             this.samples = []
@@ -35,7 +39,9 @@ class ProgressWatch {
             const item = name.replace(/^item:/, '')
             const relevant = !target || [target, `raw_${target}`, `${target}_ore`, `deepslate_${target}_ore`,
                 ...(target === 'stone' ? ['cobblestone'] : [])].includes(item)
-            if (increased && (name.startsWith('progress:') || relevant)) outcome = true
+            const progressOutcome = name.startsWith('progress:') &&
+                (frame.activity !== 'mining' || name === 'progress:count')
+            if (increased && (progressOutcome || (name.startsWith('item:') && relevant))) outcome = true
             this.high[name] = Math.max(this.high[name] || 0, value)
         }
         const novel = cell && !this.cells.has(cell)
@@ -45,6 +51,25 @@ class ProgressWatch {
         }
         if (novel || effect) this.lastEvidence = now
         if (outcome) this.lastOutcome = now
+        let taskProgress = outcome
+        const phase = frame.progress?.phase
+        const targetY = frame.progress?.target_y
+        if (frame.activity === 'mining' && phase === 'descending' &&
+            Number.isFinite(targetY) && Number.isFinite(pos?.y)) {
+            const distance = Math.max(0, pos.y - targetY)
+            if (this.depthTarget !== targetY) {
+                this.depthTarget = targetY
+                this.bestDepthDistance = distance
+            } else if (distance < this.bestDepthDistance) {
+                taskProgress = true
+                this.bestDepthDistance = distance
+            }
+        } else if (frame.activity === 'mining' && phase === 'collecting' && novel) {
+            // New ground at the mining level is exploration progress, not ore output.
+            taskProgress = true
+        }
+        if (taskProgress) this.lastTaskProgress = now
+        if (runtime.running && !runtime.paused && (novel || effect || taskProgress)) this.reported = false
         this.samples.push({ at: now, cell, progress: { ...frame.progress } })
         if (this.samples.length > 8) this.samples.shift()
         const timeout = options.timeoutMs ?? (frame.activity === 'fishing' ? 60000 : 25000)
@@ -68,14 +93,17 @@ class ProgressWatch {
         } else if (wait && now >= wait.until) reason = 'wait_expired'
         else if (now - this.lastEvidence >= timeout) reason = 'no_progress'
         else if (['mining', 'chopping', 'hunting', 'getfood', 'smelting', 'fishing'].includes(frame.activity)
-            && now - this.lastOutcome >= (options.reviewMs ?? 180000)) reason = 'no_task_progress'
-        if (!reason || now - this.lastReport < 30000) return null
+            && now - this.lastTaskProgress >= (options.reviewMs ?? 180000)) reason = 'no_task_progress'
+        if (!reason || this.reported || now - this.lastReport < 30000) return null
+        this.reported = true
         this.lastReport = now
         return {
             reason, activity_name: frame.activity, watchdog: true,
             goal: frame.goal, progress: frame.progress,
             detail: `${frame.activity}: ${reason}; no new position/output for ${Math.round((now - this.lastEvidence) / 1000)}s`,
-            progress_evidence: { no_effect_ms: now - this.lastEvidence, no_output_ms: now - this.lastOutcome, recent: this.samples.slice() },
+            progress_evidence: { no_effect_ms: now - this.lastEvidence, no_output_ms: now - this.lastOutcome,
+                no_task_progress_ms: now - this.lastTaskProgress, phase, best_depth_distance: this.bestDepthDistance,
+                recent: this.samples.slice() },
         }
     }
 }

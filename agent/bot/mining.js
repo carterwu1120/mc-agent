@@ -14,8 +14,6 @@ const navigation = require('./navigation')
 const { AsyncLocalStorage } = require('node:async_hooks')
 const loopContext = new AsyncLocalStorage()
 const miningPhase = require('./mining_phase')
-const configuredSegmentMs = Number(process.env.MINING_SEGMENT_SECONDS || 60) * 1000
-const segmentMs = Number.isFinite(configuredSegmentMs) && configuredSegmentMs > 0 ? configuredSegmentMs : 60000
 let _inventoryBaseline = 0
 
 let isMining = false
@@ -487,17 +485,13 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
             break
         }
         _targetCount = Math.max(0, miningPhase.count(bot, goal.target) - _inventoryBaseline)
-        activityStack.updateProgress({ count: _targetCount })
         const nextPhase = bestY !== null && bot.entity.position.y > bestY + 1 ? 'descending' : 'collecting'
+        activityStack.updateProgress({ count: _targetCount, phase: nextPhase, target_y: bestY })
         if (nextPhase !== phase) {
             phase = nextPhase
             bridge.sendState(bot, 'mining_progress', {
                 activity: 'mining', phase, target: goal.target, acquired: _targetCount,
             })
-        }
-        if (goal.target && (!goal.count || _targetCount < goal.count) && Date.now() - startTime >= segmentMs) {
-            yieldDecision('segment_complete')
-            break
         }
         _rememberResumePos(bot)
         if (eating.isEating()) {

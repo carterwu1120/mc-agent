@@ -19,11 +19,15 @@ or consuming the target item reduces measured progress; it is not a lifetime pic
 Named mining tasks pursue the requested ore only. Missing tools yield a decision;
 the planner can call `preparetool iron_pickaxe` after gathering/smelting materials.
 `equip` only equips owned gear. Mining reports `mining_progress` on phase changes
-and `mining_decision` with inventory/position deltas at a checkpoint or blockage.
-`MINING_SEGMENT_SECONDS` defaults to 60: it is checked between loop iterations,
-not a hard cancellation deadline. Each checkpoint can require an LLM decision,
-so shorter budgets increase latency and model usage. Existing watchdogs still
-bound stalled operations. Rebuild bot and agent images to activate these changes.
+and `mining_decision` with inventory/position deltas when tools or routes block work.
+There is no periodic stop-and-replan timer; `MINING_SEGMENT_SECONDS` is no longer used.
+The watchdog distinguishes ore output from phase progress: new best depth toward
+the target counts during descent, and newly visited cells count during collection
+and exploration. Returning to an already reached depth does not renew strategy progress.
+Operation timeouts and existing inactivity/review windows remain safeguards when
+progress stops, not total task deadlines. New cells are a local exploration proxy,
+not proof that the mining strategy will eventually find diamonds; asynchronous LLM
+strategy review is not implemented. Rebuild bot and agent images to activate changes.
 
 ## Local Development
 
@@ -328,7 +332,8 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 
 | Command | What the bot does |
 |---------|-----------------|
-| `mine <ore> <count>` | Mines the target ore, crafts tools if needed |
+| `mine <ore> <count>` | Mines the target ore; reports missing tools for planning |
+| `preparetool <pickaxe>` | Prepares the requested minimum pickaxe tier from available materials |
 | `chop logs <count>` | Chops trees |
 | `fish catches <count>` | Fishes |
 | `smelt <material>` | Smelts items in a furnace (builds one if needed) |

@@ -84,6 +84,46 @@ test('mining byproducts cannot indefinitely hide the absence of the requested or
     assert.equal(s.events[0].reason, 'no_task_progress')
 })
 
+test('continuous descent toward target depth does not need ore output after 180 seconds', () => {
+    const s = simulation()
+    s.frame.goal.target = 'diamond'
+    Object.assign(s.frame.progress, { phase: 'descending', target_y: -58 })
+    for (let n = 0; n < 120; n++) { s.bot.entity.position.y -= 0.5; s.tick() }
+    assert.equal(s.events.length, 0)
+    assert.equal(s.items.length, 0)
+})
+
+test('revisiting depth while travelling sideways cannot renew descent progress', () => {
+    const s = simulation()
+    s.frame.goal.target = 'diamond'
+    Object.assign(s.frame.progress, { phase: 'descending', target_y: -58 })
+    for (let n = 0; n < 120; n++) {
+        s.bot.entity.position.y = n % 2 ? 62 : 64
+        s.bot.entity.position.x += 2
+        s.tick()
+    }
+    assert.equal(s.events[0].reason, 'no_task_progress')
+})
+
+test('new mining-level ground remains exploration progress beyond review window', () => {
+    const s = simulation()
+    s.frame.goal.target = 'diamond'
+    Object.assign(s.frame.progress, { phase: 'collecting', target_y: -58 })
+    s.bot.entity.position.y = -58
+    for (let n = 0; n < 120; n++) { s.bot.entity.position.x += 2; s.tick() }
+    assert.equal(s.events.length, 0)
+})
+
+test('the same unresolved blockage is reported once while awaiting a decision', () => {
+    const s = simulation()
+    for (let n = 0; n < 120; n++) s.tick()
+    assert.equal(s.events.length, 1)
+    s.runtime.paused = true
+    s.runtime.running = false
+    for (let n = 0; n < 30; n++) s.tick()
+    assert.equal(s.events.length, 1)
+})
+
 test('orphaned pause and expired expected waits are detected', () => {
     const s = simulation()
     s.runtime.paused = true
