@@ -658,6 +658,17 @@ class PlanExecutor:
         if expected_activity and (state or {}).get('activity') == expected_activity:
             self._done.set()
 
+    def accepts_task_stopped(self, state: dict | None = None) -> bool:
+        """True when task_stopped is the expected result of an executor stop step."""
+        command = self._current_command or {}
+        if command.get('command') not in {
+            'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat',
+            'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore', 'stopall',
+        }:
+            return False
+        command_id = (state or {}).get('command_id')
+        return not command_id or not command.get('_command_id') or command_id == command.get('_command_id')
+
     def signal_done_after_stuck(self, state: dict | None = None) -> None:
         """Called during stuck recovery instead of signal_done.
         Only unblocks the executor if the completing activity matches the

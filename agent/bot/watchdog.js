@@ -16,6 +16,7 @@ class ProgressWatch {
             this.lastEvidence = now
             this.lastOutcome = now
             this.lastReport = -Infinity
+            this.lastWarning = -Infinity
             this.samples = []
         }
         const pos = bot.entity?.position
@@ -51,6 +52,17 @@ class ProgressWatch {
         const waiting = wait && now < wait.until
         let reason = null
         if (waiting) return null
+        const silentFor = now - this.lastEvidence
+        const warningMs = options.warningMs ?? 10000
+        if (runtime.running && silentFor >= warningMs && now - this.lastWarning >= warningMs) {
+            this.lastWarning = now
+            options.onWarning?.({
+                activity: frame.activity,
+                seconds: Math.round(silentFor / 1000),
+                phase: runtime.lastProgressReason || runtime.lastStateReason || 'unknown',
+                progress: { ...frame.progress },
+            })
+        }
         if (runtime.paused || !runtime.running) {
             if (now - (runtime.lastStateAt ?? now) >= (options.pauseTimeoutMs ?? 45000)) reason = 'orphaned_pause'
         } else if (wait && now >= wait.until) reason = 'wait_expired'
@@ -73,8 +85,13 @@ const watch = new ProgressWatch()
 function monitor(bot) {
     const frame = activityStack.getTopFrame()
     if (!frame || !bot.entity || bot.health <= 0) { watch.reset(); return }
-    const event = watch.inspect(bot, frame, activityStack.getRuntimeState(frame.activity), activityStack.getActivityOptions(frame.activity))
+    const options = activityStack.getActivityOptions(frame.activity)
+    options.onWarning = info => console.log(
+        `[Watchdog] ${info.activity} 仍在執行：${info.seconds}s 無位置/產出變化，階段=${info.phase}，進度=${JSON.stringify(info.progress)}`
+    )
+    const event = watch.inspect(bot, frame, activityStack.getRuntimeState(frame.activity), options)
     if (!event) return
+    console.log(`[Watchdog] ${event.activity_name} 判定卡住：${event.reason}`)
     activityStack.pause(bot)
     // Halt physical motion immediately, before Python/CLI latency.
     require('./navigation').cancel(bot)

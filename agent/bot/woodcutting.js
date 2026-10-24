@@ -2,7 +2,7 @@ const execution = require('./execution')
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const activityStack = require('./activity')
-const { ensureAxe, ensureToolFor } = require('./crafting')
+const { ensureToolFor } = require('./crafting')
 const bridge = require('./bridge')
 const { sendActivityDone } = bridge
 const { findSurfaceSpot } = require('./surface')
@@ -11,6 +11,8 @@ const { applyMovements, createMovements } = require('./movement_prefs')
 let isChopping = false
 let _isPaused = false
 let _logsCollected = 0
+let _logsCut = 0
+let _startingLogCount = 0
 let _loopGen = 0
 
 const SCAFFOLD_BLOCKS = new Set([
@@ -53,6 +55,14 @@ function _countLogsInInventory(bot) {
     return bot.inventory.items()
         .filter(i => i.name && i.name.endsWith('_log'))
         .reduce((sum, i) => sum + i.count, 0)
+}
+
+function _collectedLogCount(bot, baseline = 0) {
+    return Math.max(0, _countLogsInInventory(bot) - baseline)
+}
+
+function _hasCollectedGoal(bot, baseline, goal) {
+    return !goal?.logs || _collectedLogCount(bot, baseline) >= goal.logs
 }
 
 async function _waitForCollectedLogs(bot, minCount = 1, timeoutMs = 1500) {
@@ -128,6 +138,8 @@ async function startChopping(bot, goal = {}) {
     }
     isChopping = true
     _logsCollected = 0
+    _logsCut = 0
+    _startingLogCount = _countLogsInInventory(bot)
     activityStack.push(bot, 'chopping', goal, (b) => _resumeChopping(b, goal))
     activityStack.markStarted('chopping', 'start')
     console.log('[Wood] 開始砍樹')
@@ -178,7 +190,7 @@ async function _loop(bot, goal = {}) {
             sendActivityDone(bot, 'chopping', { chop_pos: bot.entity.position })
             break
         }
-        if (goal.logs && _logsCollected >= goal.logs) {
+        if (goal.logs && _hasCollectedGoal(bot, _startingLogCount, goal)) {
             console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
             isChopping = false
             sendActivityDone(bot, 'chopping', { chop_pos: bot.entity.position })
@@ -210,14 +222,10 @@ async function _loop(bot, goal = {}) {
             }
         }
 
-        // 每次迴圈檢查斧頭（斧頭壞掉或第一次有材料時自動合成）
+        // Do not consume newly collected logs to craft an axe mid-goal. If no
+        // axe existed at task start, finish this prerequisite by hand.
         if (!bot.inventory.items().some(i => i.name.endsWith('_axe'))) {
-            const ok = await ensureAxe(bot)
-            if (!execution.isCurrent()) return
-            if (!ok) {
-                // 沒斧頭也繼續，用徒手砍
-                console.log('[Wood] 沒有斧頭，用徒手繼續')
-            }
+            if (_logsCut === 0) console.log('[Wood] 沒有斧頭，本次用徒手砍以保留採集到的木頭')
         } else {
             const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
             if (axe) await _safeEquip(bot, axe, 'hand', '裝備斧頭')
@@ -314,24 +322,23 @@ async function _loop(bot, goal = {}) {
 
             reachedAny = true
 
-            await ensureToolFor(bot, fresh.name)
-            if (!execution.isCurrent()) return
-
             try {
                 await bot.dig(fresh)
                 if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
-                _logsCollected++
-                activityStack.touch('chopping', 'collected_log')
-                console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}（共 ${_logsCollected} 根）`)
-                activityStack.updateProgress({ logs: _logsCollected })
+                _logsCut++
+                activityStack.touch('chopping', 'cut_log')
+                console.log(`[Wood] 砍下 ${fresh.name} at y=${pos.y}（已砍 ${_logsCut}，等待拾取）`)
                 await _sleep(500)
                 if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
                 await _collectNearby(bot, pos, 4)
                 if (!execution.isCurrent()) return
                 if (_shouldAbort(_myGen)) return
-                if (goal.logs && _logsCollected >= goal.logs) {
+                _logsCollected = _collectedLogCount(bot, _startingLogCount)
+                activityStack.updateProgress({ logs: _logsCollected, blocks_cut: _logsCut })
+                console.log(`[Wood] 木頭已進背包 ${_logsCollected}/${goal.logs || '?'} 根`)
+                if (goal.logs && _hasCollectedGoal(bot, _startingLogCount, goal)) {
                     console.log(`[Wood] 達到採集目標 ${goal.logs} 根木頭，停止`)
                     goalReached = true
                     isChopping = false
@@ -373,11 +380,19 @@ async function _loop(bot, goal = {}) {
         await _collectNearby(bot, rootPos, 8)
         if (!execution.isCurrent()) return
         if (goalReached ? _shouldAbortAfterGoal(_myGen) : _shouldAbort(_myGen)) return
+        _logsCollected = _collectedLogCount(bot, _startingLogCount)
+        activityStack.updateProgress({ logs: _logsCollected, blocks_cut: _logsCut })
+        if (goal.logs && _hasCollectedGoal(bot, _startingLogCount, goal)) {
+            goalReached = true
+            isChopping = false
+        }
         if (goalReached) {
-            const hasLogs = await _waitForCollectedLogs(bot, Math.min(_logsCollected, goal.logs || _logsCollected || 1))
+            const hasLogs = await _waitForCollectedLogs(bot, _startingLogCount + (goal.logs || 1))
             if (!execution.isCurrent()) return
             if (!hasLogs) {
-                console.log('[Wood] 已達採集目標，但木頭尚未進背包，先等待並延後回報完成')
+                console.log('[Wood] 砍伐數已達目標，但掉落物尚未進背包，繼續收集')
+                goalReached = false
+                isChopping = true
             }
         }
         await _plantSapling(bot, rootPos, treeLogName)
@@ -613,7 +628,10 @@ function isActive() {
     return isChopping
 }
 
-module.exports = { startChopping, stopChopping, isActive }
+module.exports = {
+    startChopping, stopChopping, isActive,
+    _test: { _collectedLogCount, _hasCollectedGoal },
+}
 
 // Each activity has its own cancellable async scope, including nested activities.
 for (const [name, fn] of Object.entries(module.exports)) {

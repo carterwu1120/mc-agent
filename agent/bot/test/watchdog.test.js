@@ -17,7 +17,12 @@ function simulation(activityName = 'mining') {
     const frame = { activity: activityName, startTime: 1000, goal: { count: 10 }, progress: { count: 0 } }
     const runtime = { running: true, paused: false, lastStateAt: now }
     const events = []
-    const tick = (ms = 2000) => { now += ms; const e = watch.inspect(bot, frame, runtime); if (e) events.push(e); return e }
+    const tick = (ms = 2000, options = {}) => {
+        now += ms
+        const e = watch.inspect(bot, frame, runtime, options)
+        if (e) events.push(e)
+        return e
+    }
     tick(0)
     return { bot, frame, runtime, items, events, tick }
 }
@@ -26,6 +31,16 @@ test('standing still is detected even with constantly refreshed touch timestamps
     const s = simulation()
     for (let n = 0; n < 15; n++) { s.runtime.lastProgressAt = Date.now(); s.tick() }
     assert.equal(s.events[0].reason, 'no_progress')
+})
+
+test('long operations emit throttled progress warnings before becoming stuck', () => {
+    const s = simulation('chopping')
+    const warnings = []
+    for (let n = 0; n < 6; n++) {
+        s.tick(2000, { onWarning: warning => warnings.push(warning) })
+    }
+    assert.equal(warnings.length, 1)
+    assert.equal(warnings[0].activity, 'chopping')
 })
 
 test('oscillation, equipment churn and identical count do not count as progress', () => {

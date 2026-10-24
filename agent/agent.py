@@ -47,7 +47,26 @@ _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 # LLM_MODEL=<model>                         (optional, overrides provider default)
 # CLI_AGENT_TIMEOUT=<seconds>               (default: 120)
 # CLI_SESSION_REUSE=true|false               (default: true)
+# CLI_SESSION_MAX_TURNS=<turns>              (default: 8)
+# CLI_SESSION_MAX_INPUT_TOKENS=<tokens>       (default: 200000)
+# CLI_USAGE_LIMIT_COOLDOWN=<seconds>          (default: 3600 fallback)
 llm: LLMClient = build_client()
+
+
+def _reset_llm_session(reason: str) -> None:
+    reset = getattr(llm, 'reset_session', None)
+    if callable(reset):
+        reset(reason)
+
+
+def _llm_is_available() -> bool:
+    check = getattr(llm, 'is_available', None)
+    return bool(check()) if callable(check) else True
+
+
+def _llm_unavailable_reason() -> str | None:
+    describe = getattr(llm, 'unavailable_reason', None)
+    return describe() if callable(describe) else None
 
 executor = PlanExecutor()
 recovery = RecoverySupervisor(decision_timeout=float(os.environ.get('RECOVERY_DECISION_TIMEOUT', '60')))
@@ -59,7 +78,16 @@ def _launch_plan(commands: list, ws, **kwargs) -> None:
     if not kwargs.pop('_recovery', False):
         recovery.invalidate()
     set_task_id(uuid.uuid4().hex[:8])
-    asyncio.create_task(executor.execute(commands, ws, **kwargs))
+
+    async def _run_plan() -> None:
+        try:
+            await executor.execute(commands, ws, **kwargs)
+        finally:
+            task = task_memory.load_any() or {}
+            if not executor.is_running() and task.get('status') in {'done', 'failed'}:
+                _reset_llm_session('task_finished')
+
+    asyncio.create_task(_run_plan())
 
 
 async def _on_verify_failed(state: dict, ws) -> None:
@@ -191,6 +219,9 @@ async def _on_done(_state: dict, _llm: LLMClient):
                     actual_count = int(progress_data[key])
                     break
             task_memory.done(goal_count=goal_count, actual_count=actual_count)
+            reset = getattr(_llm, 'reset_session', None)
+            if callable(reset):
+                reset('standalone_task_finished')
         set_task_id(None)
     _record_to_exploration_memory(_state)
     return None
@@ -209,6 +240,14 @@ async def _on_task_started(state: dict, _llm: LLMClient):
 
 async def _on_task_stopped(state: dict, _llm: LLMClient):
     """JS 手動停止 activity 時標記 interrupted。"""
+    if executor.accepts_task_stopped(state):
+        # stopmine/stopchop/... are normal executor steps. Their follow-up
+        # task_stopped event must not abort the whole multi-step plan.
+        executor.signal_done(state)
+        return None
+    if recovery.busy or executor.is_in_stuck_recovery():
+        print('[Agent] 忽略 recovery 期間的 task_stopped，保留原任務 ownership')
+        return None
     recovery.invalidate()
     if executor.is_running():
         executor.abort(preserve_task=True, reason='manual_stop')
@@ -379,6 +418,8 @@ _coordinator_poll_running: bool = False  # serializes coordinator interactions �
 _last_self_task_at = 0.0
 SELF_TASK_COOLDOWN = 60.0
 _idle_started_at: float | None = None
+_last_self_task_fingerprint: str | None = None
+_last_provider_pause_reason: str | None = None
 _recent_stuck_events: deque[dict] = deque(maxlen=8)
 _latest_state: dict = {}
 
@@ -760,6 +801,39 @@ def _inventory_fingerprint(state: dict) -> tuple[tuple[str, int], ...]:
     ))
 
 
+def _self_task_fingerprint(state: dict) -> str:
+    """Only material world/task changes trigger another autonomous decision."""
+    pos = state.get('pos') or {}
+    task = task_memory.load_any() or {}
+    failures = task.get('recentFailures') or []
+    latest_failure = failures[0] if failures else {}
+    relevant = {
+        'position_cell': [
+            int(float(pos.get('x', 0)) // 4),
+            int(float(pos.get('y', 0)) // 4),
+            int(float(pos.get('z', 0)) // 4),
+        ],
+        'health': state.get('health'),
+        'food': state.get('food'),
+        'mode': state.get('mode'),
+        'activity': state.get('activity'),
+        'inventory': _inventory_fingerprint(state),
+        'equipment': state.get('equipment'),
+        'nearby': state.get('nearby'),
+        'task': {
+            'id': task.get('id'),
+            'status': task.get('status'),
+            'currentStep': task.get('currentStep'),
+            'interruptedBy': task.get('interruptedBy'),
+            'failure': {
+                'reason': latest_failure.get('reason'),
+                'cmd': latest_failure.get('cmd'),
+            },
+        },
+    }
+    return json.dumps(relevant, ensure_ascii=False, sort_keys=True, default=str)
+
+
 def _is_stale_response(event_type: str, request_state: dict) -> bool:
     if not _latest_state:
         return False
@@ -853,18 +927,25 @@ async def _run_coordinator_task(envelope: dict, state: dict, ws) -> bool:
 
     async def _exec_and_report(_cmds=cmds, _goal=goal, _cid=cid):
         global _idle_started_at
-        status = "failed"
+        status = None
         try:
             await executor.execute(_cmds, ws, goal=_goal, source="coordinator", task_id=_cid)
             task = task_memory.load_any() or {}
             if task.get("status") == "done":
                 status = "done"
+            elif task.get("status") == "failed":
+                status = "failed"
         except Exception as e:
             print(f"[Agent] coordinator execute 失敗: {e}")
             task_memory.failed()
+            status = "failed"
         finally:
             _idle_started_at = None
-            await _patch_status(status)
+            # Interrupted/recovery-held tasks stay remotely running instead of
+            # being falsely marked failed while a replacement plan continues.
+            if status:
+                await _patch_status(status)
+                _reset_llm_session('coordinator_task_finished')
 
     asyncio.create_task(_exec_and_report())
     return True
@@ -1094,6 +1175,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
     global _last_self_task_at
     global _idle_started_at
     global _coordinator_poll_running
+    global _last_self_task_fingerprint
+    global _last_provider_pause_reason
     _thinking.add(event_type)
     _lock_acquired = False
     request_revision = recovery.revision
@@ -1146,6 +1229,16 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 return
             if now - _last_self_task_at < SELF_TASK_COOLDOWN:
                 return
+            if not _llm_is_available():
+                reason = _llm_unavailable_reason() or 'provider cooldown'
+                if reason != _last_provider_pause_reason:
+                    print(f"[Agent] 自主任務暫停：{reason}")
+                    _last_provider_pause_reason = reason
+                return
+            _last_provider_pause_reason = None
+            fingerprint = _self_task_fingerprint(state)
+            if fingerprint == _last_self_task_fingerprint:
+                return
             # Acquire planner slot before calling LLM
             if _planner_lock is None or _planner_lock.locked():
                 return
@@ -1160,6 +1253,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         t0 = time.monotonic()
         result = await handler(state, llm)
+        if event_type == 'tick' and _llm_is_available():
+            _last_self_task_fingerprint = _self_task_fingerprint(state)
         if request_revision != recovery.revision:
             return
         # If coordinator took over while LLM was running, it released the lock — discard result
@@ -1176,6 +1271,8 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 db_only=True,
             )
         if not result:
+            if event_type == 'tick':
+                _reset_llm_session('self_task_evaluation_finished')
             return
         if _is_stale_response(event_type, state):
             print(f"[Agent] 忽略過期的 {event_type} 回應")
@@ -1440,7 +1537,11 @@ async def run():
                     if event_type == 'recovery_paused':
                         recovery.acknowledge(state)
                         continue
-                    if event_type in {'player_died', 'task_stopped'}:
+                    if event_type == 'player_died':
+                        recovery.invalidate()
+                    elif event_type == 'task_stopped' and not (
+                        recovery.busy or executor.is_in_stuck_recovery()
+                    ):
                         recovery.invalidate()
                     if event_type == 'task_started' and not state.get('command_id'):
                         recovery.invalidate()

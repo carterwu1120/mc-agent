@@ -2,7 +2,7 @@
 import asyncio
 import importlib
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -81,4 +81,63 @@ def test_router_holds_failed_decision_and_tick_cannot_replace_the_task(runtime, 
         autonomous = AsyncMock()
         await app._handle_and_send({'type': 'tick', 'activity': 'idle'}, autonomous, ws)
         autonomous.assert_not_called()
+    asyncio.run(scenario())
+
+
+def test_expected_stop_event_does_not_abort_multistep_plan(runtime):
+    app, task = runtime
+
+    async def scenario():
+        app.executor._current_command = {
+            'command': 'stopchop', '_command_id': 'stop-1'
+        }
+        await app._on_task_stopped({
+            'type': 'task_stopped', 'activityName': 'chopping',
+            'command_id': 'stop-1',
+        }, None)
+        assert app.executor.is_running()
+        assert task['status'] == 'running'
+
+    asyncio.run(scenario())
+
+
+def test_self_task_only_rechecks_after_material_state_change(runtime, monkeypatch):
+    app, _task = runtime
+
+    async def scenario():
+        app.executor.unclaim()
+        app._planner_lock = asyncio.Lock()
+        app._idle_started_at = 0
+        app._last_self_task_at = 0
+        app._last_self_task_fingerprint = None
+        reset_session = Mock()
+        fake_llm = type('LLM', (), {
+            'is_available': lambda self: True,
+            'unavailable_reason': lambda self: None,
+            'reset_session': reset_session,
+        })()
+        monkeypatch.setattr(app, 'llm', fake_llm)
+        calls = []
+
+        async def autonomous(state, _llm):
+            calls.append(state['food'])
+            return None
+
+        state = {
+            'type': 'tick', 'activity': 'idle', 'food': 20, 'health': 20,
+            'pos': {'x': 0, 'y': 64, 'z': 0}, 'inventory': [],
+        }
+        app._latest_state.clear()
+        app._latest_state.update(state)
+        await app._handle_and_send(state, autonomous, type('Socket', (), {})())
+        app._last_self_task_at = 0
+        await app._handle_and_send(dict(state), autonomous, type('Socket', (), {})())
+        changed = {**state, 'food': 17}
+        app._latest_state.clear()
+        app._latest_state.update(changed)
+        app._last_self_task_at = 0
+        await app._handle_and_send(changed, autonomous, type('Socket', (), {})())
+
+        assert calls == [20, 17]
+
     asyncio.run(scenario())
