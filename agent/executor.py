@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 import json
 import time
 import uuid
@@ -12,6 +13,11 @@ POLL_INTERVAL = 2.0
 ACTIVITY_START_TIMEOUT = 15.0
 ACTION_TIMEOUT = 45.0
 RECOVERY_TIMEOUT = 150.0
+
+_STOP_COMMANDS = frozenset({
+    'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat',
+    'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore', 'stopall',
+})
 
 _CHOP_LOG_NAMES = frozenset({
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
@@ -309,6 +315,10 @@ class PlanExecutor:
         self._after_state: dict = {}    # snapshot from action_done / activity_done
         self._command_sent_at: float = 0.0
         self._plan_start_state: dict = {}   # snapshot before the first step of a plan
+        # action_done advances the executor before the paired task_stopped can
+        # arrive. Retain recently completed stop IDs so that late events cannot
+        # be mistaken for a manual stop of the next command.
+        self._completed_stop_ids = deque(maxlen=32)
         # Optional callback set by agent.py: async (state, ws) → None
         # When set, verification failures trigger LLM intervention instead of just logging.
         self._verify_failed_callback = None
@@ -630,13 +640,15 @@ class PlanExecutor:
         command = self._current_command.get('command')
 
         immediate_commands = {
-            'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore',
-            'stopall',
+            *_STOP_COMMANDS,
             'home', 'back', 'sethome', 'equip', 'unequip', 'deposit', 'withdraw', 'readchest', 'setchest', 'labelchest',
             'makechest', 'chat', 'setmode', 'resumetask', 'tp',
         }
         if event_type == 'action_done':
             if command in immediate_commands:
+                command_id = self._current_command.get('_command_id')
+                if command in _STOP_COMMANDS and command_id:
+                    self._completed_stop_ids.append(command_id)
                 self._done.set()
             return
 
@@ -660,13 +672,13 @@ class PlanExecutor:
 
     def accepts_task_stopped(self, state: dict | None = None) -> bool:
         """True when task_stopped is the expected result of an executor stop step."""
-        command = self._current_command or {}
-        if command.get('command') not in {
-            'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat',
-            'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore', 'stopall',
-        }:
-            return False
         command_id = (state or {}).get('command_id')
+        if command_id and command_id in self._completed_stop_ids:
+            self._completed_stop_ids.remove(command_id)
+            return True
+        command = self._current_command or {}
+        if command.get('command') not in _STOP_COMMANDS:
+            return False
         return not command_id or not command.get('_command_id') or command_id == command.get('_command_id')
 
     def signal_done_after_stuck(self, state: dict | None = None) -> None:

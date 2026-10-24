@@ -378,8 +378,6 @@ function dispatch(bot, msg) {
                     return
                 }
 
-                const { craftMissingArmor } = require('./combat')
-                craftMissingArmor(bot)  // push craft_armor activity if any slot needs upgrade
                 const result = await equipBestLoadout(bot)
                 console.log(`[Equip] 完成裝備：武器=${result.weapon ?? '無'}，護甲=${result.armor?.join(', ') || '無'}`)
                 bridge.sendState(bot, 'action_done')

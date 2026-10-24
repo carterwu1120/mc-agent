@@ -39,6 +39,26 @@ def _plan_context(current_cmd="mine diamond 10", pending=None):
     }
 
 
+def test_llm_replan_always_returns_to_failed_goal_before_pending_steps():
+    from agent.skills.activity_stuck import _apply_replan_pipeline
+
+    decision = {
+        "action": "replan",
+        "commands": ["surface", "equip", "mine iron 3"],
+    }
+    plan = _plan_context(
+        current_cmd="mine diamond 10",
+        pending=["deposit diamonds"],
+    )
+
+    result = _apply_replan_pipeline(decision, plan)
+
+    assert result["commands"] == [
+        "surface", "equip", "mine iron 3",
+        "mine diamond 10", "deposit diamonds",
+    ]
+
+
 # ── mining: no_tools ──────────────────────────────────────────────────────────
 
 class TestMiningNoTools:

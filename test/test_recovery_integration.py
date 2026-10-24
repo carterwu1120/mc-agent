@@ -107,6 +107,34 @@ def test_expected_stop_event_does_not_abort_multistep_plan(runtime):
     asyncio.run(scenario())
 
 
+def test_late_task_stopped_from_previous_step_does_not_abort_next_step(runtime):
+    app, task = runtime
+
+    async def scenario():
+        app.executor._current_command = {
+            'command': 'stopsurface', '_command_id': 'stop-1'
+        }
+        app.executor.signal_done({
+            'type': 'action_done', 'command_id': 'stop-1',
+        })
+
+        # The executor can advance before the paired task_stopped message is
+        # dispatched by the event loop. It must still recognize the old ID.
+        app.executor._current_command = {
+            'command': 'equip', '_command_id': 'equip-1'
+        }
+        await app._on_task_stopped({
+            'type': 'task_stopped', 'activityName': 'surface',
+            'command_id': 'stop-1',
+        }, None)
+
+        assert app.executor.is_running()
+        assert task['status'] == 'running'
+        assert app.executor._current_command['command'] == 'equip'
+
+    asyncio.run(scenario())
+
+
 def test_self_task_only_rechecks_after_material_state_change(runtime, monkeypatch):
     app, _task = runtime
 

@@ -20,6 +20,21 @@ SYSTEM = """你是 Minecraft 任務恢復規劃者。舊動作已中斷，舊 st
 """ + command_list(sorted(ALLOWED))
 
 
+def _restore_remaining_goal(commands: list[str], plan_context: dict | None) -> list[str]:
+    """A replan may add prerequisites, but must not silently drop the goal."""
+    context = plan_context or {}
+    current_cmd = str(context.get('current_cmd') or '').strip()
+    required = ([current_cmd] if current_cmd else []) + list(context.get('pending_steps') or [])
+    if not required:
+        return commands
+    if len(commands) >= len(required) and commands[-len(required):] == required:
+        return commands
+    for overlap in range(min(len(commands), len(required)), 0, -1):
+        if commands[-overlap:] == required[:overlap]:
+            return commands + required[overlap:]
+    return commands + required
+
+
 async def handle(state, llm):
     context = {k: state.get(k) for k in ("reason", "detail", "goal", "progress", "plan_context", "stack",
                "navigation", "progress_evidence", "recovery_history", "decision_error") if state.get(k) is not None}
@@ -45,6 +60,10 @@ async def handle(state, llm):
         raise ValueError(str(errors))
     done = (state.get('plan_context') or {}).get('done_steps') or []
     commands = normalize_commands(commands, previous_command=done[-1] if done else None)
+    commands = _restore_remaining_goal(commands, state.get('plan_context'))
+    errors = validate_commands(commands, allowed_commands=ALLOWED)
+    if errors:
+        raise ValueError(str(errors))
     if not commands:
         raise ValueError('replan has no executable steps after normalization')
     result['commands'] = commands

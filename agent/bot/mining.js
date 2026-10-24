@@ -222,7 +222,15 @@ function _sendNoToolsStuck(bot) {
 async function _ensurePickaxeOrStuck(bot) {
     if (_hasPickaxe(bot)) return true
     console.log('[Mine] 無稿子，嘗試合成')
-    await ensurePickaxe(bot)
+    // Crafting can legitimately take longer than the movement no-progress
+    // deadline. Give the watchdog one bounded semantic wait; success produces
+    // inventory evidence, while failure emits its own activity_stuck event.
+    activityStack.waitFor('craft_pickaxe', 60000)
+    try {
+        await ensurePickaxe(bot)
+    } finally {
+        activityStack.endWait()
+    }
     if (_hasPickaxe(bot)) {
         console.log('[Mine] 合成稿子成功，繼續')
         return true
@@ -404,8 +412,6 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
     let tunnelYaw = bot.entity.yaw
     let wallNavAttempts = 0
     const bestY = goal.target ? (ORE_BEST_Y[goal.target] ?? null) : null
-    let lastDescentY = null
-    let stuckCount = 0
     let descentRotations = 0
     let descentHardFails = 0
     let tunnelFailCount = 0
@@ -647,41 +653,34 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
             if (!await _ensurePickaxeOrStuck(bot)) break
             if (_shouldAbort(_myGen)) return
             // 主動作：挖階梯往下
-            await _stepDown(bot, bestY, tunnelYaw)
+            const descended = await _stepDown(bot, bestY, tunnelYaw)
             if (_shouldAbort(_myGen)) return
 
-            // 偵測卡住：Y 沒有下降就累計，超過 3 次換方向
-            const afterY = Math.floor(bot.entity.position.y)
-            if (lastDescentY !== null && afterY >= lastDescentY) {
-                stuckCount++
-                if (stuckCount >= 3) {
-                    tunnelYaw += Math.PI / 2
-                    stuckCount = 0
-                    descentRotations++
-                    console.log('[Mine] 下潛方向受阻，旋轉 90° 繼續')
-                    if (descentRotations >= 4) {
-                        descentRotations = 0
-                        if (descentHardFails >= 2) {
-                            console.log('[Mine] 多次無法下潛，停止')
-                            isMining = false
-                            bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
-                            break
-                        }
-                        // 嘗試直接往下挖 1~2 格突破
-                        const digY = Math.min(2, Math.floor(bot.entity.position.y) - bestY)
-                        console.log(`[Mine] 四方受阻，嘗試往下直挖 ${digY} 格`)
-                        await _digEscape(bot, Math.floor(bot.entity.position.y) - digY)
-                        if (_shouldAbort(_myGen)) return
-                        descentHardFails++
-                        lastDescentY = null
+            // Each path attempt already has a five-second deadline. Rotate after
+            // one failed direction so all four local alternatives fit inside the
+            // watchdog budget instead of retrying one blocked cell three times.
+            if (!descended) {
+                tunnelYaw += Math.PI / 2
+                descentRotations++
+                console.log('[Mine] 下潛方向受阻，旋轉 90° 繼續')
+                if (descentRotations >= 4) {
+                    descentRotations = 0
+                    if (descentHardFails >= 2) {
+                        console.log('[Mine] 多次無法下潛，停止')
+                        isMining = false
+                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
+                        break
                     }
+                    const digY = Math.min(2, Math.floor(bot.entity.position.y) - bestY)
+                    console.log(`[Mine] 四方受阻，嘗試往下直挖 ${digY} 格`)
+                    await _digEscape(bot, Math.floor(bot.entity.position.y) - digY)
+                    if (_shouldAbort(_myGen)) return
+                    descentHardFails++
                 }
             } else {
-                stuckCount = 0
                 descentRotations = 0
                 descentHardFails = 0
             }
-            lastDescentY = afterY
 
             // 順手：挖階梯時旁邊看到的礦（8 格內）
             const nearbyOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 8, count: 20 })
@@ -1059,18 +1058,21 @@ async function _stairDown(bot, yaw, steps) {
 }
 
 async function _stepDown(bot, targetY, yaw) {
-    if (_shouldAbort()) return
+    if (_shouldAbort()) return false
     const pick = bot.inventory.items().find(i => i.name.endsWith('_pickaxe'))
     if (!pick) {
         console.log('[Mine] 沒有稿子，無法下潛')
-        return
+        return false
     }
     try { await bot.equip(pick, 'hand') } catch (_) {}
     const currentY = Math.floor(bot.entity.position.y)
     const steps = Math.min(3, currentY - targetY)
-    if (steps <= 0) return
+    if (steps <= 0) return false
     console.log(`[Mine] 下潛斜梯 ${steps} 格 → Y=${currentY - steps}`)
     await _stairDown(bot, yaw, steps)
+    const descended = Math.floor(bot.entity.position.y) < currentY
+    if (descended) activityStack.touch('mining', 'descending')
+    return descended
 }
 
 async function _digStraightDown(bot, targetY) {

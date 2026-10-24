@@ -32,7 +32,8 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的裝備耐久度處理助手。
 【決策原則】
 - 若背包有「現成裝備」且耐久正常（無 ⚠ 標註）→ equip 換上
 - 若背包的同類裝備標註 ⚠ 耐久損壞 → 那件不可用，不要 equip，視同沒有備品
-- 若背包只有材料（iron_ingot 等）但沒有現成裝備 → equip（bot 會自動合成後換上）
+- `equip` 只會換上背包裡已存在的裝備，不會合成新裝備
+- 若只有材料但沒有現成裝備，不可回覆 equip；正在執行的活動應由活動腳本處理必要工具
   ⚠ 注意：iron_ingot ≠ iron_leggings，有 ingot 不代表有現成護腿
 - 若 equip 已執行但問題仍存在（本次警告與上次相同）→ 停止重複 equip，改為合成或採礦
 - 若沒有材料：
@@ -57,6 +58,15 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
     activity = state.get('activity', 'idle')
     inventory = state.get('inventory', [])
+
+    # Mining owns pickaxe replacement and can craft the correct tier using live
+    # terrain/inventory state. A parallel LLM equip command races that recovery
+    # and cannot help now that equip intentionally never crafts.
+    if activity == 'mining' and all(
+        str(item.get('item') or '').endswith('_pickaxe') for item in items
+    ):
+        print('[Durability] 採礦中的稿子耐久不足，交由 mining 本地更換，不呼叫 LLM')
+        return None
 
     items_summary = "\n".join(f"- {i['item']}：耐久 {i['durability_pct']}%" for i in items)
     def _inv_line(i):

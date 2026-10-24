@@ -142,7 +142,7 @@ async function _run(bot, goal = {}, token) {
 
         _setEscapeMovements(bot)
         bot.pathfinder?.setGoal(null)
-        console.log(`[Surface] 傳送到地表 (${target.x}, ${target.y}, ${target.z})`)
+        console.log(`[Surface] 嘗試傳送到地表 (${target.x}, ${target.y}, ${target.z})`)
         noteTeleportLikeAction()
         bot.chat(teleportCommand(bot.username, target))
         const landed = await waitForSafeLanding(bot, target, {

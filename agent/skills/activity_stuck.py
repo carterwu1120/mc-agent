@@ -42,25 +42,27 @@ def _compute_is_critical_subtask(activity: str, state: dict) -> bool:
 
 
 def _enforce_pending_steps(decision: dict, plan_context: dict | None) -> dict:
-    """Ensure replan commands include pending_steps from plan_context.
-    If the LLM omitted them, append them automatically."""
+    """Ensure a replan returns to the failed goal and then its pending steps."""
     if not plan_context:
         return decision
-    pending_steps = plan_context.get("pending_steps") or []
-    if not pending_steps:
+    current_cmd = str(plan_context.get("current_cmd") or "").strip()
+    remaining_steps = ([current_cmd] if current_cmd else []) + list(
+        plan_context.get("pending_steps") or []
+    )
+    if not remaining_steps:
         return decision
     commands = list(decision.get("commands") or [])
-    # Already ends with pending_steps — nothing to do
-    if len(commands) >= len(pending_steps) and commands[-len(pending_steps):] == pending_steps:
+    # Already ends with the failed goal and all later steps — nothing to do.
+    if len(commands) >= len(remaining_steps) and commands[-len(remaining_steps):] == remaining_steps:
         return decision
-    # Strip any trailing overlap (partial suffix already included)
-    for overlap in range(min(len(commands), len(pending_steps)), 0, -1):
-        if commands[-overlap:] == pending_steps[:overlap]:
-            commands = commands + pending_steps[overlap:]
-            print(f"[Stuck/Rule] replan 部分包含 pending_steps，補上剩餘 {pending_steps[overlap:]}")
+    # Preserve a suffix/prefix overlap when the LLM already retried the goal.
+    for overlap in range(min(len(commands), len(remaining_steps)), 0, -1):
+        if commands[-overlap:] == remaining_steps[:overlap]:
+            commands = commands + remaining_steps[overlap:]
+            print(f"[Stuck/Rule] replan 補上剩餘主任務步驟: {remaining_steps[overlap:]}")
             return {**decision, "commands": commands}
-    print(f"[Stuck/Rule] replan 缺少 pending_steps，自動補上: {pending_steps}")
-    return {**decision, "commands": commands + pending_steps}
+    print(f"[Stuck/Rule] replan 缺少失敗目標，自動補上: {remaining_steps}")
+    return {**decision, "commands": commands + remaining_steps}
 
 
 def _build_skip_blocked_response(
