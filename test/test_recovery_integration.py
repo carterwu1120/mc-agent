@@ -80,6 +80,7 @@ def test_router_holds_failed_decision_and_tick_cannot_replace_the_task(runtime, 
         assert len([s for s in sent if s['command'] == 'chat']) == 1
         autonomous = AsyncMock()
         await app._handle_and_send({'type': 'tick', 'activity': 'idle'}, autonomous, ws)
+        await app._handle_and_send({'type': 'food_low', 'activity': 'idle'}, autonomous, ws)
         autonomous.assert_not_called()
     asyncio.run(scenario())
 
@@ -141,3 +142,27 @@ def test_self_task_only_rechecks_after_material_state_change(runtime, monkeypatc
         assert calls == [20, 17]
 
     asyncio.run(scenario())
+
+
+def test_interrupted_activity_memory_never_invents_a_missing_quantity(runtime, monkeypatch):
+    app, _task = runtime
+    remembered = Mock()
+    updated = Mock()
+    monkeypatch.setattr(app.task_memory, 'remember_interrupted', remembered)
+    monkeypatch.setattr(app.task_memory, 'update_latest_interrupted_step_context', updated)
+
+    app._save_current_task_to_memory({
+        'stack': [{'activity': 'chopping', 'goal': {}, 'progress': {}}],
+        'pos': {'x': 1, 'y': 64, 'z': 2},
+    })
+    remembered.assert_not_called()
+
+    app._save_current_task_to_memory({
+        'stack': [{
+            'activity': 'chopping',
+            'goal': {'logs': 5},
+            'progress': {'logs': 2},
+        }],
+        'pos': {'x': 1, 'y': 64, 'z': 2},
+    })
+    assert remembered.call_args.args[1] == ['chop logs 3']

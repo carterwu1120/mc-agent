@@ -228,6 +228,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=SYSTEM_PROMPT,
+            reasoning_effort="low",
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()

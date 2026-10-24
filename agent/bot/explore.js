@@ -16,6 +16,7 @@ let _isPaused = false
 let _runToken = 0
 const RECENT_EXPLORE_TARGETS = []
 const RECENT_EXPLORE_LIMIT = 16
+const SURFACE_SCAN_BELOW = 32
 const FOOD_ANIMALS = new Set([
     'cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom', 'mushroom_cow',
 ])
@@ -65,7 +66,9 @@ function _findSurfaceSpotNear(bot, center, searchRadius = 8, requireSky = true) 
     const base = center.floored ? center.floored() : center
     const minY = _worldMinY(bot)
     const maxY = _worldMaxY(bot)
-    const startY = Math.max(base.y, minY + 1)
+    // Nearby terrain can be below the bot (tree canopy, ridge, cave exit).
+    // Starting at base.y rejected valid ground below the current Y entirely.
+    const startY = Math.max(base.y - SURFACE_SCAN_BELOW, minY + 1)
     const candidates = []
 
     for (let r = 0; r <= searchRadius; r++) {

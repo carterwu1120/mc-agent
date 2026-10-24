@@ -52,7 +52,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 - 若玩家只是在說停止、停下、先停、stop，優先規劃停止當前活動；若目前沒有活動就回 chat
 - 若玩家明確要求你靠近他、過去找他、跟上他，優先規劃 tp <player>；只有在不適合傳送或玩家明確要求走過去時，才用 come
 - 若玩家要求你回到地面、地表、陸地、上去，優先規劃 surface
-- 玩家沒說數量時才用合理預設值（木頭 32，釣魚 20）；若是前置條件修復（例如缺工具、缺材料），請優先根據「缺多少補多少」來決定數量，不要一律固定用 16
+- 玩家沒說數量時，根據玩家意圖、目前庫存、主任務耗用與風險選擇一個可解釋的數量；不可套用固定的木頭、礦物、食物或釣魚預設值
 - smelt 指令必須帶數量，不可省略，否則會把所有原料全部放入熔爐
 - 玩家問問題、打招呼、或說的不是任務指令時，回傳 chat
 - 只輸出 JSON，不要加任何解釋或其他文字
@@ -129,7 +129,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的任務規劃助手。
 → 先根據完整狀態算出食物實際缺口；沒有足夠生食時用 explore/hunt 補足，再 getfood，接著只補製作鐵鎬所缺的鐵，最後 mine diamond <玩家要求數量>
 
 玩家說「我要釣魚」，背包無釣竿、有木材：
-→ ["fish catches 20"]  ← bot 會自動製作釣竿，不需要手動加步驟
+→ ["fish catches <依任務與庫存判斷的數量>"]  ← bot 會自動製作釣竿，不需要手動加步驟
 
 只在背包狀態確實缺少時才加前置步驟，不要過度規劃。
 
@@ -258,13 +258,20 @@ def _is_transient_llm_error(exc: Exception) -> bool:
     return any(pattern in text for pattern in _TRANSIENT_LLM_ERROR_PATTERNS)
 
 
-async def _chat_with_retry(llm: LLMClient, prompt: str, system: str, attempts: int = 3) -> str:
+async def _chat_with_retry(
+    llm: LLMClient,
+    prompt: str,
+    system: str,
+    attempts: int = 3,
+    reasoning_effort: str = "medium",
+) -> str:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             return await llm.chat(
                 [{"role": "user", "content": prompt}],
                 system=system,
+                reasoning_effort=reasoning_effort,
             )
         except Exception as e:
             last_error = e
@@ -534,7 +541,12 @@ async def _reprompt_invalid_plan(
     )
     try:
         print(f"[Planner] 偵測到非法計畫，重問一次 LLM：{invalid_commands}")
-        corrected = await _chat_with_retry(llm, reprompt, SYSTEM_PROMPT)
+        corrected = await _chat_with_retry(
+            llm,
+            reprompt,
+            SYSTEM_PROMPT,
+            reasoning_effort="high",
+        )
         decision = _parse_decision_text(corrected)
         if decision.get("action") != "plan":
             return None

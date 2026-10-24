@@ -265,6 +265,9 @@ class CLIAgentClient(LLMClient):
             raise ValueError(f"Unsupported CLI provider: {provider}")
         self.provider = provider
         self.model = model
+        self.default_reasoning_effort = self._validate_reasoning_effort(
+            os.getenv("CLI_REASONING_EFFORT_DEFAULT", "low")
+        )
         self.timeout = float(os.getenv("CLI_AGENT_TIMEOUT", "120"))
         if self.timeout <= 0:
             raise ValueError("CLI_AGENT_TIMEOUT must be positive")
@@ -283,6 +286,16 @@ class CLIAgentClient(LLMClient):
             self._session_file = Path(data_dir) / "cli_session.json"
             self._load_session()
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _validate_reasoning_effort(value: str | None) -> str:
+        effort = (value or "low").strip().lower()
+        allowed = {"low", "medium", "high", "xhigh", "max"}
+        if effort not in allowed:
+            raise ValueError(
+                "reasoning effort must be one of: low, medium, high, xhigh, max"
+            )
+        return effort
 
     def _load_session(self) -> None:
         if self._session_file is None:
@@ -402,7 +415,11 @@ class CLIAgentClient(LLMClient):
         return stdout
 
     async def _invoke(
-        self, prompt: bytes, directory: str, session_id: str | None
+        self,
+        prompt: bytes,
+        directory: str,
+        session_id: str | None,
+        reasoning_effort: str,
     ) -> tuple[str, str | None, tuple[int | None, bool]]:
         output = Path(directory) / "response.txt"
         command = _executable(self.provider)
@@ -450,6 +467,7 @@ class CLIAgentClient(LLMClient):
                     command += ["--ephemeral"]
             if self.model:
                 command += ["--model", self.model]
+            command += ["-c", f'model_reasoning_effort="{reasoning_effort}"']
             if session_id:
                 command += [session_id, "-"]
             else:
@@ -495,7 +513,15 @@ class CLIAgentClient(LLMClient):
         )
         return result, candidate_session_id, usage
 
-    async def chat(self, messages: list[dict], system: str | None = None) -> str:
+    async def chat(
+        self,
+        messages: list[dict],
+        system: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        effort = self._validate_reasoning_effort(
+            reasoning_effort or self.default_reasoning_effort
+        )
         prompt = json.dumps({"instructions": system or "", "messages": messages}, ensure_ascii=False)
         prompt = (
             "Act as a Minecraft planning component. Follow the instructions in the JSON below. "
@@ -511,11 +537,12 @@ class CLIAgentClient(LLMClient):
                     retry_at=self._cooldown_until,
                 )
             self._check_rotation()
+            print(f"[CLI] {self.provider} reasoning_effort={effort}")
             with tempfile.TemporaryDirectory(prefix="mc-agent-") as directory:
                 session_id = self._session_id if self.session_reuse else None
                 try:
                     result, new_session_id, usage = await self._invoke(
-                        prompt.encode("utf-8"), directory, session_id
+                        prompt.encode("utf-8"), directory, session_id, effort
                     )
                 except _CLIProcessError as error:
                     if session_id and _session_is_missing(error):
@@ -523,7 +550,7 @@ class CLIAgentClient(LLMClient):
                         self._forget_session()
                         try:
                             result, new_session_id, usage = await self._invoke(
-                                prompt.encode("utf-8"), directory, None
+                                prompt.encode("utf-8"), directory, None, effort
                             )
                         except _CLIProcessError as retry_error:
                             classified = _classify_process_error(retry_error)

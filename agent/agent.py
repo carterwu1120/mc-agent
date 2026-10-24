@@ -46,6 +46,7 @@ _LIVE_STATE_FILE = BOT_DATA_DIR / 'live_state.json'
 # LLM_PROVIDER=codex|claude (default: codex; no direct model API fallback)
 # LLM_MODEL=<model>                         (optional, overrides provider default)
 # CLI_AGENT_TIMEOUT=<seconds>               (default: 120)
+# CLI_REASONING_EFFORT_DEFAULT=<effort>      (default: low)
 # CLI_SESSION_REUSE=true|false               (default: true)
 # CLI_SESSION_MAX_TURNS=<turns>              (default: 8)
 # CLI_SESSION_MAX_INPUT_TOKENS=<tokens>       (default: 200000)
@@ -265,10 +266,10 @@ def _build_and_save_task(activity: str, goal: dict) -> None:
         return int(value)
 
     resume_cmd_map = {
-        'fishing':  lambda g: f"fish catches {g.get('catches', 20)}",
-        'chopping': lambda g: f"chop logs {g.get('logs', 32)}",
-        'mining':   lambda g: f"mine {g.get('target', 'iron')} {g.get('count', 16)}",
-        'smelting': lambda g: f"smelt {g.get('target', 'iron')} {_required_positive_int(g, 'count')}",
+        'fishing':  lambda g: f"fish catches {_required_positive_int(g, 'catches')}",
+        'chopping': lambda g: f"chop logs {_required_positive_int(g, 'logs')}",
+        'mining':   lambda g: f"mine {g['target']} {_required_positive_int(g, 'count')}",
+        'smelting': lambda g: f"smelt {g['target']} {_required_positive_int(g, 'count')}",
         'hunting':  lambda g: f"hunt count {_required_positive_int(g, 'count')}",
         'getfood':  lambda g: f"getfood count {_required_positive_int(g, 'count')}",
     }
@@ -423,6 +424,20 @@ _last_provider_pause_reason: str | None = None
 _recent_stuck_events: deque[dict] = deque(maxlen=8)
 _latest_state: dict = {}
 
+_RECOVERY_SUPPRESSED_EVENTS = {
+    "food_low", "inventory_full", "tool_low_durability", "craft_decision", "tick",
+}
+
+
+def _should_suppress_automatic_event(event_type: str) -> bool:
+    """Do not let monitors replace a plan while supervised recovery owns it."""
+    if event_type in _RECOVERY_SUPPRESSED_EVENTS and (recovery.busy or recovery.held):
+        return True
+    if event_type != "food_low" or not executor.is_running():
+        return False
+    task = task_memory.load_any() or {}
+    return task.get("status") == "interrupted" and task.get("interruptedBy") == "food_low"
+
 _EXPECTED_ACTIVITY = {
     "mine": "mining",
     "chop": "chopping",
@@ -464,13 +479,31 @@ def _save_current_task_to_memory(state: dict) -> None:
     goal = top.get("goal", {})
     progress = top.get("progress", {})
 
+    def _remaining(g: dict, p: dict, goal_key: str, progress_key: str) -> int:
+        target = g.get(goal_key)
+        if isinstance(target, bool) or not isinstance(target, (int, float)) or target <= 0:
+            raise ValueError(f"missing or invalid {goal_key}")
+        completed = p.get(progress_key, 0)
+        if isinstance(completed, bool) or not isinstance(completed, (int, float)):
+            completed = 0
+        remaining = int(target) - max(0, int(completed))
+        if remaining <= 0:
+            raise ValueError("activity goal is already complete")
+        return remaining
+
+    def _target(g: dict) -> str:
+        target = g.get("target")
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError("missing target")
+        return target.strip()
+
     resume_cmd_map = {
-        "fishing":  lambda g, p: f"fish catches {max(1, g.get('catches',0) - p.get('catches',0))}",
-        "chopping": lambda g, p: f"chop logs {max(1, g.get('logs',0) - p.get('logs',0))}",
-        "mining":   lambda g, p: f"mine {g.get('target','iron')} {max(1, g.get('count',0) - p.get('count',0))}",
-        "smelting": lambda g, p: f"smelt {g.get('target','iron')} {max(1, g.get('count',0) - p.get('smelted',0))}",
-        "hunting":  lambda g, p: f"hunt count {max(1, g.get('count',0) - p.get('count',0))}",
-        "getfood":  lambda g, p: f"getfood count {max(1, g.get('count',0) - p.get('count',0))}",
+        "fishing":  lambda g, p: f"fish catches {_remaining(g, p, 'catches', 'catches')}",
+        "chopping": lambda g, p: f"chop logs {_remaining(g, p, 'logs', 'logs')}",
+        "mining":   lambda g, p: f"mine {_target(g)} {_remaining(g, p, 'count', 'count')}",
+        "smelting": lambda g, p: f"smelt {_target(g)} {_remaining(g, p, 'count', 'smelted')}",
+        "hunting":  lambda g, p: f"hunt count {_remaining(g, p, 'count', 'count')}",
+        "getfood":  lambda g, p: f"getfood count {_remaining(g, p, 'count', 'count')}",
     }
 
     resume_fn = resume_cmd_map.get(activity)
@@ -1177,6 +1210,13 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
     global _coordinator_poll_running
     global _last_self_task_fingerprint
     global _last_provider_pause_reason
+    if _should_suppress_automatic_event(event_type):
+        if event_type != "tick":
+            print(
+                f"[Agent] 忽略重複 {event_type}："
+                f"supervision={recovery.phase}，目前補救流程尚未產生新狀態"
+            )
+        return
     _thinking.add(event_type)
     _lock_acquired = False
     request_revision = recovery.revision
@@ -1460,9 +1500,11 @@ async def run():
     _is_coord      = os.environ.get("COORDINATOR_BOT", "false")
     _provider      = os.environ.get("LLM_PROVIDER", "codex")
     _model         = os.environ.get("LLM_MODEL") or "default"
+    _reasoning     = getattr(llm, "default_reasoning_effort", "provider-default")
     print(
         f"[Agent] 啟動 BOT_ID={BOT_ID} | WS={WS_URL} | MC_USERNAME={_mc_username} | "
         f"CLI_AGENT={_provider}/{_model} | CLI_TIMEOUT={getattr(llm, 'timeout', 120)}s | "
+        f"CLI_REASONING={_reasoning} | "
         f"CLI_SESSION={'reuse' if getattr(llm, 'session_reuse', True) else 'fresh'} | "
         f"BOT_USERNAMES={_bot_usernames} | "
         f"STRICT_CHAT={_strict_chat} | COORDINATOR={_is_coord}"

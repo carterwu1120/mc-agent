@@ -57,6 +57,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=SYSTEM_PROMPT,
+            reasoning_effort="low",
         )
         import re
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()

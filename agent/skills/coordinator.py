@@ -116,7 +116,11 @@ async def handle(state: dict, llm: LLMClient, request: str) -> list | None:
     log_prompt("Coordinator", prompt)
 
     try:
-        response = await llm.chat([{"role": "user", "content": prompt}], system=SYSTEM_PROMPT)
+        response = await llm.chat(
+            [{"role": "user", "content": prompt}],
+            system=SYSTEM_PROMPT,
+            reasoning_effort="medium",
+        )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
         decision = json.loads(clean)

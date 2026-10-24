@@ -78,8 +78,8 @@ function init(bot, onAction) {
 }
 
 function sendState(bot, type, extra = {}) {
-    if (!execution.isCurrent()) return
-    if (!agentSocket || agentSocket.readyState !== 1) return
+    if (!execution.isCurrent()) return false
+    if (!agentSocket || agentSocket.readyState !== 1) return false
     const state = {
         type,
         command_id: execution.commandId(),
@@ -121,6 +121,7 @@ function sendState(bot, type, extra = {}) {
         ...extra,
     }
     agentSocket.send(JSON.stringify(state))
+    return true
 }
 
 function sendActivityDone(bot, activityName, extra = {}) {

@@ -39,8 +39,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 
 【工具鏈推理】
 收到需求前先檢查背包，確認缺什麼才加對應步驟：
-- 缺鐵鎬（iron_pickaxe）→ mine iron 16 → smelt iron 16 → equip
-- 缺石鎬（stone_pickaxe）→ mine stone 16 → equip
+- 缺工具時，先依配方、現有材料與主任務需求精算缺口，只取得足以完成工具與合理緩衝的材料
 - 缺食物 → 先依飢餓、熟食庫存與下一個任務風險決定需要多少；沒有固定數量
 - `getfood count <n>` 只會處理背包已有的生食，不能取得生食
 - raw_total 足夠目標數量時，才可直接 getfood
@@ -48,8 +47,8 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 - 只有背包已有 fishing_rod 時才可 fish，之後再 getfood
 - 每個 hunt / fish / getfood 都必須帶明確的正整數數量
 - 飢餓值接近 20、沒有玩家任務且沒有近期高風險計畫時，熟食為 0 本身不構成危機，可以 idle
-- 缺木材（logs < 16）→ chop logs 32
-- 有大量原礦未冶煉（raw_iron > 16）→ smelt iron <count>
+- 木材少本身不是任務；只有目前目標確實需要木材時才 chop，數量由實際材料缺口決定
+- 原礦未冶煉本身不是任務；只有裝備、工具或玩家目標需要成品時才 smelt 實際需要的數量
 
 【中途補料原則】
 計畫執行到一半需要插入 smelt 或 craft 步驟時：
@@ -252,6 +251,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             response = await llm.chat(
                 [{"role": "user", "content": request_prompt}],
                 system=SYSTEM_PROMPT,
+                reasoning_effort="low",
             )
             clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
             clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()

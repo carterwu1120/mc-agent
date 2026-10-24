@@ -23,7 +23,13 @@ SYSTEM = """你是 Minecraft 任務恢復規劃者。舊動作已中斷，舊 st
 async def handle(state, llm):
     context = {k: state.get(k) for k in ("reason", "detail", "goal", "progress", "plan_context", "stack",
                "navigation", "progress_evidence", "recovery_history", "decision_error") if state.get(k) is not None}
-    response = await llm.chat([{"role": "user", "content": summary_json(state) + "\n" + json.dumps(context, ensure_ascii=False)}], system=SYSTEM)
+    recovery_history = state.get("recovery_history") or []
+    effort = "high" if len(recovery_history) >= 2 or state.get("decision_error") else "medium"
+    response = await llm.chat(
+        [{"role": "user", "content": summary_json(state) + "\n" + json.dumps(context, ensure_ascii=False)}],
+        system=SYSTEM,
+        reasoning_effort=effort,
+    )
     result = parse_json_with_repair(response)
     if not isinstance(result, dict):
         raise ValueError("decision must be an object")

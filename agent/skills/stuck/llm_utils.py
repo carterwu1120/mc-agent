@@ -107,6 +107,7 @@ async def reprompt_invalid_replan(
         response = await llm.chat(
             [{"role": "user", "content": reprompt}],
             system=system,
+            reasoning_effort="high",
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
@@ -150,6 +151,7 @@ async def reprompt_for_replan_strategy(
         response = await llm.chat(
             [{"role": "user", "content": reprompt}],
             system=system,
+            reasoning_effort="high",
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()

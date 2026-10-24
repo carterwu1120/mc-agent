@@ -12,12 +12,10 @@ def normalize_decision(
     missing_count: int | None,
     decision: dict,
 ) -> dict:
-    if decision.get("command") == "chop" and "goal" not in decision and "args" not in decision:
-        if activity == "smelting" and reason == "missing_dependency":
-            if needed_for == "pickaxe" or any(m in ("wood", "crafting_material", "stick") for m in missing):
-                decision = {**decision, "goal": {"logs": 4}}
     if activity == "smelting" and reason == "missing_dependency" and "cobblestone" in missing:
-        desired_count = str(missing_count or 8)
+        if not isinstance(missing_count, int) or isinstance(missing_count, bool) or missing_count <= 0:
+            return decision
+        desired_count = str(missing_count)
         args = decision.get("args")
         if decision.get("command") == "mine":
             if not args:

@@ -3,7 +3,6 @@ const { getActivity } = require('./activity')
 
 const FOOD_THRESHOLD = 18     // 食物低於此值就吃東西
 const FOOD_LOW_THRESHOLD = 10 // 食物低於此值且無食物時發送 food_low 事件
-const FOOD_LOW_COOLDOWN = 30000
 const EAT_DEFER_ACTIVITIES = new Set([
     'hunting',
     'combat',
@@ -32,7 +31,7 @@ const FOOD_ITEMS = new Set([
 
 let _isEating = false
 let _lastEatTime = 0
-let _lastFoodLowTime = 0
+let _lastFoodLowSignature = null
 let _lastNoFoodLogTime = 0
 const EAT_COOLDOWN = 4000  // 吃完後 4 秒內不再觸發
 const NO_FOOD_LOG_COOLDOWN = 60000
@@ -121,13 +120,27 @@ async function _tryEat(bot) {
 function _checkFoodLow(bot) {
     const foodLevel = _foodLevel(bot)
     if (foodLevel === null) return
-    if (foodLevel >= FOOD_LOW_THRESHOLD) return
-    if (Date.now() - _lastFoodLowTime < FOOD_LOW_COOLDOWN) return
+    if (foodLevel >= FOOD_LOW_THRESHOLD) {
+        _lastFoodLowSignature = null
+        return
+    }
     const hasFood = bot.inventory.items().some(i => FOOD_ITEMS.has(i.name))
-    if (hasFood) return
-    _lastFoodLowTime = Date.now()
+    if (hasFood) {
+        _lastFoodLowSignature = null
+        return
+    }
+    // Edge-trigger the event. Re-emitting the same unchanged state used to
+    // restart the same explore/hunt plan after it had already failed.
+    const signature = String(foodLevel)
+    if (_lastFoodLowSignature === signature) return
+    const delivered = bridge.sendState(bot, 'food_low')
+    if (!delivered) return
+    _lastFoodLowSignature = signature
     console.log(`[Eat] 食物不足（${foodLevel}/20），背包無食物 → food_low`)
-    bridge.sendState(bot, 'food_low')
+}
+
+function _resetFoodLowStateForTest() {
+    _lastFoodLowSignature = null
 }
 
 function startMonitor(bot) {
@@ -164,4 +177,10 @@ function isEating() {
     return _isEating
 }
 
-module.exports = { startMonitor, isEating, RAW_FOOD_ITEMS }
+module.exports = {
+    startMonitor,
+    isEating,
+    RAW_FOOD_ITEMS,
+    _checkFoodLow,
+    _resetFoodLowStateForTest,
+}

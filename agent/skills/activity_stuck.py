@@ -15,38 +15,8 @@ from agent.skills.stuck import mining as mining_stuck
 from agent.skills.stuck import prompt_builder
 from agent.skills.stuck import prompts as stuck_prompts
 from agent.skills.stuck import smelting as smelting_stuck
-from agent.skills.state_summary import RAW_FOOD_ITEMS
 
 ALLOWED_COMMANDS = decision_utils.ALLOWED_ACTIVITY_STUCK_COMMANDS
-
-_COOKED_FOOD_ITEMS = {
-    "cooked_beef", "cooked_porkchop", "cooked_chicken", "cooked_mutton",
-    "cooked_rabbit", "cooked_cod", "cooked_salmon", "baked_potato", "bread",
-}
-_ALL_FOOD_ITEMS = RAW_FOOD_ITEMS | _COOKED_FOOD_ITEMS
-
-def _food_emergency(state: dict) -> list[dict] | None:
-    """Return a getfood replan if food is critically low and bot has no food at all."""
-    food = state.get("food")
-    if food is None or int(food) > 6:
-        return None
-    inventory = state.get("inventory") or []
-    has_food = any(i.get("name") in _ALL_FOOD_ITEMS for i in inventory)
-    if has_food:
-        return None
-    activity = state.get("activity_name", state.get("activity", "unknown"))
-    if activity in ("getfood", "hunting", "fishing"):
-        return None
-    plan_context = state.get("plan_context") or {}
-    pending = list(plan_context.get("pending_steps") or [])
-    current_cmd = (plan_context.get("current_cmd") or "").strip()
-    resume = ([current_cmd] if current_cmd else []) + pending
-    cmds = ["getfood count 4", *resume] if resume else ["getfood count 4"]
-    print(f"[Skill/activity_stuck] 食物緊急（{food}/20）且無食物存糧，優先插入 getfood")
-    return [
-        {"command": "chat", "text": f"食物只剩 {food}/20 且背包無食物，緊急補充食物後再繼續"},
-        {"action": "replan", "commands": cmds},
-    ]
 
 # ── Rule table: (child_activity, parent_activity) pairs where skip is forbidden ──
 # Skipping the child would make the parent's goal impossible to achieve.
@@ -207,10 +177,6 @@ def _deterministic_shortcut(state: dict, plan_context: dict | None) -> list[dict
     pos = state.get("pos") or {}
     y = round(pos.get("y", 0))
 
-    emergency = _food_emergency(state)
-    if emergency:
-        return _tag_path(emergency, 'deterministic')
-
     if _looks_like_getfood_subflow(activity, reason, plan_context):
         shortcut = smelting_stuck.deterministic_shortcut(state, plan_context, _build_getfood_replan_from_smelting)
         if shortcut:
@@ -365,9 +331,12 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     try:
         log_prompt("Skill/activity_stuck", prompt)
         t0 = time.monotonic()
+        recovery_history = state.get("recovery_history") or []
+        effort = "high" if len(recovery_history) >= 2 or state.get("decision_error") else "medium"
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=system,
+            reasoning_effort=effort,
         )
         _latency_ms = int((time.monotonic() - t0) * 1000)
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()

@@ -43,6 +43,49 @@ def test_final_decision_and_stdin(monkeypatch, provider):
     assert "挖鐵" in seen["process"].communicate.call_args.args[0].decode()
     assert all("挖鐵" not in arg for arg in seen["args"])
     assert not Path(seen["kwargs"]["cwd"]).exists()
+    if provider == "codex":
+        configs = [
+            seen["args"][index + 1]
+            for index, arg in enumerate(seen["args"])
+            if arg == "-c"
+        ]
+        assert 'model_reasoning_effort="low"' in configs
+
+
+def test_codex_accepts_per_request_reasoning_effort(monkeypatch):
+    seen = {}
+
+    async def spawn(*args, **kwargs):
+        seen["args"] = args
+        Path(args[args.index("--output-last-message") + 1]).write_text(
+            '{"action":"wait"}', encoding="utf-8"
+        )
+        process = AsyncMock()
+        process.returncode = 0
+        process.communicate.return_value = (b"", b"")
+        return process
+
+    monkeypatch.setenv("CLI_SESSION_REUSE", "false")
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+    result = asyncio.run(
+        CLIAgentClient("codex").chat([], reasoning_effort="medium")
+    )
+
+    assert result == '{"action":"wait"}'
+    configs = [
+        seen["args"][index + 1]
+        for index, arg in enumerate(seen["args"])
+        if arg == "-c"
+    ]
+    assert 'model_reasoning_effort="medium"' in configs
+
+
+def test_invalid_default_reasoning_effort_is_rejected(monkeypatch):
+    monkeypatch.setenv("CLI_REASONING_EFFORT_DEFAULT", "light")
+    with pytest.raises(ValueError, match="reasoning effort"):
+        CLIAgentClient("codex")
 
 
 def test_codex_reuses_persisted_session(monkeypatch, tmp_path):

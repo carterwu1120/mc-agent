@@ -9,8 +9,12 @@ class FakeLLM:
         self.response = json.dumps(response, ensure_ascii=False)
         self.calls = []
 
-    async def chat(self, messages, system=None):
-        self.calls.append({"messages": messages, "system": system})
+    async def chat(self, messages, system=None, reasoning_effort=None):
+        self.calls.append({
+            "messages": messages,
+            "system": system,
+            "reasoning_effort": reasoning_effort,
+        })
         return self.response
 
 

@@ -85,6 +85,7 @@ BOT_WS_URL=ws://localhost:3001
 LLM_PROVIDER=codex
 LLM_MODEL=
 CLI_AGENT_TIMEOUT=120
+CLI_REASONING_EFFORT_DEFAULT=low
 CLI_SESSION_REUSE=true
 AGENT_LOG_PROMPTS=false
 AGENT_LOG_TICKS=false
@@ -145,6 +146,8 @@ python -m agent.agent
 The CLI uses its subscription login and built-in default model. `LLM_MODEL` can
 override the model. Optional `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` selects an
 executable (not a shell command); `CLI_AGENT_TIMEOUT` defaults to 120 seconds.
+Routine requests default to `CLI_REASONING_EFFORT_DEFAULT=low`; planning and
+recovery skills raise individual calls to `medium` or `high` when needed.
 `CLI_SESSION_REUSE=true` resumes one provider conversation within a task. The
 session identifier and counters are stored in `BOT_DATA_DIR/cli_session.json`,
 so they survive an agent container recreation. A completed task starts a fresh
@@ -293,6 +296,7 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 | `LLM_PROVIDER` | `codex` | `codex` or `claude`; restart after changing |
 | `LLM_MODEL` | CLI default | Optional model supported by your subscription |
 | `CLI_AGENT_TIMEOUT` | `120` | Maximum seconds per CLI call |
+| `CLI_REASONING_EFFORT_DEFAULT` | `low` | Default Codex reasoning effort; complex skills override per request |
 | `CLI_SESSION_REUSE` | `true` | Resume one Codex/Claude conversation per bot and persist its ID in `BOT_DATA_DIR` |
 | `CLI_SESSION_MAX_TURNS` | `8` | Rotate a reused CLI session after this many successful model turns |
 | `CLI_SESSION_MAX_INPUT_TOKENS` | `200000` | Rotate when cumulative session input reaches this threshold |
