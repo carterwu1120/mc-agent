@@ -223,7 +223,9 @@ async function ensureAxe(bot)                      { return _ensureTool(bot, '_a
 async function ensurePickaxe(bot)                  { return _ensureTool(bot, '_pickaxe') }
 async function ensureShovel(bot)                   { return _ensureTool(bot, '_shovel') }
 async function ensureSword(bot)                    { return _ensureTool(bot, '_sword', null, true) }
-async function ensurePickaxeTier(bot, minTier)     { return _ensureTool(bot, '_pickaxe', minTier) }
+async function ensurePickaxeTier(bot, minTier, autoChoose = false, allowCraft = true) {
+    return _ensureTool(bot, '_pickaxe', minTier, autoChoose, allowCraft)
+}
 
 const _BLOCK_TOOL = [
     ['_shovel',  ['dirt', 'sand', 'gravel', 'grass_block', 'podzol']],

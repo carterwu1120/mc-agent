@@ -8,6 +8,23 @@ The local test environment uses **Minecraft Java Edition 1.20.1 + Java 17**.
 Start a dedicated test server as described below, or open a single-player world to LAN.
 See the [local testing guide](docs/local-testing.md) for connection troubleshooting and navigation/recovery checks (in Chinese).
 
+### Mining checkpoints
+
+For explicit goals such as `mine diamond 10`, task context retains the original
+inventory baseline and requested quantity across recovery plans. Completion requires
+the requested net inventory increase; finishing a prerequisite plan is not success.
+This first version recognizes exact `mine <resource> <count>` task goals. Depositing
+or consuming the target item reduces measured progress; it is not a lifetime pickup ledger.
+
+Named mining tasks pursue the requested ore only. Missing tools yield a decision;
+the planner can call `preparetool iron_pickaxe` after gathering/smelting materials.
+`equip` only equips owned gear. Mining reports `mining_progress` on phase changes
+and `mining_decision` with inventory/position deltas at a checkpoint or blockage.
+`MINING_SEGMENT_SECONDS` defaults to 60: it is checked between loop iterations,
+not a hard cancellation deadline. Each checkpoint can require an LLM decision,
+so shorter budgets increase latency and model usage. Existing watchdogs still
+bound stalled operations. Rebuild bot and agent images to activate these changes.
+
 ## Local Development
 
 ### Dedicated local test server (Vanilla 1.20.1)

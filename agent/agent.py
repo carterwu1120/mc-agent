@@ -113,7 +113,9 @@ async def _handle_recovery(state: dict, ws) -> None:
     task = task_memory.load() or {}
     steps = task.get('steps') or []
     idx = task.get('currentStep', 0)
+    from agent.mining_objective import progress as objective_progress
     state = {**state, 'plan_context': {
+        'objective': objective_progress((task.get('context') or {}).get('objective'), state),
         'goal': task.get('goal') or state.get('goal'),
         'current_cmd': steps[idx]['cmd'] if idx < len(steps) else None,
         'done_steps': [s['cmd'] for s in steps if s.get('status') == 'done'],
@@ -133,7 +135,8 @@ async def _handle_recovery(state: dict, ws) -> None:
         else:
             executor.claim()
             _launch_plan(result['commands'], ws, goal=task.get('goal') or '恢復中斷活動',
-                         final_goal=task.get('finalGoal'), source=task.get('source'), _recovery=True)
+                         final_goal=task.get('final_goal'), source=task.get('source'),
+                         resume_task=True, _recovery=True)
 
     async def blocked(reason):
         waiting_for_food = food_recovery.is_food_recovery_task(task)
@@ -498,6 +501,7 @@ HANDLERS = {
     "inventory_full": inventory_skill.handle,
     "craft_decision": craft_decision_skill.handle,
     "activity_stuck": recovery_skill.handle,
+    "mining_decision": recovery_skill.handle,
     "food_low":       food_skill.handle,
     "tick":           self_task_skill.handle,
     "action_done":    _on_done,
@@ -1325,7 +1329,9 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
     _lock_acquired = False
     request_revision = recovery.revision
     try:
-        if event_type == 'activity_stuck':
+        if event_type in {'activity_stuck', 'mining_decision'}:
+            if event_type == 'mining_decision' and state.get('command_id') != (executor._current_command or {}).get('_command_id'):
+                return
             await _handle_recovery(state, ws)
             return
         if event_type == "tick":

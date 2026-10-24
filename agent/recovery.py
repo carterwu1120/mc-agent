@@ -116,14 +116,17 @@ class RecoverySupervisor:
             now = self.clock()
             while self._episodes and now - self._episodes[0] >= 300:
                 self._episodes.popleft()
-            if len(self._episodes) >= 3:
+            checkpoint = state.get('reason') in {'segment_complete', 'objective_incomplete'}
+            if not checkpoint and len(self._episodes) >= 3:
                 raise RuntimeError("recovery_budget_exhausted")
-            self._episodes.append(now)
+            if not checkpoint:
+                self._episodes.append(now)
             self.phase = "waiting_ai"
             fingerprint = json.dumps({
                 "inventory": sorted((i["name"], i["count"]) for i in state.get("inventory", [])),
                 "goal": (state.get("plan_context") or {}).get("goal"),
                 "reason": state.get("reason"),
+                "checkpoint_position": state.get('pos') if checkpoint else None,
                 "nearby": state.get("nearby") or {},
                 "navigation": {
                     key: (state.get("navigation") or {}).get(key)

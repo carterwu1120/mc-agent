@@ -13,6 +13,10 @@ const { applyMovements } = require('./movement_prefs')
 const navigation = require('./navigation')
 const { AsyncLocalStorage } = require('node:async_hooks')
 const loopContext = new AsyncLocalStorage()
+const miningPhase = require('./mining_phase')
+const configuredSegmentMs = Number(process.env.MINING_SEGMENT_SECONDS || 60) * 1000
+const segmentMs = Number.isFinite(configuredSegmentMs) && configuredSegmentMs > 0 ? configuredSegmentMs : 60000
+let _inventoryBaseline = 0
 
 let isMining = false
 let _isPaused = false
@@ -54,6 +58,9 @@ const ORE_MIN_PICKAXE = {
     ancient_debris: 'diamond_pickaxe',
     gold:           'iron_pickaxe',
     iron:           'stone_pickaxe',
+    redstone:       'iron_pickaxe',
+    lapis:          'stone_pickaxe',
+    copper:         'stone_pickaxe',
     // raw_ / _ore aliases
     raw_iron:             'stone_pickaxe',
     iron_ore:             'stone_pickaxe',
@@ -220,6 +227,11 @@ function _sendNoToolsStuck(bot) {
 // 嘗試合成稿子，若失敗才送 stuck。
 // 回傳 true = 有稿子可繼續；false = 已送 stuck，呼叫方應 break。
 async function _ensurePickaxeOrStuck(bot) {
+    if (_currentGoal.target && !_hasPickaxe(bot)) {
+        isMining = false
+        _sendNoToolsStuck(bot)
+        return false
+    }
     if (_hasPickaxe(bot)) return true
     console.log('[Mine] 無稿子，嘗試合成')
     // Crafting can legitimately take longer than the movement no-progress
@@ -342,6 +354,7 @@ async function startMining(bot, goal = {}) {
     if (goal.count !== undefined && !Number.isFinite(goal.count)) delete goal.count
     _currentGoal = goal
     _targetCount = 0
+    _inventoryBaseline = miningPhase.count(bot, goal.target)
     _digFailed.clear()
     _unavailablePickaxe.clear()
     _lavaOres.clear()
@@ -417,6 +430,26 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
     let tunnelFailCount = 0
     let stoneSearchFails = 0
     let stoneRotations = 0
+    const before = miningPhase.snapshot(bot, goal.target)
+    let phase = 'prepare'
+    const yieldDecision = (reason, extra = {}) => {
+        isMining = false
+        bridge.sendState(bot, 'mining_decision', {
+            activity: 'mining', reason,
+            mining_result: { ...miningPhase.result(bot, goal, before, phase, reason),
+                observations: { lava_adjacent_ores: [..._lavaOres].slice(-8),
+                    failed_targets: [..._digFailed].slice(-8),
+                    missing_tools: [..._unavailablePickaxe] }, ...extra },
+        })
+    }
+    // A named resource task does not secretly craft or pursue prerequisite ores.
+    const tiers = ['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']
+    const required = ORE_MIN_PICKAXE[goal.target] || 'wooden_pickaxe'
+    if (goal.target && !bot.inventory.items().some(i => tiers.indexOf(i.name) >= tiers.indexOf(required))) {
+        yieldDecision('no_tools', { required_tool: required, ..._buildNoToolsState(bot) })
+        if (activityStack.isTopActivity('mining')) activityStack.pop(bot)
+        return
+    }
 
     // 每次進入 loop（包含 resume 後）先嘗試合成稿子
     if (!_hasPickaxe(bot)) {
@@ -449,6 +482,23 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
     }
 
     while (!_shouldAbort(_myGen)) {
+        if (goal.target && !bot.inventory.items().some(i => tiers.indexOf(i.name) >= tiers.indexOf(required))) {
+            yieldDecision('no_tools', { required_tool: required })
+            break
+        }
+        _targetCount = Math.max(0, miningPhase.count(bot, goal.target) - _inventoryBaseline)
+        activityStack.updateProgress({ count: _targetCount })
+        const nextPhase = bestY !== null && bot.entity.position.y > bestY + 1 ? 'descending' : 'collecting'
+        if (nextPhase !== phase) {
+            phase = nextPhase
+            bridge.sendState(bot, 'mining_progress', {
+                activity: 'mining', phase, target: goal.target, acquired: _targetCount,
+            })
+        }
+        if (goal.target && (!goal.count || _targetCount < goal.count) && Date.now() - startTime >= segmentMs) {
+            yieldDecision('segment_complete')
+            break
+        }
         _rememberResumePos(bot)
         if (eating.isEating()) {
             await _sleep(250)
@@ -504,7 +554,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                         continue
                     }
                     activityStack.touch('mining', 'stone_target')
-                    const ok = await ensureToolFor(bot, 'stone')
+                    const ok = await ensureToolFor(bot, 'stone', false)
                     if (!ok) {
                         console.log('[Mine] 無法取得稿子，停止並請求決策')
                         isMining = false
@@ -585,7 +635,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                         continue
                     }
                     activityStack.touch('mining', 'stone_target')
-                    const ok = await ensureToolFor(bot, 'stone')
+                    const ok = await ensureToolFor(bot, 'stone', false)
                     if (!ok) {
                         isMining = false
                         _sendNoToolsStuck(bot)
@@ -667,8 +717,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                     descentRotations = 0
                     if (descentHardFails >= 2) {
                         console.log('[Mine] 多次無法下潛，停止')
-                        isMining = false
-                        bridge.sendState(bot, 'activity_stuck', { activity: 'mining', reason: 'no_blocks' })
+                        yieldDecision('no_safe_route', { attempts: { descent_rotations: 4, escape_attempts: descentHardFails }, navigation: navigation.lastResult(bot) })
                         break
                     }
                     const digY = Math.min(2, Math.floor(bot.entity.position.y) - bestY)
@@ -683,7 +732,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
             }
 
             // 順手：挖階梯時旁邊看到的礦（8 格內）
-            const nearbyOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 8, count: 20 })
+            const nearbyOres = bot.findBlocks({ matching: b => miningPhase.matches(b.name, goal.target), maxDistance: 8, count: 20 })
                 .filter(p => _isExposed(bot, p))
                 .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
 
@@ -708,7 +757,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                         continue
                     }
                     const required = _requiredPickaxe(fresh.name)
-                    const ok = await ensurePickaxeTier(bot, required)
+                    const ok = await ensurePickaxeTier(bot, required, false, !goal.target)
                     if (_shouldAbort(_myGen)) return
                     if (!ok) continue
                     await _dig(bot, fresh)
@@ -728,7 +777,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
 
         } else if (!needAscend) {
             // 已到目標深度：找附近礦石挖（嚴格限制在 bestY ±1），沒有就挖隧道
-            const allExposed = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 16, count: 50 })
+            const allExposed = bot.findBlocks({ matching: b => miningPhase.matches(b.name, goal.target), maxDistance: 16, count: 50 })
                 .filter(p => {
                     if (!_isExposed(bot, p)) return false
                     const blockName = bot.blockAt(p)?.name
@@ -793,7 +842,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
 
                 try {
                     const required = _requiredPickaxe(fresh.name)
-                    const ok = await ensurePickaxeTier(bot, required)
+                    const ok = await ensurePickaxeTier(bot, required, false, !goal.target)
                     if (_shouldAbort(_myGen)) return
                     if (!ok) {
                         console.log(`[Mine] 材料不足無法取得 ${required}，跳過需要它的礦`)
@@ -828,7 +877,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
 
             } else {
                 // 先嘗試沿洞穴導航到更遠的礦石（不限 Y），讓 pathfinder 自然走進洞穴
-                const wideOres = bot.findBlocks({ matching: b => b.name.endsWith('_ore') && ![...SKIP_ORES].some(s => b.name.includes(s)), maxDistance: 32, count: 20 })
+                const wideOres = bot.findBlocks({ matching: b => miningPhase.matches(b.name, goal.target), maxDistance: 32, count: 20 })
                     .filter(p => _isExposed(bot, p))
                     .filter(p => !_isNearWaterHazard(p))
                     .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
@@ -852,7 +901,8 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                         if (freshWide && freshWide.name.endsWith('_ore') && !_hasAdjacentLava(bot, freshWide.position)) {
                             try {
                                 const required = _requiredPickaxe(freshWide.name)
-                                await ensurePickaxeTier(bot, required)
+                                const ready = await ensurePickaxeTier(bot, required, false, !goal.target)
+                                if (!ready) { _unavailablePickaxe.add(required); _digFailed.add(wp.toString()); continue }
                                 if (_shouldAbort(_myGen)) return
                                 await _dig(bot, freshWide)
                                 if (_shouldAbort(_myGen)) return

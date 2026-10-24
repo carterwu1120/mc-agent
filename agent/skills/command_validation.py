@@ -65,6 +65,11 @@ def validate_command(command: str, allowed_commands: set[str] | None = None) -> 
             return "`mine` 格式應為 `mine <ore> <count>`，且 count 必須是正整數"
         return None
 
+    if name == 'preparetool':
+        return None if len(args) == 1 and args[0] in {
+            'wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'
+        } else 'preparetool 必須指定有效的稿子等級'
+
     if name == "chop":
         if len(args) != 2 or args[0] != "logs" or not _is_positive_int(args[1]):
             return "`chop` 格式應為 `chop logs <count>`"

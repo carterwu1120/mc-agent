@@ -368,6 +368,20 @@ function dispatch(bot, msg) {
             break
         }
 
+        case 'preparetool':
+            ;(async () => {
+                const required = msg.args?.[0]
+                try {
+                    if (!['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'].includes(required)) throw new Error('invalid_tool')
+                    const ok = await require('./crafting').ensurePickaxeTier(bot, required, true)
+                    if (!ok) throw new Error('insufficient_materials')
+                    bridge.sendState(bot, 'action_done', { prepared_tool: required })
+                } catch (error) {
+                    bridge.sendState(bot, 'activity_stuck', { reason: 'tool_preparation_failed', detail: error.message, required_tool: required })
+                }
+            })()
+            break
+
         case 'equip':
             ;(async () => {
                 const target = msg.args?.[0]

@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from agent import task_memory
+from agent import mining_objective
 from agent.logger import get_task_id
 from agent.plan_utils import normalize_commands
 
@@ -354,13 +355,22 @@ class PlanExecutor:
         self._plan_start_state = dict(self._latest_state)
 
         if resume_task:
-            task_memory.resume_interrupted(commands if commands else None, goal=goal or None)
+            resumed = task_memory.resume_interrupted(commands if commands else None, goal=goal or None)
+            if resumed:
+                commands = resumed['commands']
         elif goal and not preserve_task:
             task_memory.save(goal, commands, final_goal=final_goal, source=source, reason=reason, task_id=task_id)
 
+        if not preserve_task:
+            task = task_memory.load() or {}
+            if not (task.get('context') or {}).get('objective'):
+                objective = mining_objective.create(task.get('goal') or goal, self._latest_state)
+                if objective:
+                    task_memory.update_context({'objective': objective})
+
         print(f'[Executor] 開始執行計畫：{commands}')
 
-        i = 0
+        i = (resumed.get('currentStep', 0) if resume_task and resumed else 0)
         while i < len(commands):
             if not self._running:
                 print('[Executor] 計畫已中止')
@@ -370,6 +380,15 @@ class PlanExecutor:
                 break
 
             cmd_str = _substitute(commands[i], self._context)
+            task = task_memory.load() if not preserve_task else None
+            measured = mining_objective.progress(((task or {}).get('context') or {}).get('objective'), self._latest_state)
+            parts = cmd_str.split()
+            if measured and len(parts) == 3 and parts[:2] == ['mine', measured['target']]:
+                if not measured['remaining']:
+                    task_memory.mark_step_done(i)
+                    i += 1
+                    continue
+                cmd_str = f"mine {measured['target']} {measured['remaining']}"
 
             if preserve_task and cmd_str.strip() == 'resumetask':
                 # Unlock the JS-side _waitForDecision before resuming the original task.
@@ -465,6 +484,8 @@ class PlanExecutor:
                     elapsed_command = now - self._command_sent_at
                     long_running = msg['command'] in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface', 'explore'}
                     limit = ACTIVITY_START_TIMEOUT if long_running else ACTION_TIMEOUT
+                    if msg['command'] == 'preparetool':
+                        limit = 120.0
                     if elapsed_command > limit and (not long_running or self._latest_state.get('activity', 'idle') == 'idle'):
                         await self._request_recovery('unexpected_idle' if long_running else 'action_timeout', ws)
                         if self._run_id != my_run_id:
@@ -599,7 +620,19 @@ class PlanExecutor:
         if self._running and not preserve_task:
             task = task_memory.load()
             if task and task.get('status') == 'running':
-                goal_warning = _verify_goal(commands, self._plan_start_state, self._latest_state)
+                objective = (task.get('context') or {}).get('objective')
+                measured = mining_objective.progress(objective, self._latest_state)
+                if objective:
+                    goal_warning = ('無法觀測目標庫存' if measured is None else
+                                    f"原目標尚缺 {measured['remaining']} {objective['item']}"
+                                    if measured['remaining'] else None)
+                    if goal_warning:
+                        task_memory.record_event('goal_verification_failed', reason=goal_warning)
+                        self.abort(preserve_task=True, reason='objective_incomplete')
+                        await self._request_recovery('objective_incomplete', ws)
+                        return
+                else:
+                    goal_warning = _verify_goal(commands, self._plan_start_state, self._latest_state)
                 if goal_warning and not _goal_retry:
                     remediation = _build_goal_remediation(commands, self._plan_start_state, self._latest_state)
                     if remediation:
@@ -642,7 +675,7 @@ class PlanExecutor:
         immediate_commands = {
             *_STOP_COMMANDS,
             'home', 'back', 'sethome', 'equip', 'unequip', 'deposit', 'withdraw', 'readchest', 'setchest', 'labelchest',
-            'makechest', 'chat', 'setmode', 'resumetask', 'tp',
+            'makechest', 'chat', 'setmode', 'resumetask', 'tp', 'preparetool',
         }
         if event_type == 'action_done':
             if command in immediate_commands:

@@ -11,6 +11,9 @@ from agent.plan_utils import normalize_commands
 ALLOWED = PLAN_ALLOWED_COMMANDS - {"resumetask", "come", "look"}
 SYSTEM = """你是 Minecraft 任務恢復規劃者。舊動作已中斷，舊 stack 不會自動恢復。
 依現況選擇可執行的短期策略，保留原任務目標與必要的剩餘步驟，扣除已取得的數量。
+plan_context.objective 是獨立保存的主任務。若存在，可只規劃下一段前置任務；
+執行器會依原始庫存與目標數量驗收，不需反覆追加完整原指令。
+mining_result 是實際階段結果；缺少工具先規劃工具，岩漿/失敗路徑應換策略。
 腳本不能做到的事要坦白說明；不可只重送已失敗策略或跳過必要前置條件假裝完成。
 只能輸出 JSON，以下二選一：
 {"action":"replan","commands":["..."],"expected_outcome":"可觀察的結果，例如新增 8 個圓石","text":"策略理由"}
@@ -23,6 +26,8 @@ SYSTEM = """你是 Minecraft 任務恢復規劃者。舊動作已中斷，舊 st
 def _restore_remaining_goal(commands: list[str], plan_context: dict | None) -> list[str]:
     """A replan may add prerequisites, but must not silently drop the goal."""
     context = plan_context or {}
+    if context.get('objective'):
+        return commands
     current_cmd = str(context.get('current_cmd') or '').strip()
     required = ([current_cmd] if current_cmd else []) + list(context.get('pending_steps') or [])
     if not required:
@@ -36,8 +41,13 @@ def _restore_remaining_goal(commands: list[str], plan_context: dict | None) -> l
 
 
 async def handle(state, llm):
+    from agent.mining_objective import progress
+    plan = dict(state.get('plan_context') or {})
+    if plan.get('objective'):
+        plan['objective'] = progress(plan['objective'], state)
+        state = {**state, 'plan_context': plan}
     context = {k: state.get(k) for k in ("reason", "detail", "goal", "progress", "plan_context", "stack",
-               "navigation", "progress_evidence", "recovery_history", "decision_error") if state.get(k) is not None}
+               "navigation", "progress_evidence", "recovery_history", "decision_error", "mining_result") if state.get(k) is not None}
     recovery_history = state.get("recovery_history") or []
     effort = "high" if len(recovery_history) >= 2 or state.get("decision_error") else "medium"
     response = await llm.chat(

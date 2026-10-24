@@ -22,6 +22,7 @@ test('stack resume replans from the current location; stale mining cannot dig or
         async dig() { this.digs++ },
     }
     const stubs = {
+        './mining_phase': require('../mining_phase'),
         './activity': activity,
         './execution': require('../execution'),
         './crafting': { ensureToolFor: async () => true, ensurePickaxeTier: async () => true, ensurePickaxe: async () => true },
@@ -42,7 +43,7 @@ test('stack resume replans from the current location; stale mining cannot dig or
     vm.runInNewContext(fs.readFileSync(require.resolve('../mining'), 'utf8'), {
         module, exports: module.exports,
         require: name => stubs[name] || require(name),
-        console: { log() {} }, setTimeout, clearTimeout,
+        console: { log() {} }, process, setTimeout, clearTimeout,
     }, { filename: 'mining.js' })
     const mining = module.exports
     const flush = () => new Promise(resolve => setImmediate(resolve))
