@@ -159,6 +159,23 @@ def test_unexpected_idle_only_when_there_is_unfinished_work():
     assert r.unexpected_idle(state, task) is None
 
 
+def test_waiting_for_change_is_held_until_explicitly_released():
+    r = RecoverySupervisor()
+    snapshot = {"food_level": 9, "near_animals": False}
+
+    r.hold_for_change("food", snapshot, "沒有食物來源")
+
+    assert r.held
+    assert r.status()["phase"] == "waiting_for_change"
+    assert r.status()["waiting_for"] == "food"
+    assert r.wait_snapshot == snapshot
+
+    r.release_change_wait()
+    assert not r.held
+    assert r.status()["phase"] == "executing"
+    assert r.wait_snapshot is None
+
+
 @pytest.mark.parametrize("response", [None, {"command": "chat", "text": "thinking"},
     {"action": "replan", "commands": ["equip"], "text": "empty after normalization", "expected_outcome": "equipment"},
     {"action": "replan", "commands": ["mine iron"], "text": "bad", "expected_outcome": "iron"},

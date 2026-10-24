@@ -32,7 +32,7 @@ def _build_food_plan(state: dict) -> tuple[list[str], int]:
     if 'fishing_rod' in inventory_names and environment.get('near_water'):
         commands.append(f"fish catches {missing_raw}")
     else:
-        if not environment.get('near_animals'):
+        if not environment.get('has_near_animals'):
             commands.append("explore animals")
         commands.append(f"hunt count {missing_raw}")
     commands.append(f"getfood count {target}")

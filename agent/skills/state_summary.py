@@ -285,6 +285,8 @@ def _environment(state: dict) -> dict:
         "near_trees": nearby.get("trees"),
         "near_stone": nearby.get("stone"),
         "near_animals": near_animals,
+        "has_near_animals": bool(near_animals) or bool(nearby.get("animals")),
+        "safe_surface": bool(nearby.get("safe_surface")),
         "near_hostiles": near_hostiles,
         "home_set": bool(state.get("home")),
         "known_chests": len(chests),

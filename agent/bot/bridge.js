@@ -6,16 +6,27 @@ const { getMode } = require('./mode')
 const navigation = require('./navigation')
 const execution = require('./execution')
 const activityStack = require('./activity')
+const { isSafeStandable } = require('./safe_spot')
 
 const TREE_BLOCK_NAMES = [
     'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
     'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log',
 ]
+const FOOD_ANIMAL_NAMES = new Set([
+    'cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom', 'mushroom_cow',
+])
 
 function _hasNearbyBlock(bot, names, maxDistance = 8) {
     const ids = names.map(name => bot.registry.blocksByName[name]?.id).filter(Boolean)
     if (ids.length === 0) return false
     return !!bot.findBlock({ matching: ids, maxDistance })
+}
+
+function _hasVisibleFoodAnimal(bot) {
+    return Object.values(bot.entities ?? {}).some(entity => (
+        entity?.position
+        && FOOD_ANIMAL_NAMES.has(entity.name)
+    ))
 }
 
 function _durabilityPct(item) {
@@ -100,6 +111,8 @@ function sendState(bot, type, extra = {}) {
             water: _hasNearbyBlock(bot, ['water'], 10),
             trees: _hasNearbyBlock(bot, TREE_BLOCK_NAMES, 10),
             stone: _hasNearbyBlock(bot, ['stone', 'cobblestone'], 8),
+            animals: _hasVisibleFoodAnimal(bot),
+            safe_surface: isSafeStandable(bot, bot.entity?.position, { requireSky: true }),
         },
         inventory: bot.inventory.items().map(i => {
             const entry = { name: i.name, count: i.count }

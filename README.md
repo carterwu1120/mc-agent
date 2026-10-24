@@ -338,6 +338,15 @@ Dashboard :3002 → Backend API :8000 → Coordinator :3010 / state files / Post
 - `agent/task_memory.py`: task goals, execution progress, and recent events.
 - `backend/`: public API; the dashboard serves the page and fetches data from the backend.
 
+Food recovery uses a semantic `waiting_for_change` state after bounded recovery
+cannot find a viable plan. It does not retry on a timer or compare exact
+coordinates. The agent automatically leaves this state when hunger reaches the
+existing safe threshold (`food >= 10`), or retries food planning once when a
+new usable opportunity appears (new raw food, visible animals, fishing rod
+plus water, or a safe surface). Unchanged ticks do not call the model. If food recovery had
+interrupted another task, that task resumes after the food crisis is resolved;
+a standalone food task simply finishes.
+
 Each bot uses a separate `BOT_ID` and data directory, and registers with the coordinator to pull tasks.
 Address bots with `@Agent0` or `@Agent1`; `BOT_USERNAMES` identifies other bots whose chat should be ignored.
 

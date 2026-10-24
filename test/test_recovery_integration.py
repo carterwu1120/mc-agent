@@ -24,7 +24,12 @@ def runtime(monkeypatch):
     monkeypatch.setattr(app.task_memory, 'load', lambda: task)
     monkeypatch.setattr(app.task_memory, 'interrupt', lambda reason: task.update(status='interrupted', interruptedBy=reason))
     monkeypatch.setattr(app.task_memory, 'record_event', lambda *a, **k: None)
-    monkeypatch.setattr(app.task_memory, 'update_runtime', lambda patch: task.update(runtime=patch))
+    def update_runtime(patch):
+        runtime = dict(task.get('runtime') or {})
+        runtime.update(patch)
+        task['runtime'] = runtime
+
+    monkeypatch.setattr(app.task_memory, 'update_runtime', update_runtime)
     app.executor.claim()
     app.executor._current_command = {'command': 'mine', '_command_id': 'old'}
     return app, task
@@ -166,3 +171,144 @@ def test_interrupted_activity_memory_never_invents_a_missing_quantity(runtime, m
         'pos': {'x': 1, 'y': 64, 'z': 2},
     })
     assert remembered.call_args.args[1] == ['chop logs 3']
+
+
+def test_food_wait_auto_resumes_only_after_hunger_recovers(runtime, monkeypatch):
+    app, task = runtime
+
+    async def scenario():
+        task.update(
+            status='interrupted',
+            interruptedBy='waiting_for_food_change',
+            runtime={'food_wait_resume_task': True},
+        )
+        monkeypatch.setattr(app.task_memory, 'load_any', lambda: task)
+        monkeypatch.setattr(app, '_planner_lock', asyncio.Lock())
+        app.executor.unclaim()
+        launch = Mock()
+        monkeypatch.setattr(app, '_launch_plan', launch)
+        baseline = app.food_recovery.snapshot({
+            'food': 9, 'inventory': [], 'entities': [],
+            'nearby': {'animals': False, 'water': False, 'safe_surface': False},
+        })
+        app.recovery.hold_for_change('food', baseline, '沒有食物來源')
+        ws = type('Socket', (), {'send': AsyncMock()})()
+
+        unchanged = {
+            'type': 'tick', 'activity': 'idle', 'food': 9,
+            'inventory': [], 'entities': [],
+            'nearby': {'animals': False, 'water': False, 'safe_surface': False},
+        }
+        assert await app._handle_waiting_for_change(unchanged, ws)
+        launch.assert_not_called()
+        assert app.recovery.phase == 'waiting_for_change'
+
+        resolved = {**unchanged, 'food': 12}
+        assert await app._handle_waiting_for_change(resolved, ws)
+        assert launch.call_args.args[0] == ['resumetask']
+        assert app.recovery.phase == 'executing'
+
+    asyncio.run(scenario())
+
+
+def test_food_wait_retries_once_when_animals_appear(runtime, monkeypatch):
+    app, task = runtime
+
+    async def scenario():
+        task.update(
+            status='interrupted',
+            interruptedBy='waiting_for_food_change',
+            runtime={'food_wait_resume_task': True},
+        )
+        monkeypatch.setattr(app.task_memory, 'load_any', lambda: task)
+        routed = AsyncMock()
+        monkeypatch.setattr(app, '_handle_and_send', routed)
+        baseline = app.food_recovery.snapshot({
+            'food': 9, 'inventory': [], 'entities': [],
+            'nearby': {'animals': False, 'water': False, 'safe_surface': False},
+        })
+        app.recovery.hold_for_change('food', baseline, '沒有食物來源')
+        ws = type('Socket', (), {'send': AsyncMock()})()
+
+        changed = {
+            'type': 'tick', 'activity': 'idle', 'food': 9,
+            'inventory': [], 'entities': [],
+            'nearby': {'animals': True, 'water': False, 'safe_surface': False},
+        }
+        assert await app._handle_waiting_for_change(changed, ws)
+        assert app.recovery.phase == 'executing'
+        assert task['interruptedBy'] == 'food_low'
+        assert routed.call_args.args[0]['type'] == 'food_low'
+
+    asyncio.run(scenario())
+
+
+def test_standalone_food_wait_finishes_without_resuming_failed_plan(runtime, monkeypatch):
+    app, task = runtime
+
+    async def scenario():
+        task.update(
+            goal='補充食物',
+            status='interrupted',
+            interruptedBy='waiting_for_food_change',
+            runtime={'food_wait_resume_task': False},
+        )
+        monkeypatch.setattr(app.task_memory, 'load_any', lambda: task)
+        finished = Mock()
+        monkeypatch.setattr(app.task_memory, 'done', finished)
+        launch = Mock()
+        monkeypatch.setattr(app, '_launch_plan', launch)
+        baseline = app.food_recovery.snapshot({
+            'food': 9, 'inventory': [], 'entities': [],
+            'nearby': {'animals': False, 'water': False, 'safe_surface': False},
+        })
+        app.recovery.hold_for_change('food', baseline, '沒有食物來源')
+        ws = type('Socket', (), {'send': AsyncMock()})()
+
+        resolved = {
+            'type': 'tick', 'activity': 'idle', 'food': 10,
+            'inventory': [], 'entities': [],
+            'nearby': {'animals': False, 'water': False, 'safe_surface': False},
+        }
+        assert await app._handle_waiting_for_change(resolved, ws)
+        finished.assert_called_once_with(goal_verified=True)
+        launch.assert_not_called()
+        assert app.recovery.phase == 'executing'
+
+    asyncio.run(scenario())
+
+
+def test_standalone_food_retry_replaces_failed_plan_instead_of_resuming_it(runtime, monkeypatch):
+    app, task = runtime
+
+    async def scenario():
+        task.update(
+            goal='補充食物',
+            status='interrupted',
+            interruptedBy='food_low',
+            runtime={'food_wait_resume_task': False},
+        )
+        monkeypatch.setattr(app.task_memory, 'load_any', lambda: task)
+        monkeypatch.setattr(app, '_planner_lock', asyncio.Lock())
+        app.executor.unclaim()
+        launch = Mock()
+        monkeypatch.setattr(app, '_launch_plan', launch)
+        handler = AsyncMock(return_value=[{
+            'action': 'plan',
+            'commands': ['hunt count 1', 'getfood count 1'],
+            'goal': '補充食物',
+            'preserve_task': True,
+        }])
+        ws = type('Socket', (), {'send': AsyncMock()})()
+
+        await app._handle_and_send(
+            {'type': 'food_low', 'activity': 'idle', 'food': 9},
+            handler,
+            ws,
+        )
+
+        commands = launch.call_args.args[0]
+        assert commands == ['hunt count 1', 'getfood count 1']
+        assert launch.call_args.kwargs['preserve_task'] is False
+
+    asyncio.run(scenario())

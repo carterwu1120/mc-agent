@@ -26,6 +26,7 @@ from agent.recovery import RecoverySupervisor
 from agent.skills import recovery as recovery_skill
 from agent import task_memory
 from agent import exploration_memory
+from agent import food_recovery
 from agent import history_db
 from agent import dashboard as _dashboard
 
@@ -135,9 +136,32 @@ async def _handle_recovery(state: dict, ws) -> None:
                          final_goal=task.get('finalGoal'), source=task.get('source'), _recovery=True)
 
     async def blocked(reason):
+        waiting_for_food = food_recovery.is_food_recovery_task(task)
+        resume_original_task = task.get('interruptedBy') == 'food_low'
+        interrupt_reason = 'waiting_for_food_change' if waiting_for_food else 'recovery_blocked'
         if executor.is_running():
-            executor.abort(preserve_task=True, reason='recovery_blocked')
-        task_memory.interrupt('recovery_blocked')
+            executor.abort(preserve_task=True, reason=interrupt_reason)
+        else:
+            task_memory.interrupt(interrupt_reason)
+
+        if waiting_for_food:
+            wait_snapshot = food_recovery.snapshot({**state, **_latest_state})
+            recovery.hold_for_change('food', wait_snapshot, reason)
+            task_memory.update_runtime({
+                'supervision': recovery.status(),
+                'food_wait_snapshot': wait_snapshot,
+                'food_wait_resume_task': resume_original_task,
+            })
+            task_memory.record_event('waiting_for_change', reason=reason, details={
+                'kind': 'food',
+                'snapshot': wait_snapshot,
+            })
+            await asyncio.wait_for(
+                _send_chat(ws, '尋食暫停，等待食物條件改善：' + reason[:180]),
+                5,
+            )
+            return
+
         task_memory.update_runtime({'supervision': recovery.status()})
         task_memory.record_event('recovery_blocked', reason=reason)
         await asyncio.wait_for(_send_chat(ws, '任務已保留，暫停等待協助：' + reason[:180]), 5)
@@ -153,6 +177,86 @@ async def _handle_recovery(state: dict, ws) -> None:
 
     await recovery.recover(state, ws, decide=decide, apply=apply, blocked=blocked)
     print(f"[Recovery] {recovery.status()}")
+
+
+async def _handle_waiting_for_change(state: dict, ws) -> bool:
+    """Consume ticks while held; transition only on a relevant semantic change."""
+    if recovery.phase != 'waiting_for_change':
+        return False
+    if recovery.wait_kind != 'food' or not recovery.wait_snapshot:
+        return True
+
+    change = food_recovery.classify_change(recovery.wait_snapshot, state)
+    if not change:
+        return True
+
+    action = change['action']
+    reason = change['reason']
+    pending = task_memory.load_any() or {}
+    print(f"[Recovery] 食物等待條件改善：{reason}，action={action}")
+    task_memory.record_event('waiting_change_detected', reason=reason, details=change)
+
+    if action == 'resume_task':
+        if pending.get('status') != 'interrupted':
+            recovery.invalidate()
+            task_memory.update_runtime({
+                'supervision': recovery.status(),
+                'food_wait_snapshot': None,
+            })
+            return True
+
+        wait_runtime = pending.get('runtime') or {}
+        if not wait_runtime.get('food_wait_resume_task', False):
+            recovery.invalidate()
+            task_memory.update_runtime({
+                'supervision': None,
+                'food_wait_snapshot': None,
+                'food_wait_resume_task': None,
+            })
+            task_memory.done(goal_verified=True)
+            await _send_chat(ws, f"食物危機已解除（{reason}），結束自主尋食。")
+            return True
+
+        async def _launch_resume() -> bool:
+            task_memory.update_runtime({
+                'supervision': None,
+                'food_wait_snapshot': None,
+                'food_wait_resume_task': None,
+            })
+            _launch_plan(
+                ['resumetask'],
+                ws,
+                goal=pending.get('goal', ''),
+                preserve_task=True,
+                source=pending.get('source', 'unknown'),
+                _recovery=True,
+            )
+            return True
+
+        started = await _planner_transition(
+            state=state,
+            ws=ws,
+            launch_fn=_launch_resume,
+        )
+        if started:
+            await _send_chat(ws, f"食物危機已解除（{reason}），自動恢復原任務。")
+        return True
+
+    if action == 'retry_food':
+        recovery.release_change_wait()
+        if pending:
+            task_memory.interrupt('food_low')
+            task_memory.update_runtime({
+                'supervision': recovery.status(),
+                'food_wait_snapshot': None,
+                'food_wait_resume_task': pending.get('runtime', {}).get('food_wait_resume_task'),
+            })
+        await _send_chat(ws, f"食物條件已改善（{reason}），重新規劃一次尋食。")
+        retry_state = {**state, 'type': 'food_low'}
+        await _handle_and_send(retry_state, food_skill.handle, ws)
+        return True
+
+    return True
 
 
 def _write_live_state() -> None:
@@ -1321,8 +1425,22 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         def _normalize_temporary_inventory_plan(commands: list, preserve_task: bool) -> tuple[list, bool]:
             if event_type not in ("inventory_full", "food_low"):
                 return commands, preserve_task
-            if not executor.is_running():
-                return commands, preserve_task
+            interrupted = task_memory.load_any() or {}
+            wait_runtime = interrupted.get('runtime') or {}
+            if (
+                event_type == 'food_low'
+                and wait_runtime.get('food_wait_resume_task') is False
+            ):
+                # This is a standalone autonomous food task, not a detour from
+                # a parent task. Replace its failed plan instead of appending
+                # resumetask and re-entering the same failed step.
+                return commands, False
+            has_interrupted_task = (
+                interrupted.get('status') == 'interrupted'
+                and bool(interrupted.get('steps'))
+            )
+            if not executor.is_running() and not has_interrupted_task:
+                return commands, False
             normalized = list(commands or [])
             if "resumetask" not in normalized:
                 normalized.append("resumetask")
@@ -1528,6 +1646,19 @@ async def run():
         elif _startup_status == "interrupted" and _startup_interrupted_by in _RESUMABLE_INTERRUPTS:
             # Transient interruption — will auto-resume on first tick
             print(f"[Agent] 啟動：發現被 {_startup_interrupted_by} 暫時中斷的任務「{_startup_task.get('goal')}」，待連線後恢復")
+        elif _startup_status == 'interrupted' and _startup_interrupted_by == 'waiting_for_food_change':
+            _runtime = _startup_task.get('runtime') or {}
+            _snapshot = _runtime.get('food_wait_snapshot')
+            if isinstance(_snapshot, dict) and _snapshot:
+                recovery.hold_for_change(
+                    'food',
+                    _snapshot,
+                    '上次尋食沒有可行路線，等待食物相關條件改善。',
+                )
+                print('[Agent] 啟動：恢復 waiting_for_change（food），只在食物條件改善時重試')
+            else:
+                recovery.phase = 'waiting_player'
+                recovery.reason = '缺少食物等待快照，任務保留，等待玩家指示。'
         elif _startup_status == 'interrupted' and _startup_interrupted_by == 'recovery_blocked':
             recovery.phase = 'waiting_player'
             recovery.reason = '上次恢復失敗，任務已保留，等待玩家指示。'
@@ -1625,6 +1756,10 @@ async def run():
                             _t = asyncio.create_task(_coordinator_poll(state, ws))
                             _bg_tasks.add(_t)
                             _t.add_done_callback(_bg_tasks.discard)
+
+                    if event_type == 'tick' and await _handle_waiting_for_change(state, ws):
+                        _write_live_state()
+                        continue
 
                     if not handler:
                         continue

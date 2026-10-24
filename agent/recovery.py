@@ -23,6 +23,8 @@ class RecoverySupervisor:
         self._request_id = None
         self._decision = None
         self._idle = None
+        self.wait_kind = None
+        self.wait_snapshot = None
         self._episodes = deque(maxlen=3)
         self.history = deque(maxlen=6)
 
@@ -32,12 +34,32 @@ class RecoverySupervisor:
 
     @property
     def held(self):
-        return self.phase == "waiting_player"
+        return self.phase in {"waiting_player", "waiting_for_change"}
 
     def status(self):
         return {"phase": self.phase, "reason": self.reason,
                 "remaining_seconds": max(0, round(self.deadline - self.clock())) if self.deadline else None,
-                "expected_outcome": self.expected}
+                "expected_outcome": self.expected,
+                "waiting_for": self.wait_kind}
+
+    def hold_for_change(self, kind: str, snapshot: dict, reason: str) -> None:
+        """Pause until a domain-specific observer finds a meaningful state change."""
+        self.phase = "waiting_for_change"
+        self.reason = reason
+        self.deadline = None
+        self.expected = None
+        self.wait_kind = kind
+        self.wait_snapshot = dict(snapshot)
+
+    def release_change_wait(self) -> None:
+        """Release a semantic wait without treating elapsed time as progress."""
+        if self.phase != "waiting_for_change":
+            return
+        self.revision += 1
+        self.phase = "executing"
+        self.reason = self.deadline = self.expected = self._idle = None
+        self.wait_kind = None
+        self.wait_snapshot = None
 
     def invalidate(self):
         """A new explicit task, stop, death or disconnect supersedes old replies."""
@@ -48,6 +70,8 @@ class RecoverySupervisor:
             self._ack.cancel()
         self.phase = "executing"
         self.reason = self.deadline = self.expected = self._idle = None
+        self.wait_kind = None
+        self.wait_snapshot = None
         self._episodes.clear()
         self.history.clear()
 
@@ -96,9 +120,16 @@ class RecoverySupervisor:
                 raise RuntimeError("recovery_budget_exhausted")
             self._episodes.append(now)
             self.phase = "waiting_ai"
-            fingerprint = json.dumps({"pos": {k: round(v / 4) for k, v in (state.get("pos") or {}).items() if isinstance(v, (float, int))},
-                                      "inventory": sorted((i["name"], i["count"]) for i in state.get("inventory", [])),
-                                      "goal": (state.get("plan_context") or {}).get("goal")}, sort_keys=True)
+            fingerprint = json.dumps({
+                "inventory": sorted((i["name"], i["count"]) for i in state.get("inventory", [])),
+                "goal": (state.get("plan_context") or {}).get("goal"),
+                "reason": state.get("reason"),
+                "nearby": state.get("nearby") or {},
+                "navigation": {
+                    key: (state.get("navigation") or {}).get(key)
+                    for key in ("status", "reason")
+                },
+            }, sort_keys=True)
             for attempt in range(2):
                 self.deadline = self.clock() + self.decision_timeout
                 try:
