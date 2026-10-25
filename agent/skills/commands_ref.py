@@ -9,7 +9,7 @@ COMMANDS: dict[str, dict] = {
     "mine":        {"desc": "挖礦",           "usage": "mine <ore> <count>",               "example": "mine iron 10、mine diamond 5"},
     "chop":        {"desc": "砍木頭",         "usage": "chop logs <count>",                "example": "chop logs 20"},
     "fish":        {"desc": "釣魚",           "usage": "fish catches <count>",             "example": "fish catches 30"},
-    "smelt":       {"desc": "冶煉/烹飪",      "usage": "smelt <material> <count>",         "example": "smelt beef 6、smelt raw_iron 10（必須帶數量）"},
+    "smelt":       {"desc": "冶煉/烹飪，必須帶數量", "usage": "smelt <material> <count>",   "example": "smelt beef 6、smelt raw_iron 10"},
     "combat":      {"desc": "開始戰鬥",       "usage": "combat"},
     "hunt":        {"desc": "狩獵動物",       "usage": "hunt count <n>",               "example": "hunt count 5"},
     "getfood":     {"desc": "冶煉背包生食成熟食", "usage": "getfood count <n>",         "example": "getfood count 5"},
@@ -32,11 +32,11 @@ COMMANDS: dict[str, dict] = {
     "tp":          {"desc": "傳送到座標",       "usage": "tp <x> <y> <z>",                "example": "tp 10 64 -200"},
     # ── Equipment & inventory ─────────────────────────────────
     "equip":       {"desc": "裝備背包現有武裝，不合成", "usage": "equip"},
-    "preparetool": {"desc": "使用現有材料準備至少指定等級的稿子；材料不足會回報，不自行採集", "usage": "preparetool <wooden_pickaxe|stone_pickaxe|iron_pickaxe|diamond_pickaxe|netherite_pickaxe>"},
+    "preparetool": {"desc": "用背包現有材料做出至少該等級的鎬子（tier: wooden/stone/iron/diamond/netherite），不採集", "usage": "preparetool <tier>_pickaxe"},
     "deposit":     {"desc": "存入箱子",     "usage": "deposit <chest_id>",                 "example": "deposit 1"},
     "withdraw":    {"desc": "從箱子取出",   "usage": "withdraw <item> [count] <chest_id>", "example": "withdraw oak_log 16 1"},
-    "makechest":   {"desc": "合成並放置大箱子（自動登記，完成後 chest_id 存入 {new_chest_id}）", "usage": "makechest"},
-    "labelchest":  {"desc": "設定箱子類別", "usage": "labelchest <chest_id> <label>",      "example": "labelchest {new_chest_id} wood  （label: food/wood/stone/ore/misc）"},
+    "makechest":   {"desc": "合成並放置大箱子，完成後新 id 存入 {new_chest_id}", "usage": "makechest"},
+    "labelchest":  {"desc": "設定箱子類別（food/wood/stone/ore/misc）", "usage": "labelchest <chest_id> <label>", "example": "labelchest {new_chest_id} wood"},
     # ── Meta ──────────────────────────────────────────────────
     "chat":        {"desc": "傳送訊息給玩家", "usage": "chat"},
     "idle":        {"desc": "什麼都不做",     "usage": "idle"},
@@ -44,18 +44,24 @@ COMMANDS: dict[str, dict] = {
 }
 
 
-def command_list(keys: list[str]) -> str:
-    """Return a formatted command reference string for use in LLM system prompts."""
+def command_list(keys, *, include_stops: bool = True) -> str:
+    """Return a formatted command reference string for use in LLM system prompts.
+
+    include_stops=False omits stop* commands for prompts that plan after the old
+    activity has already been halted (recovery, respawn, prerequisite plans).
+    """
     lines = []
     for key in keys:
+        if not include_stops and key.startswith("stop"):
+            continue
         entry = COMMANDS.get(key)
         if not entry:
             continue
         usage = entry["usage"]
         desc = entry["desc"]
         example = entry.get("example", "")
-        line = f"- {usage:<42} {desc}"
+        line = f"- {usage}：{desc}"
         if example:
-            line += f"  例：{example}"
+            line += f"（例：{example}）"
         lines.append(line)
     return "\n".join(lines)

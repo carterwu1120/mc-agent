@@ -55,7 +55,8 @@ function _equipmentState(bot) {
 }
 
 const WS_PORT = parseInt(process.env.BOT_WS_PORT || '3001')
-const wss = new WebSocketServer({ port: WS_PORT })
+// BOT_WS_HOST=127.0.0.1 keeps a local-only controller (the skill CLI) off the network.
+const wss = new WebSocketServer({ port: WS_PORT, host: process.env.BOT_WS_HOST || undefined })
 let agentSocket = null
 let _initialized = false
 let _mcConnected = false

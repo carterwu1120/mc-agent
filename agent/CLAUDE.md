@@ -79,6 +79,25 @@ For Python skill internals (skill pattern, LLM format, task_memory): see agent/s
 
 ---
 
+## Agent Skill Package (`skill/`)
+
+Domain knowledge (what commands really do, tool chains, food, recovery, inventory,
+respawn, durability, crafting) lives once in `agent/knowledge/*.md`. Python skills load
+it through `skills/knowledge.py` after their own JSON output format; the agent skill
+ships the same files as `references/`. Knowledge must match `agent/bot/` behaviour and
+stay interface-neutral (see `agent/knowledge/README.md`); `test/test_knowledge.py`
+checks wiring, command names and section names.
+
+`skill/minecraft-bot/` packages the JS bot as a SKILL.md skill, with the host coding
+agent (Claude Code, Codex) acting as the planner instead of the Python agent.
+`scripts/mcctl.js` starts a loopback-only daemon that owns the bot process and its
+WebSocket, buffers non-tick events and serves `run`/`wait`/`state`/`send` to the CLI.
+It sets `BOT_WS_HOST=127.0.0.1`, `BOT_DATA_DIR` and `BOT_LOG_DIR` under `~/.mcbot/<name>/`.
+Its command → completion-event table mirrors `bot/commands.js`; update it when adding
+commands or event types. `skill/build.sh` copies `agent/bot` runtime files into
+`skill/dist/minecraft-bot/scripts/bot`, copies `agent/knowledge/*.md` into
+`references/`, generates `references/commands.md` from `commands_ref.py` and zips the result. The Python agent is not part of the package.
+
 ## Key Modules
 
 Mining navigation pilot: `bot/navigation.js` is opt-in via
@@ -158,7 +177,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 2. **goal_reached → idle** — bot stops and waits. Next command comes from player or orchestration.
 3. **stuck → LLM** — only `activity_stuck` triggers LLM intervention.
 4. **LIFO stack** — pushing auto-pauses current top; popping auto-resumes previous.
-5. **Prompts live in skills** — system prompts belong in `agent/skills/`, not in JS.
+5. **Prompts live in skills** — system prompts belong in `agent/skills/`, not in JS. Domain rules they share live in `agent/knowledge/`.
 6. **Command descriptions live in `commands_ref.py`** — import `command_list(keys)`, never duplicate inline.
 7. **Death → LLM** — `player_died` aborts executor; `player_respawned` routes to `respawn.py`.
 8. **Inventory check at dispatch** — `commands.js` calls `checkFull(bot)` before any activity command. Do not add per-activity checks.

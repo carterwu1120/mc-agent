@@ -20,3 +20,6 @@ agent/data/
 
 # Local Minecraft server binaries, settings, worlds, and player data
 /local-server/
+
+# Built skill packages
+/skill/dist/

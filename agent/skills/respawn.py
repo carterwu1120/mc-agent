@@ -8,25 +8,20 @@ from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_comm
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import equipment_summary, summary_json
 from agent.skills.commands_ref import command_list
+from agent.skills.knowledge import knowledge
 
-_RESPAWN_COMMANDS = command_list(sorted(PLAN_ALLOWED_COMMANDS))
+_RESPAWN_COMMANDS = command_list(sorted(PLAN_ALLOWED_COMMANDS), include_stops=False)
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的死亡後恢復規劃者。
-機器人剛重生。請利用完整狀態、環境、能力、剩餘任務與近期失敗，規劃恢復原任務前真正需要的前置步驟。
-系統會在這些步驟完成後接回中斷任務，所以 commands 不要重寫主任務，也不要加入 resumetask。
+機器人剛重生。規劃恢復原任務前真正需要的前置步驟；commands 不要重寫主任務，也不要加入 resumetask。
 只輸出以下其中一種 JSON，不要加其他文字：
 {{"action":"plan","commands":[],"text":"可直接恢復的理由"}}
 {{"action":"plan","commands":["..."],"text":"前置策略與理由"}}
 {{"action":"wait","text":"目前無法安全恢復，以及需要玩家提供什麼"}}
 
-決策原則：
-- commands 可為空（直接恢復）或最多 6 個前置步驟。
-- 先看 capabilities、inventory、equipment 與 environment，再判斷要蒐集、探索、撤離、取物或裝備。
-- `equip` 不是萬用恢復；只有已有裝備，或現有資源確實能合成時才使用。
-- 死亡位置與工作位置只是線索。危險未解除時不要盲目 tp 回去；安全且有明確價值時才返回。
-- 如果缺少生食且附近沒有動物，不要直接重試 getfood；可先 explore animals 或 hunt。
-- 不要重送近期已失敗、而且狀態沒有新增資源或環境變化的策略。
-- 優先選短而可觀察的計畫。資訊不足或沒有可行路徑時使用 wait，清楚告知玩家。
+{knowledge('respawn')}
+
+{knowledge('bot_capabilities', '鎬子與工具鏈', '食物')}
 
 可用前置指令：
 {_RESPAWN_COMMANDS}

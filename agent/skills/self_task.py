@@ -4,6 +4,7 @@ from agent.brain import LLMClient
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json, summarize_state
 from agent.skills.commands_ref import command_list
+from agent.skills.knowledge import knowledge
 from agent.skills.command_validation import validate_commands
 from agent import task_memory
 from agent import exploration_memory
@@ -12,19 +13,15 @@ from agent.context_builder import (
 )
 
 _SELF_TASK_COMMAND_KEYS = [
-    "hunt", "fish", "getfood", "chop", "mine", "smelt", "equip",
+    "hunt", "fish", "getfood", "chop", "mine", "smelt", "preparetool", "equip",
     "home", "deposit", "explore", "tp", "idle",
 ]
 _SELF_TASK_COMMANDS = command_list(_SELF_TASK_COMMAND_KEYS)
 
-SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手。
-機器人目前沒有玩家直接指定的新任務，請根據它自己的狀態，決定下一個最合理的生存/補給任務。
-
+SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手。沒有玩家指定的任務時，依 bot 自己的狀態決定下一個最合理的生存或補給任務。
 只能回覆以下其中一種 JSON（不要加其他文字）：
 {{"command":"idle","text":"..."}}
 {{"command":"equip","text":"..."}}
-
-或 plan（步驟數根據需求決定，不設上限）：
 {{"action":"plan","commands":["..."],"goal":"...","text":"..."}}
 
 【可用指令】
@@ -37,37 +34,15 @@ SYSTEM_PROMPT = f"""你是 Minecraft 陪玩型 agent 的自主任務規劃助手
 4. 背包有已分類箱子且空間快滿 → home + deposit
 5. 無迫切需求 → idle
 
-【工具鏈推理】
-收到需求前先檢查背包，確認缺什麼才加對應步驟：
-- 缺工具時，先依配方、現有材料與主任務需求精算缺口，只取得足以完成工具與合理緩衝的材料
-- 缺食物 → 先依飢餓、熟食庫存與下一個任務風險決定需要多少；沒有固定數量
-- `getfood count <n>` 只會處理背包已有的生食，不能取得生食
-- raw_total 足夠目標數量時，才可直接 getfood
-- raw_total 不足時，先用 hunt 補足；附近沒有動物時可先 explore animals
-- 只有背包已有 fishing_rod 時才可 fish，之後再 getfood
-- 每個 hunt / fish / getfood 都必須帶明確的正整數數量
-- 飢餓值接近 20、沒有玩家任務且沒有近期高風險計畫時，熟食為 0 本身不構成危機，可以 idle
-- 木材少本身不是任務；只有目前目標確實需要木材時才 chop，數量由實際材料缺口決定
-- 原礦未冶煉本身不是任務；只有裝備、工具或玩家目標需要成品時才 smelt 實際需要的數量
+【原則】
+- 只為明確缺口規劃。先看 inventory，不要假設缺少已有的物品；背包夠用就 idle。
+- 缺工具時依配方與現有材料精算，只取得夠做工具加上合理緩衝的材料。
+- 木材少、原礦未冶煉本身不是任務；只有目前目標需要時，才 chop 或 smelt 實際需要的量。
+- 需要插入 smelt 時，一次把該原料燒成合理的大批次（多出的錠下次可用），計畫中不要出現重複的 smelt。
+- prompt 有「已知資源位置」時，需要挖礦、砍樹或補食物就優先 tp 到該位置，而不是隨機 explore。
+- 不要輸出 chat、follow、withdraw、combat。
 
-【中途補料原則】
-計畫執行到一半需要插入 smelt 或 craft 步驟時：
-- 查背包有多少該原料（raw_iron / raw_food / 任何 raw_*），一次燒完或燒合理大批次，不要只燒剛好夠這一次用的最小量
-- 多出來的中間材料（iron_ingot 等）下次可以直接用，減少未來再插入 smelt 的需要
-- 計畫裡不應出現多次相同 smelt 指令（代表沒有一次備足）
-- 數量由 LLM 根據背包庫存和實際需求決定，沒有固定數字
-
-【善用已知資源位置】
-若 prompt 中有「已知資源位置」段落，代表 bot 過去找到過這些資源：
-- 需要挖礦時：優先 tp 到已知礦物位置，再執行 mine，而不是隨機 explore
-- 需要砍樹時：優先 tp 到已知森林位置
-- 需要補食物時：若有已知動物區域，可加 tp，再 hunt 與 getfood
-- tp 格式：tp <x> <y> <z>（整數座標）
-
-【禁止】
-- 不要輸出 chat、follow、withdraw、combat
-- 不要規劃沒有明確缺口的步驟（背包夠用就 idle）
-- 不要假設缺少實際上已有的物品（先看 inventory）
+{knowledge('bot_capabilities', '鎬子與工具鏈', '食物')}
 """
 
 ALLOWED_COMMANDS = set(_SELF_TASK_COMMAND_KEYS)

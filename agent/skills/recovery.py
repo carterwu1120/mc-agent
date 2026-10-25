@@ -2,6 +2,7 @@
 import json
 from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
 from agent.skills.commands_ref import command_list
+from agent.skills.knowledge import knowledge
 from agent.skills.state_summary import summary_json
 from agent.skills.stuck.llm_utils import parse_json_with_repair
 from agent.plan_utils import normalize_commands
@@ -9,18 +10,59 @@ from agent.plan_utils import normalize_commands
 # These commands have completion semantics in PlanExecutor. Pure chat/idle and
 # stack resume are not recovery plans: old activities have already been stopped.
 ALLOWED = PLAN_ALLOWED_COMMANDS - {"resumetask", "come", "look"}
-SYSTEM = """你是 Minecraft 任務恢復規劃者。舊動作已中斷，舊 stack 不會自動恢復。
-依現況選擇可執行的短期策略，保留原任務目標與必要的剩餘步驟，扣除已取得的數量。
+_BASE = """你是 Minecraft 任務恢復規劃者。依下方恢復策略與 bot 能力，為已中斷的動作選擇替代策略。
 plan_context.objective 是獨立保存的主任務。若存在，可只規劃下一段前置任務；
 執行器會依原始庫存與目標數量驗收，不需反覆追加完整原指令。
-mining_result 是實際階段結果；缺少工具先規劃工具，岩漿/失敗路徑應換策略。
-腳本不能做到的事要坦白說明；不可只重送已失敗策略或跳過必要前置條件假裝完成。
 只能輸出 JSON，以下二選一：
 {"action":"replan","commands":["..."],"expected_outcome":"可觀察的結果，例如新增 8 個圓石","text":"策略理由"}
 {"action":"wait","text":"明確的阻礙，以及需要玩家提供什麼"}
+需要玩家協助、或沒有可行策略時用 wait。
 最多 8 個指令。expected_outcome 是給下一次觀測與決策的說明，完成仍由執行器驗證。
 可用指令：
-""" + command_list(sorted(ALLOWED))
+""" + command_list(sorted(ALLOWED), include_stops=False)
+
+# The CLI receives the system prompt on every call, so only the knowledge for the
+# stuck activity is sent: (recovery.md section, bot_capabilities.md sections).
+_ACTIVITY_KNOWLEDGE = {
+    "mining": ("挖礦", ()),
+    "chopping": ("砍樹", ()),
+    "surface": ("回到地表", ("移動與位置",)),
+    "fishing": ("釣魚", ("食物",)),
+    "smelting": ("冶煉", ("冶煉與燃料",)),
+    "hunting": ("狩獵與補食物", ("食物",)),
+    "getfood": ("狩獵與補食物", ("食物",)),
+    "makechest": ("箱子", ("木材與箱子",)),
+    "preparetool": ("工具準備", ("鎬子與工具鏈",)),
+}
+_COMMAND_ACTIVITY = {"mine": "mining", "chop": "chopping", "fish": "fishing", "smelt": "smelting",
+                     "hunt": "hunting", "getfood": "getfood", "surface": "surface",
+                     "makechest": "makechest", "preparetool": "preparetool"}
+
+
+def _stuck_activity(state: dict) -> str | None:
+    if state.get("reason") == "tool_preparation_failed":
+        return "preparetool"
+    for key in ("activity_name", "activity"):
+        if state.get(key) in _ACTIVITY_KNOWLEDGE:
+            return state[key]
+    # Executor timeouts arrive while idle; the running plan step names the activity.
+    current = str((state.get("plan_context") or {}).get("current_cmd") or "").split()
+    return _COMMAND_ACTIVITY.get(current[0]) if current else None
+
+
+def system_prompt(state: dict) -> str:
+    sections = ["原則"]
+    if state.get("watchdog"):
+        sections.append("watchdog 判定（任何活動）")
+    section, capabilities = _ACTIVITY_KNOWLEDGE.get(_stuck_activity(state), (None, ()))
+    if state.get("reason") == "no_tools":
+        capabilities = ("鎬子與工具鏈",)
+    if section:
+        sections.append(section)
+    prompt = _BASE + "\n\n" + knowledge("recovery", *sections)
+    if capabilities:
+        prompt += "\n\n" + knowledge("bot_capabilities", *capabilities)
+    return prompt
 
 
 def _restore_remaining_goal(commands: list[str], plan_context: dict | None) -> list[str]:
@@ -52,7 +94,7 @@ async def handle(state, llm):
     effort = "high" if len(recovery_history) >= 2 or state.get("decision_error") else "medium"
     response = await llm.chat(
         [{"role": "user", "content": summary_json(state) + "\n" + json.dumps(context, ensure_ascii=False)}],
-        system=SYSTEM,
+        system=system_prompt(state),
         reasoning_effort=effort,
     )
     result = parse_json_with_repair(response)

@@ -5,6 +5,7 @@ from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
 from agent.prompt_logging import log_prompt
 from agent.skills.llm_response import parse_llm_json
+from agent.skills.knowledge import knowledge
 from agent.skills.state_summary import equipment_summary
 
 LABEL_PATTERNS = {
@@ -19,92 +20,15 @@ EQUIPMENT_SUFFIXES = (
     "_leggings", "_boots", "_bow", "crossbow", "shield", "elytra", "trident",
 )
 
-SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。
-背包格數已達警戒線（34/36 格），需要提前整理以保留合成空間。
-策略：提前在背包快滿時就處理，而不是等到完全滿再亂丟，目的是確保合成物品時背包有足夠空間。
+SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。依下方背包整理規則決定處理方式。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 {"action": "drop", "items": ["diorite", "tuff"]}
 {"action": "plan", "commands": ["stop指令", "home", "deposit 1", "back", "resume指令"]}
 {"action": "continue"}
 
-選 plan 的時機與格式：
+plan 的 commands 依「存箱子的路徑」排列，chest id 從提示中的箱子資訊取得；{new_chest_id} 是佔位符，會自動填入，不要替換成數字。
 
-① 有已分類箱子且有空間（freeSlots > 0）且有設定基地（home 已設定）：
-{"action": "plan", "commands": ["stop指令", "home", "deposit <id>", "back", "resume指令"]}
-commands 裡的 chest id 從下方提供的箱子資訊取得。
-
-② 沒有已分類箱子，但背包有足夠木材可做箱子（wood_as_planks ≥ 16）且有設定基地（home 已設定）：
-{"action": "plan", "commands": ["stop指令", "home", "makechest", "labelchest {new_chest_id} <label>", "deposit {new_chest_id}", "back", "resume指令"]}
-{new_chest_id} 是佔位符，makechest 完成後會自動填入實際 id，不要替換成數字。
-label 根據背包最多的材料類型選擇：wood / ore / stone / misc。
-
-③ 沒有設定基地（home 未設定）且背包有足夠木材可做箱子（wood_as_planks ≥ 16）：
-先前往地表、設定基地、再放箱子存放。
-{"action": "plan", "commands": ["stop指令", "surface", "sethome", "makechest", "labelchest {new_chest_id} <label>", "deposit {new_chest_id}", "back", "resume指令"]}
-注意：此路徑不需要 home 指令（sethome 才是設定，home 是前往已設定的基地）。
-
-⚠ 若沒有設定基地（home 未設定）且木材不足，絕對不能在 plan 裡加入 home 指令，不要嘗試 makechest + deposit 流程，只能選 drop 或 continue。
-⚠ 若目前活動是 smelting，絕對不能回傳 continue。
-  背包滿時 smelting 無法取出成品，continue 會造成永久死鎖。
-  必須選 drop（丟棄低價值物品）或 plan（存入箱子）。
-  這種情況下應優先選 drop（丟棄低價值物品），若沒有可丟的才選 continue。
-
-resume 指令的數量填入剩餘目標（原目標 - 已完成數量）。
-
-【各活動對應的 stop / resume 指令格式】
-- mining   → stop: stopmine  / resume: mine <ore> <count>     例：mine diamond 41
-- chopping → stop: stopchop  / resume: chop logs <count>      例：chop logs 20
-- fishing  → stop: stopfish  / resume: fish catches <count>   例：fish catches 30
-- smelting → stop: stopsmelt / resume: smelt <material>       例：smelt iron
-- idle     → 不需要 stop，resume 留空（只執行 home deposit back）
-
-【裝備欄狀態說明】
-- 裝備欄（主手、頭盔、胸甲、護腿、靴子）不佔背包格，無法用 drop 丟棄
-- 若裝備耐久 0%（已損壞），代表該裝備實際上已無法使用，背包若有備用則可考慮用 equip 換上
-- 裝備欄資訊僅供判斷，不能列入 drop 的 items 清單
-
-【絕對不能丟的物品】
-- 食物（cooked_beef、bread、fish 等）
-- 鐵質以上工具與武器（iron_pickaxe、iron_axe、sword 等）
-- 礦石與原礦（ore、raw_iron、raw_gold、raw_copper、lapis_lazuli、coal、diamond、emerald 等）
-- 木材與木板（oak_log、planks 等，合成用）
-- string（製作弓、釣竿必要材料）
-- 任何稀有或有合成價值的物品
-
-【可以丟的低成本工具（重新製作不耗費珍貴資源）】
-- wooden_pickaxe、wooden_axe、wooden_shovel 等木製工具
-- stone_pickaxe、stone_axe、stone_shovel 等石製工具
-- 多餘的 crafting_table（留 1 個即可）
-- bone、rotten_flesh、spider_eye 等無用戰利品
-- clay_ball、clay — 無合成用途，全部丟棄
-- raw_copper、copper_ingot — 價值低，可全部丟棄
-- 各種樹苗（spruce_sapling、oak_sapling 等）— 全部丟棄
-- arrow 超過 16 支時超出部分可丟棄；
-- 背包裡耐久度 ≤ 10% 的工具或裝備（幾乎已損壞，可以丟棄換空間）
-  - 例外：若背包沒有同類型備用，且裝備欄對應槽位也是損壞的，則保留
-
-【封口材料規則（重要）】
-- cobblestone、cobbled_deepslate 是用來封埋垃圾的洞口材料
-- 挖礦時：總共至少留 1 組（64個）cobblestone，超出的部分才能丟棄
-- 其他活動：至少留 2 組（128個）
-
-【根據活動決定的丟棄邏輯】
-
-如果活動是 mining（挖礦）：
-- cobblestone、cobbled_deepslate：留 1 組（64個），超出部分丟棄
-- diorite、andesite、granite、tuff、gravel、flint、pointed_dripstone、dirt、sand：全部丟棄
-- 低成本工具：可丟棄
-- 釣魚垃圾（lily_pad、tripwire_hook 等）：全部丟棄
-
-如果活動是 fishing、woodcutting、smelting 或其他：
-- cobblestone、cobbled_deepslate：留 2 組（128個），超出部分丟棄
-- diorite、andesite、granite、tuff：若超過 32 個可丟棄，否則保留
-- gravel、flint、pointed_dripstone、dirt：全部丟棄
-- 釣魚垃圾（lily_pad、tripwire_hook 等）：全部丟棄
-
-如果沒有東西可以丟，回傳 continue。
-items 清單填英文 item name，不包含數量。
-"""
+""" + knowledge("inventory")
 
 
 def _is_equipment(name: str) -> bool:

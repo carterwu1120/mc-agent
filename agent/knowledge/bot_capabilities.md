@@ -1,0 +1,46 @@
+# Bot 能力與限制
+
+## 鎬子與工具鏈
+
+- `mine <ore> <n>`（含 `mine stone`）不會自己做鎬子，沒有足夠等級時直接回報 `no_tools`。
+- 最低等級：iron、lapis、copper → stone_pickaxe；gold、redstone、diamond、emerald → iron_pickaxe；ancient_debris → diamond_pickaxe；其他 → wooden_pickaxe。
+- `preparetool <tier>_pickaxe` 只用背包現有材料合成（含工作台、木棍），不會採集。
+- 只補缺的那一段：木鎬 `chop logs 3` → `preparetool wooden_pickaxe`；石鎬 `mine stone 3` → `preparetool stone_pickaxe`；鐵鎬 `mine iron 3` → `smelt raw_iron 3` → `preparetool iron_pickaxe`；鑽石鎬 `mine diamond 3` → `preparetool diamond_pickaxe`。
+
+## 裝備（equip）
+
+- `equip` 換上背包裡最好的武器與護甲，`equip <item>` 換上指定物品；兩者都不會合成。
+- 盔甲沒有合成指令，只會在戰鬥結束後或盔甲耐久 ≤ 10% 時，於閒置狀態用背包材料自動補製（鑽石優先，否則鐵錠）。
+- 只在玩家要求、剛取得新武器或護甲，或要 hunt / combat 且背包有更好的裝備時才加 `equip`。mine / chop / fish / smelt 會自己換工具，前面不要加 `equip`。
+- combat 不是準備動作。
+
+## 食物
+
+- 飢餓 < 18 且有食物時會自動進食。
+- `getfood count <n>` 只煮背包已有的生食；`fish catches <n>` 需要背包已有釣竿（不會自動製作）且在水邊；`hunt count <n>` 狩獵附近動物。三者都要帶明確正整數。
+- 數量 = 任務需要的熟食 − 現有熟食。生食不夠就先 hunt 或 fish 補缺口，附近沒有動物先 `explore animals`。不要假設每隻動物掉兩個生食，也不要囤積。
+- 飢餓接近 20 且任務短、風險低時，不需要補食物。
+
+## 食物不足時的數量
+
+食物不足事件（飢餓 < 10 且沒有食物）的目標 = max(1, ceil((20 − 飢餓) / 4) + 風險緩衝 − 現有熟食)。每份熟食約回 4 點飢餓；目前或下一個活動是 mining、combat、hunting、explore、fishing 時，風險緩衝為 1。
+
+## 冶煉與燃料
+
+- `smelt <material> <n>` 必須帶數量，只處理背包已有的原料，需要熔爐（8 個圓石）與燃料。
+- 燃料優先用木頭或木板（1 個原木約燒 1.5 個）；背包完全沒有木頭也沒有煤時，才 `mine coal`。
+
+## 木材與箱子
+
+- `makechest` 需要等效 16 木板（原木 × 4 + 木板，或 2 個 chest），會放置大箱子並回報新箱子 id；後續用 `labelchest {new_chest_id} <label>`、`deposit {new_chest_id}`。
+- 已有對應類別且有空位的箱子就直接 `deposit <id>`。label：wood / ore / stone / misc / food。
+
+## 移動與位置
+
+- `home`、`back`、`tp` 透過伺服器 `/tp`，需要權限。`back` 回到目前最上層活動的起點。
+- 沒有基地不能用 `home`；`sethome` 設定基地。
+- `surface` 前往附近地表；`explore trees|animals|surface` 前往新區域。
+
+## 背包
+
+- 背包達 34/36 格時活動暫停，bot 會先自動壓縮、丟垃圾裝備、埋雜物，空間仍不足才需要決策；這時採集類活動不會開始。

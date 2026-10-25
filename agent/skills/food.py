@@ -17,6 +17,7 @@ def _build_food_plan(state: dict) -> tuple[list[str], int]:
     activity = state.get('activity', 'idle')
 
     # Four hunger points per meal is deliberately conservative across food types.
+    # agent/knowledge/bot_capabilities.md (食物不足時的數量) states this formula; keep them in sync.
     meals_for_hunger = math.ceil(max(0, 20 - food_level) / 4)
     risk_buffer = 1 if activity in RISKY_ACTIVITIES else 0
     target = max(1, meals_for_hunger + risk_buffer - cooked_total)

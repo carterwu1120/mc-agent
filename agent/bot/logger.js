@@ -59,7 +59,7 @@ function _cleanupOldLogs(logDir, keepDays = 7) {
 function initLogger(name = 'bot') {
     if (global.__agentLoggerInitialized) return global.__agentLoggerPath
 
-    const logDir = path.join(__dirname, '..', 'logs')
+    const logDir = process.env.BOT_LOG_DIR || path.join(__dirname, '..', 'logs')
     fs.mkdirSync(logDir, { recursive: true })
     _cleanupOldLogs(logDir)
     const botLabel = _resolveLogLabel()

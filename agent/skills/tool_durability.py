@@ -6,14 +6,13 @@ from agent.context_builder import build_for_skill
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json, equipment_summary
 from agent.skills.commands_ref import command_list
+from agent.skills.knowledge import knowledge
 
-_DURABILITY_COMMANDS = command_list(["mine", "chop", "smelt", "equip", "chat", "idle"])
+_DURABILITY_COMMANDS = command_list(["mine", "chop", "smelt", "preparetool", "equip", "chat", "idle"])
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的裝備耐久度處理助手。
-一或多件裝備（主手工具、頭盔、胸甲、護腿、靴子）耐久度剩餘 10% 以下，請根據目前狀態決定下一步。
-每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
-
+一或多件裝備（主手工具、頭盔、胸甲、護腿、靴子）耐久度剩餘 10% 以下，請決定下一步。
+只能回覆以下其中一種 JSON（不要加任何其他文字），text 用一句繁體中文說明理由：
 {{"action": "plan", "commands": ["mine iron 3", "smelt raw_iron 3"], "text": "...理由..."}}
 {{"command": "equip", "text": "...理由..."}}
 {{"command": "chat", "text": "...告知玩家..."}}
@@ -22,28 +21,7 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的裝備耐久度處理助手。
 【可用指令】
 {_DURABILITY_COMMANDS}
 
-【裝備合成材料對應】
-- 木製工具/盔甲：需要 planks（木板）
-- 石製工具：需要 cobblestone（鵝卵石）
-- 鐵製工具/盔甲：需要 iron_ingot（鐵錠），鐵錠來自 smelt raw_iron
-- 鑽石工具/盔甲：需要 diamond（鑽石），無法冶煉取得，只能挖礦
-- 盔甲（頭盔/胸甲/護腿/靴子）是直接用材料合成，不需要冶煉步驟
-
-【決策原則】
-- 若背包有「現成裝備」且耐久正常（無 ⚠ 標註）→ equip 換上
-- 若背包的同類裝備標註 ⚠ 耐久損壞 → 那件不可用，不要 equip，視同沒有備品
-- `equip` 只會換上背包裡已存在的裝備，不會合成新裝備
-- 若只有材料但沒有現成裝備，不可回覆 equip；正在執行的活動應由活動腳本處理必要工具
-  ⚠ 注意：iron_ingot ≠ iron_leggings，有 ingot 不代表有現成護腿
-- 若 equip 已執行但問題仍存在（本次警告與上次相同）→ 停止重複 equip，改為合成或採礦
-- 若沒有材料：
-  - 鑽石裝備 → 需要 mine diamond，沒有捷徑
-  - 鐵製裝備 → plan: mine iron → smelt raw_iron → equip
-  - 若取得材料成本太高（需要深挖），chat 告知玩家由玩家決定
-- 若裝備還有耐久（只是偏低）且任務重要 → idle 讓玩家決定
-- 若是斧頭/劍等非必要工具，且任務不需要它 → idle
-- 禁止中斷正在進行的採礦/釣魚等長時任務，除非裝備即將完全損壞
-- 絕對不要挖石頭來處理盔甲問題，鵝卵石對盔甲無用
+{knowledge('durability')}
 """
 
 

@@ -43,6 +43,10 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
 **Rules:**
 - Always use `command_list(keys)` from `commands_ref.py` — never write command descriptions inline
+- Domain rules (strategies, quantities, what commands can/cannot do) go in `agent/knowledge/*.md`
+  and are loaded with `knowledge(name, *sections)` from `knowledge.py`. Keep only the output
+  format and Python-specific mechanics (plan_context, pending steps, placeholders) inline.
+  If a prompt recommends a command, that command must be in the skill's allowlist.
 - `equipment` items arrive as `{name, durability_pct}` dicts — use `_item_name(item)` / `_item_durability_pct(item)` from `state_summary.py`
 
 ---

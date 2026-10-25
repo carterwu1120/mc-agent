@@ -7,6 +7,7 @@ from agent.plan_utils import normalize_commands
 from agent.prompt_logging import log_prompt
 from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
 from agent.skills.commands_ref import command_list
+from agent.skills.knowledge import knowledge
 from agent.skills.llm_response import parse_llm_json
 from agent.skills.state_summary import summary_json
 
@@ -27,36 +28,24 @@ def _parse_json(text: str) -> dict:
         raise
 
 SYSTEM_PROMPT = """你是 Minecraft 機器人的合成決策助手。
-機器人需要合成某樣物品，但有多種材料選項，請根據當前資源和目標做出最適合的決策。
+機器人需要合成某樣物品，但有多種材料選項，請選出最適合的一個。
 只能回覆以下格式的 JSON（不要加任何其他文字）：
 {"item": "iron_axe"}
 
-通用原則：
-- 稀有資源（diamond、gold_ingot、netherite）優先保留，除非沒有其他選擇
-- 選擇材料最充裕的選項，避免把珍貴資源用在可以用普通材料替代的地方
-- 考慮整體資源分配：某種材料如果只夠做一件東西，要想清楚這件東西是否最重要
-- 只能從 options 列表裡選一個，回傳 item 的英文名稱
-- 如果背包有可燒製的原礦（raw_iron 等），考慮是否先燒成錠再合成更好的工具
-"""
+""" + knowledge("crafting", "選擇合成選項")
 
 _MATERIAL_ALLOWED = PLAN_ALLOWED_COMMANDS - {"equip"}
 
 SYSTEM_PROMPT_MATERIAL = """你是 Minecraft 合成前置條件規劃者。
-機器人缺少合成材料。請根據完整狀態中的 inventory、capabilities、environment、目前任務與近期失敗，規劃可執行的材料取得路徑，不要套用固定的單一步驟對照表。
+機器人缺少合成材料，請規劃材料取得路徑。原任務若仍存在，會在前置步驟完成後自動接回。
 只輸出以下其中一種 JSON，不要加其他文字：
 {"action":"plan","commands":["..."],"text":"策略理由"}
 {"action":"wait","text":"目前無可行路徑，以及需要玩家提供什麼"}
 
-原則：
-- 使用 1–6 個短而可觀察的步驟；考慮工具、工作台、燃料、地形與資源鏈的前置需求。
-- 不要再次使用 equip：目前正是 equip/crafting 缺料才觸發本決策。
-- `getfood` 只會處理背包已有的生食；沒有生食時應 hunt，附近沒有動物時可先 explore animals。
-- 可以使用 smelt，但必須確認背包已有原料且具備熔爐/燃料條件，或計畫先取得它們。
-- 不要重送近期已失敗且狀態沒有新證據的策略。
-- 若原任務仍存在，系統會在前置步驟完成後自動接回，不要輸出 resumetask。
+""" + knowledge("crafting", "缺少合成材料") + "\n\n" + knowledge("bot_capabilities", "鎬子與工具鏈", "冶煉與燃料") + """
 
 可用指令：
-""" + command_list(sorted(_MATERIAL_ALLOWED))
+""" + command_list(sorted(_MATERIAL_ALLOWED), include_stops=False)
 
 SMELTABLE = {
     'raw_iron': 'iron_ingot', 'iron_ore': 'iron_ingot', 'deepslate_iron_ore': 'iron_ingot',
