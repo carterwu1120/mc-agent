@@ -33,7 +33,20 @@ _CHOP_LOG_NAMES = frozenset({
     'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log',
 })
 _FISH_ITEM_NAMES = frozenset({'cod', 'salmon', 'tropical_fish', 'pufferfish'})
-_HUNT_MEAT_NAMES = frozenset({'raw_beef', 'raw_porkchop', 'raw_chicken', 'raw_mutton', 'raw_rabbit'})
+# Java item ids for raw meat carry no "raw_" prefix; the old raw_* names never matched,
+# so every successful hunt failed verification and triggered a recovery.
+_HUNT_MEAT_NAMES = frozenset({'beef', 'porkchop', 'chicken', 'mutton', 'rabbit'})
+
+# smelt <material> → item that appears in the inventory.
+_SMELT_OUTPUT = {
+    'iron': 'iron_ingot', 'raw_iron': 'iron_ingot',
+    'gold': 'gold_ingot', 'raw_gold': 'gold_ingot',
+    'copper': 'copper_ingot', 'raw_copper': 'copper_ingot',
+    'sand': 'glass', 'cobblestone': 'stone',
+    'beef': 'cooked_beef', 'porkchop': 'cooked_porkchop', 'chicken': 'cooked_chicken',
+    'mutton': 'cooked_mutton', 'rabbit': 'cooked_rabbit', 'cod': 'cooked_cod',
+    'salmon': 'cooked_salmon', 'potato': 'baked_potato',
+}
 
 
 def _inventory_counts(inventory: list) -> dict[str, int]:
@@ -77,12 +90,6 @@ def _verify_step(cmd_str: str, before: dict | None, after: dict | None) -> str |
             expected_count = int(parts[2])
         except ValueError:
             return None
-        _SMELT_OUTPUT = {
-            "iron": "iron_ingot", "raw_iron": "iron_ingot",
-            "gold": "gold_ingot", "raw_gold": "gold_ingot",
-            "copper": "copper_ingot", "raw_copper": "copper_ingot",
-            "sand": "glass", "cobblestone": "stone",
-        }
         output_item = _SMELT_OUTPUT.get(target_raw, target_raw)
         before_counts = _inventory_counts(before.get("inventory", []))
         after_counts  = _inventory_counts(after.get("inventory", []))
@@ -136,12 +143,7 @@ _GOAL_ORE_TO_ITEM = {
     'stone': 'cobblestone', 'gravel': 'gravel', 'sand': 'sand',
     'cobblestone': 'cobblestone',
 }
-_GOAL_SMELT_OUTPUT = {
-    'iron': 'iron_ingot', 'raw_iron': 'iron_ingot',
-    'gold': 'gold_ingot', 'raw_gold': 'gold_ingot',
-    'copper': 'copper_ingot', 'raw_copper': 'copper_ingot',
-    'sand': 'glass', 'cobblestone': 'stone',
-}
+_GOAL_SMELT_OUTPUT = _SMELT_OUTPUT
 
 
 def _verify_goal(commands: list, before: dict | None, after: dict | None) -> str | None:

@@ -451,7 +451,10 @@ async function _reclaimCraftingTable(bot) {
     const block = bot.blockAt(pos)
     if (!block || block.name !== 'crafting_table') return
     try {
-        await ensureAxe(bot)
+        // Only use an axe already carried; a table also breaks by hand. Crafting one here
+        // spent planks and could detour into smelting the task's raw iron.
+        const axe = bot.inventory.items().find(i => i.name.endsWith('_axe'))
+        if (axe) await bot.equip(axe, 'hand')
         await bot.dig(block)
         for (let attempt = 0; attempt < 8; attempt++) {
             await _sleep(500)
@@ -497,6 +500,15 @@ async function _smeltIfNeeded(bot, toolSuffix) {
 
     const oreEntry = bot.inventory.items().find(i => _ORE_TO_INGOT[i.name] === neededIngot)
     if (!oreEntry) return false
+    const needed = toolSuffix === '_shovel' ? 1 : 3
+    const ingots = bot.inventory.items().filter(i => i.name === neededIngot).reduce((s, i) => s + i.count, 0)
+    const ore = bot.inventory.items().filter(i => _ORE_TO_INGOT[i.name] === neededIngot).reduce((s, i) => s + i.count, 0)
+    if (ingots >= needed) return true
+    // Smelting one ore toward a 3-ingot tool only ends in a no_input stuck report.
+    if (ingots + ore < needed) {
+        console.log(`[Craft] ${oreEntry.name} 不足以湊滿 ${needed} 個 ${neededIngot}（現有錠 ${ingots}、原礦 ${ore}），跳過燒製`)
+        return false
+    }
 
     const hasFurnace = !!bot.findBlock({
         matching: b => ['furnace', 'lit_furnace', 'blast_furnace']
@@ -531,13 +543,13 @@ async function _smeltIfNeeded(bot, toolSuffix) {
         }
     }
 
-    const needed = toolSuffix === '_shovel' ? 1 : 3
     const target = oreEntry.name.includes('iron') ? 'iron'
                  : oreEntry.name.includes('gold') ? 'gold' : 'copper'
+    const toSmelt = needed - ingots
 
-    console.log(`[Craft] 有 ${oreEntry.name}，先燒製 ${needed} 個 ${neededIngot}...`)
+    console.log(`[Craft] 有 ${oreEntry.name}，先燒製 ${toSmelt} 個 ${neededIngot}...`)
     const { startSmelting, isActive: isSmeltingActive, consumeLastOutcome } = require('./smelting')
-    startSmelting(bot, { target, count: needed })  // 內部會停 mining，完成後由 activity stack 接回上一層
+    startSmelting(bot, { target, count: toSmelt })  // 內部會停 mining，完成後由 activity stack 接回上一層
 
     while (isSmeltingActive()) {
         await _sleep(3000)

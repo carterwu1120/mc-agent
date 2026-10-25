@@ -10,11 +10,14 @@ function _sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 const DATA_FILE = path.join(process.env.BOT_DATA_DIR || path.join(__dirname, '..', 'data'), 'chests.json')
 
 const LABEL_PATTERNS = {
-    food:  ['cooked_', 'bread', 'apple', 'carrot', 'potato', 'raw_beef', 'raw_pork', 'raw_chicken', 'raw_mutton', 'raw_rabbit', 'raw_salmon', 'raw_cod'],
+    food:  ['cooked_', 'bread', 'apple', 'carrot', 'potato'],
     wood:  ['_log', '_planks', '_sapling', 'bamboo'],
     stone: ['cobblestone', 'deepslate', 'gravel', 'sand', 'diorite', 'andesite', 'granite', 'tuff', 'calcite'],
     ore:   ['_ingot', 'raw_iron', 'raw_gold', 'raw_copper', 'lapis_lazuli', 'quartz'],
 }
+
+// Raw meat/fish ids have no "raw_" prefix; exact names avoid matching rabbit_hide etc.
+const FOOD_EXACT = new Set(['beef', 'porkchop', 'chicken', 'mutton', 'rabbit', 'salmon', 'cod'])
 
 // ore items that must be exact name matches (avoid matching tool/armor names)
 const ORE_EXACT = new Set(['diamond', 'emerald', 'coal', 'netherite_scrap', 'netherite_ingot', 'ancient_debris', 'amethyst_shard', 'diamond_block', 'emerald_block', 'gold_block', 'iron_block', 'coal_block', 'copper_block', 'lapis_block', 'redstone_block', 'netherite_block'])
@@ -28,6 +31,7 @@ function _isEquipment(name) {
 
 function _itemLabel(name) {
     if (_isEquipment(name)) return null  // never deposit equipment
+    if (FOOD_EXACT.has(name)) return 'food'
     if (ORE_EXACT.has(name)) return 'ore'
     for (const [label, patterns] of Object.entries(LABEL_PATTERNS)) {
         if (patterns.some(p => name.includes(p))) return label

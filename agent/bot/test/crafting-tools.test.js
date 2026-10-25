@@ -83,3 +83,15 @@ test('allowSmelt=false crafts only from carried materials', async () => {
     assert.equal(await crafting.ensurePickaxeTier(bot, 'iron_pickaxe', true, true, false), false)
     assert.deepEqual(smelting.calls, [], 'mining replacement must not smelt raw ore')
 })
+
+test('one raw iron is not smelted toward a three-ingot tool', async () => {
+    // Seen live: a tool request smelted the only raw_iron, smelting then ran out of
+    // input and reported no_input, which exhausted the task's recovery budget.
+    const smelting = smeltingStub()
+    const crafting = loadCrafting(smelting)
+    const inventory = [{ name: 'stick', count: 2 }, { name: 'cobblestone', count: 9 }, { name: 'raw_iron', count: 1 }]
+    const bot = makeBot(inventory, [])
+
+    assert.equal(await crafting.ensurePickaxeTier(bot, 'iron_pickaxe', true), false)
+    assert.deepEqual(smelting.calls, [])
+})

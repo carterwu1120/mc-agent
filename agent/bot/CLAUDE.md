@@ -68,7 +68,15 @@ Recovery `suspend` and `stopX` clear the stack, so `back` must not require a fra
 `hunt` and `getfood` require explicit positive count goals. Their JS activities
 reject missing or invalid goals instead of supplying hidden defaults. `getfood`
 only processes raw food already present in inventory; acquiring raw food belongs
-to an earlier hunt/fish/explore plan step.
+to an earlier hunt/fish/explore plan step. It cooks that food itself by pushing a
+`smelting` frame and re-counting on resume; a round that adds no cooked food reports
+`cook_failed`. (It used to report `has_raw_food` for the planner to cook, which cost
+an LLM recovery on every food plan.) Raw meat item ids are `beef`, `chicken`, … with
+no `raw_` prefix.
+
+Tool crafting only smelts ore when carried ore plus ingots cover the tool, and only the
+shortfall. Reclaiming a placed crafting table uses an axe already carried and never
+crafts one.
 
 Every activity follows this exact pattern:
 

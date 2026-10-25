@@ -47,6 +47,7 @@
 - `no_animals`：附近沒有可食用動物，這次狩獵不算完成。生食已夠先處理（≥ 8，或 ≥ 剩餘需求的一半）→ 先 getfood；有釣竿且在水邊 → fish 再 getfood；否則 explore animals，再 hunt 剩餘數量。
 - `no_weapon`：沒有武器且本地合成已失敗，不要原地追動物。熟食已夠就停止補食；有釣竿就改 fish；缺木材但附近有樹 → chop logs 2 再 hunt。都不可行時說明並等待。
 - `no_raw_food`（getfood）：先 hunt 或 fish 取得生食，再 getfood count <還需熟食數量>（不是原本的總目標）。
+- `cook_failed`（getfood）：烹飪沒有產出熟食，依冶煉的原因處理（燃料、熔爐位置）後再 getfood。
 
 ## 箱子
 

@@ -167,3 +167,19 @@ def test_replanned_step_records_the_stuck_reason(monkeypatch):
     e.replan(["explore animals", "hunt count 4"], path_taken="supervised_recovery", reason="no_animals")
     assert e._consume_replan(0, ["hunt count 4"], "hunt count 4", preserve_task=False) == ["explore animals", "hunt count 4"]
     assert failed == ["replanned:no_animals"]
+
+
+def _inv(**items):
+    return {"inventory": [{"name": k, "count": v} for k, v in items.items()]}
+
+
+def test_hunt_verification_counts_java_raw_meat_ids():
+    # Seen live: 4 chickens killed, yet "hunt 後肉類數量未增加" triggered a recovery.
+    assert module._verify_step("hunt count 4", _inv(), _inv(chicken=4)) is None
+    assert module._verify_step("hunt count 4", _inv(chicken=4), _inv(chicken=4)) is not None
+
+
+def test_smelting_food_is_verified_by_its_cooked_output():
+    # Seen live: smelt chicken 4 produced 4 cooked_chicken but was judged "+-4 chicken".
+    assert module._verify_step("smelt chicken 4", _inv(chicken=8), _inv(chicken=4, cooked_chicken=4)) is None
+    assert module._verify_step("smelt raw_iron 3", _inv(raw_iron=3), _inv(iron_ingot=3)) is None

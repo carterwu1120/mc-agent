@@ -23,6 +23,8 @@ let isGettingFood = false
 let _isPaused = false
 let _startingCookedCount = 0
 let _loopGen = 0
+// Cooked count when the last cooking round started; a round that adds nothing stops.
+let _cookedBeforeRound = null
 
 activityStack.register('getfood', _pause)
 
@@ -48,6 +50,7 @@ async function startGetFood(bot, goal = {}) {
     }
     isGettingFood = true
     _startingCookedCount = _countItems(bot, COOKED_FOOD_ITEMS)
+    _cookedBeforeRound = null
     activityStack.push(bot, 'getfood', goal, (b) => _resumeGetFood(b, goal))
     console.log(`[Food] 開始蒐集食物 goal=${JSON.stringify(goal)}`)
     _loop(bot, goal)
@@ -101,15 +104,29 @@ async function _loop(bot, goal = {}) {
 
         const remaining = Math.max(1, targetCooked - cookedProduced)
         const toCook = Math.min(rawEntry.count, remaining)
-        console.log(`[Food] 有生食 ${rawEntry.name} x${toCook}，交由上層冶煉`)
-        isGettingFood = false
-        bridge.sendState(bot, 'activity_stuck', {
-            activity: 'getfood',
-            reason: 'has_raw_food',
-            raw_food: rawEntry.name,
-            raw_count: toCook,
-            remaining,
-        })
+        if (_cookedBeforeRound !== null && cookedCount <= _cookedBeforeRound) {
+            // Smelting already reported its own reason (fuel, furnace spot); do not loop.
+            console.log('[Food] 上一輪烹飪沒有產出熟食，停止')
+            isGettingFood = false
+            bridge.sendState(bot, 'activity_stuck', {
+                activity: 'getfood', reason: 'cook_failed', raw_food: rawEntry.name, remaining,
+            })
+            break
+        }
+        // getfood cooks what it carries. It used to report has_raw_food and leave cooking
+        // to the planner, which cost an LLM recovery (and budget) on every food plan.
+        _cookedBeforeRound = cookedCount
+        console.log(`[Food] 烤 ${rawEntry.name} x${toCook}`)
+        require('./smelting').startSmelting(bot, { target: rawEntry.name, count: toCook })
+        if (activityStack.getActivity() !== 'smelting') {
+            console.log('[Food] 無法開始烹飪（熔爐流程已在使用中）')
+            isGettingFood = false
+            bridge.sendState(bot, 'activity_stuck', {
+                activity: 'getfood', reason: 'cook_failed', raw_food: rawEntry.name, remaining,
+            })
+        }
+        // Otherwise smelting was pushed above getfood (pausing this loop); its pop
+        // resumes getfood, which re-counts cooked food.
         break
     }
 
