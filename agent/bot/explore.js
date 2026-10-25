@@ -180,7 +180,7 @@ function findExploreSpotForSurface(bot, maxRadius = 96, minRadius = 20, options 
                 0,
                 Math.round((dz * radius) / scale),
             )
-            const target = _findSurfaceSpotNear(bot, center, 10, false)
+            const target = _findSurfaceSpotNear(bot, center, 10, true)
             if (!target) continue
             if (target.distanceTo(base) < minRadius) continue
             if (maxYDelta !== null && Math.abs(target.y - base.y) > maxYDelta) continue
@@ -267,7 +267,6 @@ async function _run(bot, goal = {}, token) {
                 : findExploreSpotForSurface(bot, radius, minRadius, {
                     targetType,
                     minRecentDistance: targetType === 'animals' ? 32 : 24,
-                    maxYDelta: targetType === 'animals' ? 18 : null,
                 })
 
             if (!target || !isExploring || token !== _runToken) {
@@ -277,15 +276,31 @@ async function _run(bot, goal = {}, token) {
             try {
                 bot.pathfinder?.setGoal(null)
             } catch (_) {}
-            console.log(`[Explore] 傳送到探索點 (${target.x}, ${target.y}, ${target.z})`)
+            const origin = bot.entity.position.clone()
+            console.log(`[Explore] 嘗試傳送到探索點 (${target.x}, ${target.y}, ${target.z})`)
             noteTeleportLikeAction()
             bot.chat(teleportCommand(bot.username, target))
             const landed = await waitForSafeLanding(bot, target, {
-                requireSky: targetType === 'trees',
+                requireSky: true,
                 timeoutMs: 3500,
             })
             if (!execution.isCurrent()) return
             if (token !== _runToken || !isExploring) return
+
+            if (!landed) {
+                const unchanged = bot.entity.position.distanceTo(origin) < 1
+                bridge.sendState(bot, 'activity_stuck', {
+                    activity_name: 'explore',
+                    reason: 'movement_failed',
+                    detail: unchanged
+                        ? '傳送後位置未改變；未能抵達探索點，不能判定該區域缺少資源。請檢查傳送權限、伺服器回應或連線。'
+                        : '傳送後未確認安全抵達地表；不能判定目標區域缺少資源。',
+                    movement: { method: 'teleport', origin, target,
+                        actual: bot.entity.position.clone(), position_unchanged: unchanged },
+                })
+                return
+            }
+            console.log(`[Explore] 已確認抵達探索點 (${landed.x}, ${landed.y}, ${landed.z})`)
 
             const nearbyLogs = targetType === 'trees'
                 ? _countNearbyLogs(bot, bot.entity.position.floored(), scanRadius)
@@ -297,8 +312,8 @@ async function _run(bot, goal = {}, token) {
             const reachedGoal = targetType === 'trees'
                 ? (landed && isSafeStandable(bot, landed, { requireSky: true }) && nearbyLogs > 0)
                 : (targetType === 'animals'
-                    ? (landed && isSafeStandable(bot, landed) && nearbyAnimals > 0)
-                    : (landed && isSafeStandable(bot, landed)))
+                    ? (isSafeStandable(bot, landed, { requireSky: true }) && nearbyAnimals > 0)
+                    : isSafeStandable(bot, landed, { requireSky: true }))
 
             if (reachedGoal) {
                 if (targetType === 'trees') {

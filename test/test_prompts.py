@@ -41,3 +41,22 @@ def test_missing_or_unexpected_values_are_errors():
 def test_placeholders_are_declared_by_name():
     assert placeholders('recovery') == {'commands', 'knowledge'}
     assert placeholders('coordinator') == set()
+
+
+def test_template_identifiers_support_python310_and_escaped_dollars(monkeypatch):
+    from string import Template
+    from agent.handlers import prompts
+    class LegacyTemplate(Template):
+        def get_identifiers(self):
+            raise AssertionError('Python 3.10 has no get_identifiers')
+    monkeypatch.setattr(prompts, '_template', lambda _: LegacyTemplate('$value ${other} $$value $value'))
+    assert prompts.placeholders('sample') == {'value', 'other'}
+    assert prompts.render_prompt('sample', value='A', other='B') == 'A B $value A'
+
+
+def test_invalid_placeholder_is_rejected(monkeypatch):
+    from string import Template
+    from agent.handlers import prompts
+    monkeypatch.setattr(prompts, '_template', lambda _: Template('invalid $!'))
+    with pytest.raises(ValueError):
+        prompts.placeholders('sample')

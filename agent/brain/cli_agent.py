@@ -1,5 +1,7 @@
 """CLI planning adapters; Minecraft tools remain owned by PlanExecutor."""
 import asyncio
+import hashlib
+import inspect
 from datetime import datetime, timedelta
 import json
 import os
@@ -513,6 +515,19 @@ class CLIAgentClient(LLMClient):
         )
         return result, candidate_session_id, usage
 
+    async def _invoke_observed(self, prompt, directory, session_id, effort):
+        """Log sizes and usage only; never print prompts, session IDs or responses."""
+        started = time.monotonic()
+        try:
+            result = await self._invoke(prompt, directory, session_id, effort)
+        except BaseException as error:
+            print(f"[CLIContext] status={type(error).__name__} elapsed_ms={int((time.monotonic() - started) * 1000)}")
+            raise
+        tokens, cumulative = result[2]
+        print(f"[CLIContext] status=ok input_tokens={tokens} usage_cumulative={cumulative} "
+              f"elapsed_ms={int((time.monotonic() - started) * 1000)}")
+        return result
+
     async def chat(
         self,
         messages: list[dict],
@@ -538,10 +553,20 @@ class CLIAgentClient(LLMClient):
                 )
             self._check_rotation()
             print(f"[CLI] {self.provider} reasoning_effort={effort}")
+            frame = inspect.currentframe()
+            try:
+                caller = frame.f_back.f_globals.get('__name__', 'unknown') if frame and frame.f_back else 'unknown'
+            finally:
+                del frame
+            system_key = hashlib.sha256((system or '').encode('utf-8')).hexdigest()[:12]
+            print(f"[CLIContext] caller={caller} system_key={system_key} "
+                  f"system_chars={len(system or '')} prompt_bytes={len(prompt.encode('utf-8'))} "
+                  f"reused={bool(self.session_reuse and self._session_id)} "
+                  f"prior_turns={self._session_turns} prior_input_tokens={self._session_input_tokens}")
             with tempfile.TemporaryDirectory(prefix="mc-agent-") as directory:
                 session_id = self._session_id if self.session_reuse else None
                 try:
-                    result, new_session_id, usage = await self._invoke(
+                    result, new_session_id, usage = await self._invoke_observed(
                         prompt.encode("utf-8"), directory, session_id, effort
                     )
                 except _CLIProcessError as error:
@@ -549,7 +574,7 @@ class CLIAgentClient(LLMClient):
                         # A deleted/corrupt CLI history must not permanently wedge the bot.
                         self._forget_session()
                         try:
-                            result, new_session_id, usage = await self._invoke(
+                            result, new_session_id, usage = await self._invoke_observed(
                                 prompt.encode("utf-8"), directory, None, effort
                             )
                         except _CLIProcessError as retry_error:

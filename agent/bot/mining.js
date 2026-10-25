@@ -901,7 +901,8 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
 
             } else {
                 // 先嘗試沿洞穴導航到更遠的礦石（不限 Y），讓 pathfinder 自然走進洞穴
-                const wideOres = bot.findBlocks({ matching: b => miningPhase.matches(b.name, goal.target), maxDistance: 32, count: 20 })
+                const detectedOres = bot.findBlocks({ matching: b => miningPhase.matches(b.name, goal.target), maxDistance: 32, count: 20 })
+                const wideOres = detectedOres
                     .filter(p => _isExposed(bot, p))
                     .filter(p => !_isNearWaterHazard(p))
                     .sort((a, b) => _priority(bot.blockAt(a)?.name) - _priority(bot.blockAt(b)?.name))
@@ -962,7 +963,9 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                     })
                     break
                 }
-                console.log('[Mine] 附近沒有礦石，挖隧道繼續')
+                console.log(detectedOres.length
+                    ? `[Mine] 掃描到 ${detectedOres.length} 個候選礦石，但未能直接採集（暴露且避開水域=${wideOres.length}，其中先前失敗=${wideOres.filter(p => _digFailed.has(p.toString())).length}），改挖隧道`
+                    : '[Mine] 本次 32 格掃描未找到目標礦石，挖隧道繼續')
                 if (!await _ensurePickaxeOrStuck(bot)) break
                 if (_shouldAbort(_myGen)) return
                 const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal, _myGen)

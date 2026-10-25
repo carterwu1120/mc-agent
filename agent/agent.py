@@ -1555,6 +1555,24 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             _planner_lock.release()
 
 
+async def _continue_player_task(state: dict, ws, *, explicit: bool) -> None:
+    """Reassess a held task without submitting a new coordinator envelope."""
+    task = task_memory.load() or {}
+    if not task or task.get('status') not in {'running', 'interrupted'}:
+        await _send_chat(ws, '目前沒有可恢復的未完成任務。')
+        return
+    if executor.is_running() or recovery.busy or state.get('activity', 'idle') != 'idle':
+        return
+    if not explicit and not recovery.held:
+        return  # A supply notification must not undo a manual stop.
+    previous_reason = recovery.reason or task.get('interruptedBy')
+    recovery.invalidate()
+    await _handle_recovery({**state, 'type': 'activity_stuck',
+        'reason': 'player_requested_resume' if explicit else 'player_state_update',
+        'detail': f"玩家訊息：{state.get('message', '')}；先前阻礙：{previous_reason}。"
+                  '請核對實際狀態，只解除已解決的阻礙，保留原目標。'}, ws)
+
+
 async def _handle_player_chat(state: dict, ws) -> None:
     message = state.get("message", "")
     if _is_system_chat_message(message):
@@ -1576,7 +1594,7 @@ async def _handle_player_chat(state: dict, ws) -> None:
             await _apply_manual_abort(state, ws)
             return
         if kind == "resume":
-            await _enqueue_player_task(message, interrupt=False, ws=ws)
+            await _continue_player_task(state, ws, explicit=True)
             return
         if kind == "interrupt":
             planner_message = override.get("message", "").strip()
@@ -1587,32 +1605,41 @@ async def _handle_player_chat(state: dict, ws) -> None:
             return
 
     if any(re.search(p, message, re.IGNORECASE) for p in planner_handler.RESUME_PATTERNS):
-        await _enqueue_player_task(message, interrupt=False, ws=ws)
+        await _continue_player_task(state, ws, explicit=True)
         return
 
-    activity = state.get("activity", "idle")
-    busy = activity != "idle" or executor.is_running()
+    # Classify idle/held messages too: notifications and questions are not tasks.
+    prior = task_memory.load_any() or {}
+    revision = recovery.revision
+    arb_state = _augment_state(state, player_task=message)
+    arb_state['chat_task'] = {k: prior.get(k) for k in ('id', 'goal', 'status', 'interruptedBy')}
+    decision = await task_arbitration_handler.handle(arb_state, llm)
+    current = task_memory.load_any() or {}
+    if recovery.revision != revision or current.get('id') != prior.get('id'):
+        await _send_chat(ws, '任務狀態剛才已改變，這次訊息未用來切換任務。')
+        return
+    if decision:
+        text = decision.get("text", "").strip()
+        choice = decision.get("decision")
+        if text:
+            await ws.send(json.dumps({"command": "chat", "text": text}))
+        if choice in {'update', 'resume', 'reply'}:
+            if choice != 'reply':
+                fresh = {**state, **_latest_state, 'message': message}
+                await _continue_player_task(fresh, ws, explicit=choice == 'resume')
+            return
+        if choice == "queue":
+            print(f"[TaskArb] 玩家任務已排隊: {message}")
+            await _enqueue_player_task(message, interrupt=False, ws=ws)
+            return
+        if choice == "defer":
+            print(f"[TaskArb] 暫緩玩家任務: {message}")
+            return
+        if choice == "interrupt":
+            await _enqueue_player_task(message, interrupt=True, ws=ws)
+            return
 
-    if busy:
-        arb_state = _augment_state(state, player_task=message)
-        decision = await task_arbitration_handler.handle(arb_state, llm)
-        if decision:
-            text = decision.get("text", "").strip()
-            choice = decision.get("decision")
-            if text:
-                await ws.send(json.dumps({"command": "chat", "text": text}))
-            if choice == "queue":
-                print(f"[TaskArb] 玩家任務已排隊: {message}")
-                await _enqueue_player_task(message, interrupt=False, ws=ws)
-                return
-            if choice == "defer":
-                print(f"[TaskArb] 暫緩玩家任務: {message}")
-                return
-            if choice == "interrupt":
-                await _enqueue_player_task(message, interrupt=True, ws=ws)
-                return
-
-    await _enqueue_player_task(message, interrupt=False, ws=ws)
+    await _send_chat(ws, '這次未能確認你的意思，原任務保持不變；請明確說明是繼續、詢問或指派新任務。')
 
 
 async def run():

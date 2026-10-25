@@ -9,7 +9,7 @@ from agent.handlers.prompts import render_prompt
 
 SYSTEM_PROMPT = render_prompt("task_arbitration")
 
-ALLOWED_DECISIONS = {"interrupt", "queue", "defer"}
+ALLOWED_DECISIONS = {"interrupt", "queue", "defer", "update", "resume", "reply"}
 
 
 def _extract_first_json_object(text: str) -> dict:
@@ -34,8 +34,9 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         task_memory.recent_failures(),
     )
     prompt = (
-        f"玩家剛剛提出新任務／新要求：{message}\n\n"
-        f"請根據以下狀態摘要，判斷要 interrupt、queue 還是 defer。\n\n"
+        f"玩家訊息（不一定是任務）：{message}\n\n"
+        f"目前任務：{json.dumps(state.get('chat_task'), ensure_ascii=False)}\n"
+        f"請先分辨狀態更新、恢復請求、詢問或新任務，再選擇 decision。\n\n"
         f"{summary_json(state)}"
         f"{task_history}"
     )

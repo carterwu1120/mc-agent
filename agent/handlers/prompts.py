@@ -17,7 +17,16 @@ def _template(name: str) -> Template:
 
 
 def placeholders(name: str) -> set[str]:
-    return set(_template(name).get_identifiers())
+    # get_identifiers() is unavailable in the supported Python 3.10 runtime.
+    template = _template(name)
+    identifiers = set()
+    for match in template.pattern.finditer(template.template):
+        identifier = match.group('named') or match.group('braced')
+        if identifier:
+            identifiers.add(identifier)
+        elif match.group('invalid') is not None:
+            raise ValueError(f'Invalid placeholder in prompts/{name}.md')
+    return identifiers
 
 
 def render_prompt(name: str, **values: str) -> str:
