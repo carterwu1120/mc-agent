@@ -140,6 +140,7 @@ function sendState(bot, type, extra = {}) {
 
 function sendActivityDone(bot, activityName, extra = {}) {
     const frame = getTopFrame()
+    activityStack.markFinished(activityName)
     sendState(bot, 'activity_done', {
         activity: activityName,
         reason: 'goal_reached',

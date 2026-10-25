@@ -25,14 +25,17 @@ function loadCombat(events) {
     return module.exports
 }
 
-// A zombie 12 blocks away that the pathfinder can never reach.
-function makeBot() {
+// A mob 12 blocks away that the pathfinder can never reach.
+function makeBot({ mob = 'zombie', items = [{ name: 'wooden_sword', count: 1 }], health = 20 } = {}) {
+    const gotos = []
     return {
+        gotos,
+        health,
         entity: { id: 1, position: new Vec3(0, 64, 0) },
-        entities: { 2: { id: 2, name: 'zombie', isValid: true, position: new Vec3(12, 64, 0), height: 1.9 } },
-        heldItem: { name: 'wooden_sword' },
-        inventory: { items: () => [{ name: 'wooden_sword', count: 1 }], slots: new Array(46).fill(null) },
-        pathfinder: { goto: () => Promise.reject(new Error('no path')), setGoal() {} },
+        entities: { 2: { id: 2, name: mob, isValid: true, position: new Vec3(12, 64, 0), height: 1.9 } },
+        heldItem: items[0] ?? null,
+        inventory: { items: () => items, slots: new Array(46).fill(null) },
+        pathfinder: { goto: goal => { gotos.push(goal.constructor.name); return Promise.reject(new Error('no path')) }, setGoal() {} },
         blockAt: () => ({ name: 'air' }),
         getEquipmentDestSlot: () => 5,
         equip: async () => {}, unequip: async () => {}, lookAt: async () => {}, attack() {},
@@ -71,3 +74,32 @@ test('an explicit combat command still reports an unreachable target', async () 
     assert.equal(stuck[0].reason, 'cannot_reach_target')
     activity.clearStack()
 })
+
+
+test('an archer outside the leash is chased when the bot can fight back', async () => {
+    // Seen live: a skeleton shot the bot 7 times while each defense ended "out of range".
+    activity.clearStack()
+    const events = []
+    const combat = loadCombat(events)
+    const bot = makeBot({ mob: 'skeleton' })
+    await combat.startCombat(bot, { defensive: true })
+    await runUntilIdle(combat)
+    assert.ok(bot.gotos.includes('GoalNear'), 'closes in on the archer')
+    assert.ok(!bot.gotos.includes('GoalInvert'))
+    assert.deepEqual(events.filter(e => e.type === 'activity_stuck'), [])
+    activity.clearStack()
+})
+
+test('an archer the bot cannot fight is escaped instead of ignored', async () => {
+    activity.clearStack()
+    const events = []
+    const combat = loadCombat(events)
+    for (const bot of [makeBot({ mob: 'skeleton', items: [] }), makeBot({ mob: 'skeleton', health: 4 })]) {
+        await combat.startCombat(bot, { defensive: true })
+        await runUntilIdle(combat)
+        assert.deepEqual(bot.gotos, ['GoalInvert'])
+    }
+    assert.deepEqual(events.filter(e => e.type === 'activity_stuck'), [])
+    activity.clearStack()
+})
+

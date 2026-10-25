@@ -7,7 +7,7 @@ const { initLogger } = require('./logger')
 const bridge = require('./bridge')
 const { setMcConnected } = bridge
 const activityStack = require('./activity')
-const { handle } = require('./commands')
+const { handle, haltActivities } = require('./commands')
 const eating = require('./eating')
 const inventory = require('./inventory')
 const combat = require('./combat')
@@ -216,6 +216,10 @@ bot.on('health', () => {
     }
     console.log(`[Bot] 死亡！原因：${_pendingDeathInfo.cause}，startPos：${JSON.stringify(_pendingDeathInfo.startPos)}`)
     bridge.sendState(bot, 'player_died', _pendingDeathInfo)
+    // Nothing from before death may resume at the spawn point (combat, mining and a
+    // leftover smelting frame did). Python plans the comeback from the death report.
+    execution.invalidate()
+    execution.run(() => haltActivities(bot))
 })
 
 bot.on('error', (err) => console.error(`[Error] ${err.message}`))

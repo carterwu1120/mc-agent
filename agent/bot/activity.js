@@ -127,8 +127,21 @@ function lastTaskStartPos() {
     return _lastTaskStartPos
 }
 
+// Called when an activity reports activity_done. It may still be cleaning up (furnace
+// reclaim, sapling planting, drop pickup) before its own pop.
+function markFinished(name) {
+    const top = _stack[_stack.length - 1]
+    if (top && top.activity === name) top.finished = true
+}
+
 function push(bot, name, goal, resumeFn) {
     if (!execution.isCurrent()) return
+    // The next command arrives as soon as activity_done is sent. Pausing a finished
+    // frame left it under the new activity forever (it never popped and resumed after
+    // later pops); remove it instead, which also cancels its leftover cleanup.
+    if (_stack.length > 0 && _stack[_stack.length - 1].finished) {
+        remove(bot, _stack[_stack.length - 1].activity, { resumePrevious: false })
+    }
     if (_stack.length > 0) {
         pause(bot)
     }
@@ -278,7 +291,7 @@ module.exports = {
     waitFor, endWait,
     register, push, pop, remove, pause, resumeCurrent,
     updateProgress, updateTopGoal, updateTopFrame, getTopFrame,
-    getActivity, getStack, clearStack, lastTaskStartPos,
+    getActivity, getStack, clearStack, lastTaskStartPos, markFinished,
     markStarted, markPaused, markStopped, touch,
     has,
     getRuntimeState, isTopActivity, isStale, forget, getActivityOptions,

@@ -49,9 +49,11 @@ detours through iron smelting; `_smeltIfNeeded` refuses to start while smelting 
 because smelting itself requests tools (e.g. to clear a furnace spot).
 
 Self-defense combat (`startCombat(bot, { defensive: true })` from the health monitor)
-only fights within 8 blocks horizontally / 4 vertically of where it was attacked. An
+only fights within 8 blocks horizontally / 4 vertically of where it was attacked. A melee
 attacker leaving that leash, or 5 failed approaches, ends the fight without
-`activity_stuck`, so the interrupted task resumes; only an explicit `combat` command
+`activity_stuck`, so the interrupted task resumes. Ranged attackers (skeleton, stray,
+pillager, blaze, witch, drowned) keep shooting from outside it: with a weapon and health
+≥ 8 the bot closes in up to 24 blocks, otherwise it retreats out of range for up to 8 s; only an explicit `combat` command
 reports `cannot_reach_target`. Armor auto-crafting does not run after self-defense, since
 it would smelt raw iron the task is collecting. Targeted mining that is deeper than the
 ore's best height first mines reachable exposed target ore at its current depth.
@@ -62,6 +64,13 @@ one to 64, and reports `no_surface_found` when nothing qualifies.
 `back` returns to the position recorded by `home`/`surface`, else the top frame's
 start, else `activityStack.lastTaskStartPos()` (the latest non-combat bottom frame).
 Recovery `suspend` and `stopX` clear the stack, so `back` must not require a frame.
+
+`sendActivityDone` marks the top frame finished. The next `push` removes a finished frame
+(cancelling any cleanup it is still doing, e.g. furnace reclaim) instead of pausing it;
+a paused finished frame never popped and resumed after later pops. On death the bot
+invalidates execution and halts every frame (`haltActivities`), so nothing resumes at
+the spawn point. Staircase descent only steps onto a solid block (`_hasSolidFloor`); air,
+water or lava under the next stair turns the descent instead of falling into a cave.
 
 `hunt` and `getfood` require explicit positive count goals. Their JS activities
 reject missing or invalid goals instead of supplying hidden defaults. `getfood`

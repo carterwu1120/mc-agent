@@ -1087,6 +1087,13 @@ function _shouldReturnToResumePos(bot, resumePos) {
 
 // 往目標 Y 走一步（pathfinder 自動挖出階梯）
 // 手動挖斜梯：每次「前進1格 + 往下1格」，重複 steps 次
+// The next stair lands one block down; the block under that spot must be solid. Air
+// there means a cave or ravine: a live run stepped in at y=-1 and fell 17 blocks to death.
+function _hasSolidFloor(bot, pos) {
+    const block = bot.blockAt(pos)
+    return !!block && block.boundingBox === 'block' && !_isLava(block)
+}
+
 async function _stairDown(bot, yaw, steps) {
     const dx = Math.round(-Math.sin(yaw))
     const dz = Math.round(-Math.cos(yaw))
@@ -1116,6 +1123,10 @@ async function _stairDown(bot, yaw, steps) {
             }
         }
         if (lavaDetected) return
+        if (!_hasSolidFloor(bot, feet.offset(dx, -2, dz))) {
+            console.log('[Mine] 下潛落點下方是空洞（洞穴/峽谷），不往這個方向下')
+            return
+        }
 
         await _clearClimbablesAround(bot, [
             feet.offset(dx, 1, dz),

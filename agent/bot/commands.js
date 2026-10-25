@@ -626,4 +626,4 @@ function _parseSmeltGoal(args) {
     return { target: args[0] }
 }
 
-module.exports = { handle }
+module.exports = { handle, haltActivities }

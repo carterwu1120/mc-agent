@@ -280,9 +280,32 @@ function isActive() {
 const DEFENSIVE_LEASH_HORIZONTAL = 8
 const DEFENSIVE_LEASH_VERTICAL = 4
 
-function _outsideLeash(origin, pos) {
-    return Math.hypot(pos.x - origin.x, pos.z - origin.z) > DEFENSIVE_LEASH_HORIZONTAL ||
+function _outsideLeash(origin, pos, horizontal = DEFENSIVE_LEASH_HORIZONTAL) {
+    return Math.hypot(pos.x - origin.x, pos.z - origin.z) > horizontal ||
         Math.abs(pos.y - origin.y) > DEFENSIVE_LEASH_VERTICAL
+}
+
+// Ranged attackers keep hitting from outside the melee leash. Ignoring them meant
+// standing still and being shot to death (twice in a row after a respawn).
+const RANGED_MOBS = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'blaze', 'witch', 'drowned'])
+const RANGED_CHASE_HORIZONTAL = 24
+const MIN_HEALTH_TO_CHASE = 8
+
+function _canFightBack(bot) {
+    const weapon = bot.inventory.items().some(i => WEAPON_PRIORITY.includes(i.name))
+    return weapon && bot.health >= MIN_HEALTH_TO_CHASE
+}
+
+// Move out of an archer's range and line of sight for a few seconds.
+async function _retreatFrom(bot, target) {
+    console.log(`[Combat] 無法反擊遠程的 ${target.name}，撤離射程`)
+    try {
+        await Promise.race([
+            bot.pathfinder.goto(new goals.GoalInvert(new goals.GoalFollow(target, 20))),
+            _sleep(8000),
+        ])
+    } catch (_) {}
+    try { bot.pathfinder.setGoal(null) } catch (_) {}
 }
 
 async function _loop(bot, goal = {}) {
@@ -313,8 +336,16 @@ async function _loop(bot, goal = {}) {
             continue
         }
         if (defensive && _outsideLeash(origin, target.position)) {
-            console.log(`[Combat] ${target.name} 已離開自衛範圍，結束戰鬥並回到原任務`)
-            break
+            const ranged = RANGED_MOBS.has(target.name)
+            if (!ranged) {
+                console.log(`[Combat] ${target.name} 已離開自衛範圍，結束戰鬥並回到原任務`)
+                break
+            }
+            if (!_canFightBack(bot) || _outsideLeash(origin, target.position, RANGED_CHASE_HORIZONTAL)) {
+                await _retreatFrom(bot, target)
+                break
+            }
+            // An archer within reach: close in on it rather than stand in its line of fire.
         }
         activityStack.touch('combat', 'target_acquired')
         noTargetTicks = 0
