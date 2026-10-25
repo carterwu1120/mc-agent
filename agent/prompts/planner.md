@@ -24,7 +24,7 @@ $commands
 - 新需求有更早要做的前置步驟（例如補食物）時，不 stop 當前步驟，把前置步驟排在合併後的 mine 之前。
 
 【前置條件】
-依背包（inventory）與裝備狀態（capabilities）推斷前置步驟。盔甲缺口見狀態摘要的 armor_progress.diamond_missing / diamond_shortfall_for_full_set。需要說明的限制寫在 reasoning。
+盔甲缺口見狀態摘要的 armor_progress.diamond_missing / diamond_shortfall_for_full_set。需要說明的限制寫在 reasoning。
 
 $planning
 

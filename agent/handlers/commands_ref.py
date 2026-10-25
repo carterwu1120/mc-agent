@@ -27,12 +27,12 @@ COMMANDS: dict[str, dict] = {
     "stopexplore": {"desc": "停止探索",       "usage": "stopexplore"},
     # ── Navigation ────────────────────────────────────────────
     "home":        {"desc": "傳送回基地",       "usage": "home"},
-    "back":        {"desc": "返回上次活動位置", "usage": "back"},
+    "back":        {"desc": "回到目前活動的起始位置", "usage": "back"},
     "come":        {"desc": "走向玩家",         "usage": "come [player]",                  "example": "come Carter"},
-    "tp":          {"desc": "傳送到座標",       "usage": "tp <x> <y> <z>",                "example": "tp 10 64 -200"},
+    "tp":          {"desc": "傳送到座標或玩家", "usage": "tp <x> <y> <z> | tp <player>",  "example": "tp 10 64 -200、tp Carter"},
     # ── Equipment & inventory ─────────────────────────────────
     "equip":       {"desc": "裝備背包現有武裝，不合成", "usage": "equip"},
-    "preparetool": {"desc": "用背包現有材料做出至少該等級的鎬子（tier: wooden/stone/iron/diamond/netherite），不採集", "usage": "preparetool <tier>_pickaxe"},
+    "preparetool": {"desc": "用背包現有材料（含工作台、木棍）做出至少該等級的鎬子，不採集（tier: wooden/stone/iron/diamond/netherite）", "usage": "preparetool <tier>_pickaxe"},
     "deposit":     {"desc": "存入箱子",     "usage": "deposit <chest_id>",                 "example": "deposit 1"},
     "withdraw":    {"desc": "從箱子取出",   "usage": "withdraw <item> [count] <chest_id>", "example": "withdraw oak_log 16 1"},
     "makechest":   {"desc": "合成並放置大箱子，完成後新 id 存入 {new_chest_id}", "usage": "makechest"},

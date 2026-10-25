@@ -1,6 +1,5 @@
 # 死亡與重生
 
-- 前置步驟可以為空（直接恢復），最多 6 個；原任務會自動接回。
 - 依 inventory、equipment、environment 判斷要蒐集、探索、撤離、取物或裝備；`equip` 只在背包已有裝備時有用。
 - 死亡位置與工作位置只是線索；危險未解除時不要 tp 回去。
 - 缺生食又沒有動物時，先 explore animals 或 hunt，不要直接 getfood。

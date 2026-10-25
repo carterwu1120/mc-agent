@@ -11,6 +11,7 @@ PLAN_ALLOWED_COMMANDS = set(COMMANDS) - {"chat", "idle", "setmode"}
 _INT_RE = re.compile(r"^\d+$")
 _CHEST_ID_RE = re.compile(r"^(?:\d+|\{[^{}]+\}|\{\{[^{}]+\}\})$")
 _COORD_RE = re.compile(r"^-?\d+(\.\d+)?$")
+_PLAYER_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 
 
 @dataclass
@@ -46,7 +47,10 @@ def validate_command(command: str, allowed_commands: set[str] | None = None) -> 
     if name == "tp":
         if len(args) == 3 and all(_is_coord(a) for a in args):
             return None
-        return "`tp` 格式應為 `tp <x> <y> <z>`"
+        # bot/commands.js teleports to a player when given a single name.
+        if len(args) == 1 and _PLAYER_RE.fullmatch(args[0]) and not _is_coord(args[0]):
+            return None
+        return "`tp` 格式應為 `tp <x> <y> <z>` 或 `tp <player>`"
 
     if name in {"combat", "surface", "home", "back", "equip", "makechest"}:
         return None if not args else f"`{name}` 不應帶參數"

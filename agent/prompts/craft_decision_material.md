@@ -3,6 +3,7 @@
 只輸出以下其中一種 JSON，不要加其他文字：
 {"action":"plan","commands":["..."],"text":"策略理由"}
 {"action":"wait","text":"目前無可行路徑，以及需要玩家提供什麼"}
+plan 需要 1–6 個指令。
 
 $knowledge
 

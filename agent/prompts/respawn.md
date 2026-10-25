@@ -4,6 +4,7 @@
 {"action":"plan","commands":[],"text":"可直接恢復的理由"}
 {"action":"plan","commands":["..."],"text":"前置策略與理由"}
 {"action":"wait","text":"目前無法安全恢復，以及需要玩家提供什麼"}
+commands 可以為空（直接恢復），最多 6 個。
 
 $respawn
 
