@@ -18,10 +18,10 @@ const BOT_DIR = _resolveBotDir()
 const MCBOT_HOME = process.env.MCBOT_HOME || path.join(os.homedir(), '.mcbot')
 
 // How each bot command reports completion (mirrors the dispatch in bot/commands.js).
-const ACTIVITY = new Set(['fish', 'chop', 'mine', 'smelt', 'combat', 'hunt', 'getfood', 'surface', 'explore'])
+const ACTIVITY = new Set(['fish', 'chop', 'mine', 'smelt', 'combat', 'hunt', 'getfood', 'surface'])
 const ACTION_DONE = new Set([
     'stopfish', 'stopchop', 'stopmine', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood',
-    'stopsurface', 'stopexplore', 'stopall', 'sethome', 'home', 'back', 'makechest', 'setchest',
+    'stopsurface', 'stopall', 'sethome', 'home', 'back', 'makechest', 'setchest',
     'labelchest', 'readchest', 'deposit', 'withdraw', 'preparetool', 'equip', 'unequip', 'tp', 'setmode',
 ])
 const NO_ACK = new Set(['chat', 'come', 'look', 'inv', 'bury', 'tidy'])

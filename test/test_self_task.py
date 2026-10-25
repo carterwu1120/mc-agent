@@ -29,7 +29,6 @@ def _empty_context(monkeypatch):
     monkeypatch.setattr(self_task.task_memory, "recent_events", lambda: [])
     monkeypatch.setattr(self_task.task_memory, "recent_failures", lambda: [])
     monkeypatch.setattr(self_task.task_memory, "interrupted_tasks", lambda: [])
-    monkeypatch.setattr(self_task.exploration_memory, "summary_for_prompt", lambda: "")
 
 
 # ── _normalize_result ─────────────────────────────────────────────────────────
@@ -79,7 +78,7 @@ def test_valid_plan():
 def test_valid_food_plan_acquires_raw_food_first():
     decision = {
         "action": "plan",
-        "commands": ["explore animals", "hunt count 4", "getfood count 4"],
+        "commands": ["hunt count 4", "getfood count 4"],
     }
     assert _is_valid_plan_result(decision)
     assert _food_decision_error(decision, {"inventory": [], "food": 20}) is None
@@ -125,7 +124,7 @@ def test_handle_reprompts_direct_getfood_without_raw_food(monkeypatch):
         {"command": "getfood", "goal": {"count": 6}, "text": "補充食物"},
         {
             "action": "plan",
-            "commands": ["explore animals", "hunt count 6", "getfood count 6"],
+            "commands": ["hunt count 6", "getfood count 6"],
             "goal": "依目前狀態準備食物",
             "text": "先取得生食再烹飪",
         },
@@ -141,7 +140,7 @@ def test_handle_reprompts_direct_getfood_without_raw_food(monkeypatch):
     result = asyncio.run(self_task.handle(state, llm))
 
     assert result["commands"] == [
-        "explore animals", "hunt count 6", "getfood count 6",
+        "hunt count 6", "getfood count 6",
     ]
     assert len(llm.calls) == 2
     assert "raw_total=0" in llm.calls[1]["messages"][0]["content"]

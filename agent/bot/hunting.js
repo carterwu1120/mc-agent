@@ -148,7 +148,7 @@ async function _loop(bot, goal) {
                     reason: 'no_animals',
                     remaining,
                     progress: { count: _killCount },
-                    suggested_actions: ['explore', 'fish', 'chat', 'idle'],
+                    suggested_actions: ['fish', 'chat', 'idle'],
                     detail: `附近已找不到可食用動物，尚缺 ${remaining} 份生食`,
                 })
                 break
@@ -239,7 +239,7 @@ async function _reportNoWeaponStuck(bot, goal = {}, expectedGen = null) {
         reason: 'no_weapon',
         remaining,
         progress: { count: _killCount },
-        suggested_actions: ['chop', 'fish', 'explore', 'chat', 'idle'],
+        suggested_actions: ['chop', 'fish', 'chat', 'idle'],
         detail: `目前沒有可用劍，且本地合成武器流程失敗，尚缺 ${remaining} 份生食`,
     })
 }

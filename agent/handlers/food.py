@@ -3,7 +3,7 @@ import math
 from agent.brain import LLMClient
 from agent.handlers.state_summary import summarize_state
 
-RISKY_ACTIVITIES = {'mining', 'combat', 'hunting', 'explore', 'fishing'}
+RISKY_ACTIVITIES = {'mining', 'combat', 'hunting', 'fishing'}
 
 
 def _build_food_plan(state: dict) -> tuple[list[str], int]:
@@ -32,10 +32,10 @@ def _build_food_plan(state: dict) -> tuple[list[str], int]:
     commands: list[str] = []
     if 'fishing_rod' in inventory_names and environment.get('near_water'):
         commands.append(f"fish catches {missing_raw}")
-    else:
-        if not environment.get('has_near_animals'):
-            commands.append("explore animals")
+    elif environment.get('has_near_animals'):
         commands.append(f"hunt count {missing_raw}")
+    else:
+        return ([f"getfood count {raw_total}"] if raw_total else []), target
     commands.append(f"getfood count {target}")
     return commands, target
 
@@ -44,6 +44,8 @@ async def handle(state: dict, llm: LLMClient) -> list | None:
     food = state.get("food", 20)
     activity = state.get("activity", "idle")
     commands, target = _build_food_plan(state)
+    if not commands:
+        return [{"action": "wait_for_food", "text": "缺少食物，附近沒有可用來源；請補給食物或帶我到有動物／可釣魚的地方。"}]
     print(
         f"[Skill/food] 食物不足（{food}/20），activity={activity}，"
         f"動態目標={target}，計畫={commands}"

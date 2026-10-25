@@ -250,3 +250,11 @@ attempts and final blocking reasons are recorded in task history. Runtime waits 
 command IDs are included in bridge snapshots. See bot/CLAUDE.md for scope rules.
 Offline tests cover the protocol and adversarial async timelines; they cannot prove
 server physics, permissions, block placement or every plugin API is cancellable.
+
+## Exploration removed
+
+自主探索與持久化資源位置記憶已移除，不再讀寫 `exploration_memory.json`。
+保留當下附近方塊／生物觀察、一般移動、上地表及挖礦內部下挖／挖隧道。
+附近缺少來源時請玩家補給或帶路，不以隨機傳送代替探索。
+舊任務的探索指令會回報不支援，需重新規劃。無本地食物來源時進入
+`waiting_for_change`，食物條件改善後才重新評估。

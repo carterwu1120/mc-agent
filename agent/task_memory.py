@@ -652,7 +652,6 @@ def _command_to_activity(cmd: str | None) -> str | None:
         "getfood": "getfood",
         "equip": "equip",
         "deposit": "deposit",
-        "explore": "explore",
         "surface": "surface",
     }.get(verb, verb or None)
 

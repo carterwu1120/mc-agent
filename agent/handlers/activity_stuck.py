@@ -212,17 +212,7 @@ def _deterministic_shortcut(state: dict, plan_context: dict | None) -> list[dict
     if activity == "chopping" and reason == "no_trees":
         nearby = state.get("nearby") or {}
         if not nearby.get("trees"):
-            pending_steps = (plan_context or {}).get("pending_steps", [])
-            if y < 40:
-                commands = ["surface", "explore trees"] + pending_steps
-                msg = "附近沒有樹且目前在地底，先回到地表再尋找新的樹木區域。"
-            else:
-                commands = ["explore trees"] + pending_steps
-                msg = "附近已沒有樹，移動到新的區域尋找樹木。"
-            return _tag_path([
-                {"command": "chat", "text": msg},
-                {"action": "replan", "commands": commands},
-            ], 'deterministic')
+            return _tag_path([{"command": "chat", "text": "附近沒有可達樹木，請提供木材或帶路。"}], 'deterministic')
 
     if activity == "mining" and reason == "no_tools":
         shortcut = mining_stuck.deterministic_shortcut(state, plan_context)

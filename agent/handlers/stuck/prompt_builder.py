@@ -80,7 +80,7 @@ def build_activity_prompt(
 
     # #2 — underground sequencing constraint
     if y < 40:
-        extra_lines.append(f"⚠ 目前在地底（Y={y}）。若要 explore，必須先執行 surface，不可直接回覆 explore 作為單一指令。")
+        extra_lines.append(f"⚠ 目前在地底（Y={y}）。不提供自主探索；只能使用當下可見資源或請玩家協助。")
 
     # #1 — nearby terrain for chopping
     if activity == "chopping":
@@ -124,7 +124,7 @@ def build_activity_prompt(
         extra_lines.append(f"候選路線：{', '.join(route_info['candidate_routes'])}")
         extra_lines.append(
             "請只在候選路線中挑選最合理的一條；若熟食已足夠，優先跳過 hunt/getfood，"
-            "不要再回 explore animals。"
+            "不要自主跑圖，請玩家補給或帶路。"
         )
     extra = "\n".join(extra_lines)
 

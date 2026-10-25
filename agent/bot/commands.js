@@ -15,7 +15,6 @@ const { startGetFood, stopGetFood } = require('./food_collect')
 const { findNearestPlayer } = require('./world')
 const { setHome, goHome, back, recordReturnPos } = require('./home')
 const { startSurfacing, stopSurfacing } = require('./surface')
-const { startExploring, stopExploring } = require('./explore')
 const { setChest, labelChest, readChest, depositToChest, withdrawFromChest, craftAndPlaceChest } = require('./chest')
 const { setMode } = require('./mode')
 const activityStack = require('./activity')
@@ -24,9 +23,9 @@ const execution = require('./execution')
 // smelt exempt from checkFull — used inside inventory recovery plans (smelt before re-equip),
 // blocking it causes the same deadlock as surface did.
 // surface/back also exempt — they are part of the inventory recovery flow itself.
-const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'combat', 'hunt', 'getfood', 'explore'])
+const ACTIVITY_COMMANDS = new Set(['fish', 'chop', 'mine', 'combat', 'hunt', 'getfood'])
 const STOP_ACTIVITIES = { stopfish: 'fishing', stopchop: 'chopping', stopmine: 'mining', stopsmelt: 'smelting',
-    stopcombat: 'combat', stophunt: 'hunting', stopgetfood: 'getfood', stopsurface: 'surface', stopexplore: 'explore' }
+    stopcombat: 'combat', stophunt: 'hunting', stopgetfood: 'getfood', stopsurface: 'surface' }
 
 function haltActivities(bot) {
     const errors = []
@@ -247,17 +246,10 @@ function dispatch(bot, msg) {
             bridge.sendState(bot, 'task_stopped', { activityName: 'surface' })
             break
 
-        case 'explore': {
-            const exploreGoal = msg.goal ?? _parseExploreGoal(msg.args)
-            startExploring(bot, exploreGoal)
-            bridge.sendState(bot, 'task_started', { activityName: 'explore', goal: exploreGoal })
-            break
-        }
-
+        // Reject persisted/API exploration commands without moving or reporting success.
+        case 'explore':
         case 'stopexplore':
-            stopExploring(bot)
-            bridge.sendState(bot, 'action_done')
-            bridge.sendState(bot, 'task_stopped', { activityName: 'explore' })
+            bridge.sendState(bot, 'activity_stuck', { activity: 'explore', reason: 'unsupported_command', detail: '探索已移除；請提供附近資源或玩家指定目的地。' })
             break
 
         case 'makechest':
@@ -506,7 +498,6 @@ function dispatch(bot, msg) {
             stopHunting(bot)
             stopGetFood(bot)
             stopSurfacing(bot)
-            stopExploring(bot)
             activityStack.clearStack()
             bot.pathfinder?.setGoal(null)
             bot.stopDigging?.()
@@ -628,11 +619,6 @@ function _parseSmeltGoal(args) {
     if (!args || args.length === 0) return {}
     if (args[0] === 'duration' && args[1]) return { duration: parseInt(args[1], 10) }
     if (args.length >= 2) return { target: args[0], count: parseInt(args[1], 10) }
-    return { target: args[0] }
-}
-
-function _parseExploreGoal(args) {
-    if (!args || args.length === 0) return { target: 'trees' }
     return { target: args[0] }
 }
 

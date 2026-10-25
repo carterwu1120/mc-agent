@@ -341,7 +341,6 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 | `smelt <material>` | Smelts items in a furnace (builds one if needed) |
 | `hunt count <n>` | Hunts animals for food |
 | `getfood count <n>` | Gets cooked food (hunts + smelts if needed) |
-| `explore <target>` | Explores until finding trees/animals/ores |
 | `deposit <chest_id>` | Deposits inventory to a labeled chest |
 | `makechest` / `labelchest` | Creates and labels storage chests |
 | `sethome` / `home` / `back` | Home base management |
@@ -394,3 +393,11 @@ Coordinator port `3010` is internal and is not a client-facing API.
 - Forge handshaking does not imply full mod compatibility; custom blocks, items, and packets need separate validation.
 - `MC_ADAPTIVE_NAVIGATION` is experimental mining navigation; synthetic terrain tests do not guarantee success in every real world.
 - Multiple bots may compete for the same resources; there is no complete world map persisted across sessions.
+
+## Exploration removed
+
+自主探索與持久化資源位置記憶已移除，不再讀寫 `exploration_memory.json`。
+保留當下附近方塊／生物觀察、一般移動、上地表及挖礦內部下挖／挖隧道。
+附近缺少來源時請玩家補給或帶路，不以隨機傳送代替探索。
+舊任務的探索指令會回報不支援，需重新規劃。無本地食物來源時進入
+`waiting_for_change`，食物條件改善後才重新評估。

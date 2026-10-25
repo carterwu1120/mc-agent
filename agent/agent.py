@@ -26,7 +26,6 @@ from agent.executor import PlanExecutor
 from agent.recovery import RecoverySupervisor
 from agent.handlers import recovery as recovery_handler
 from agent import task_memory
-from agent import exploration_memory
 from agent import food_recovery
 from agent import history_db
 from agent import dashboard as _dashboard
@@ -289,27 +288,6 @@ def _write_live_state() -> None:
         pass
 
 
-def _record_to_exploration_memory(state: dict) -> None:
-    """activity_done 時把位置記錄到 spatial memory。"""
-    if state.get('type') != 'activity_done':
-        return
-    try:
-        goal_target = state.get('goal_target')
-        mined_pos   = state.get('mined_pos')
-        mined_count = state.get('mined_count', 0)
-        chop_pos    = state.get('chop_pos')
-        hunt_pos    = state.get('hunt_pos')
-
-        if goal_target and goal_target != 'general' and mined_pos:
-            exploration_memory.record_ore(goal_target, mined_pos, int(mined_count or 0))
-        if chop_pos:
-            exploration_memory.record_forest(chop_pos)
-        if hunt_pos:
-            exploration_memory.record_animal_area(hunt_pos)
-    except Exception as e:
-        print(f"[ExplMem] 記錄失敗: {e}")
-
-
 async def _on_done(_state: dict, _llm: LLMClient):
     if recovery.busy or recovery.held:
         return None
@@ -343,7 +321,6 @@ async def _on_done(_state: dict, _llm: LLMClient):
             if callable(reset):
                 reset('standalone_task_finished')
         set_task_id(None)
-    _record_to_exploration_memory(_state)
     return None
 
 
@@ -567,7 +544,6 @@ _EXPECTED_ACTIVITY = {
     "hunt": "hunting",
     "getfood": "getfood",
     "surface": "surface",
-    "explore": "explore",
 }
 
 _STOP_COMMAND_FOR_ACTIVITY = {
@@ -576,7 +552,6 @@ _STOP_COMMAND_FOR_ACTIVITY = {
     "mining": "stopmine",
     "smelting": "stopsmelt",
     "surface": "stopsurface",
-    "explore": "stopexplore",
     "combat": "stopcombat",
     "hunting": "stophunt",
     "getfood": "stopgetfood",
@@ -628,7 +603,7 @@ def _save_current_task_to_memory(state: dict) -> None:
 
     resume_fn = resume_cmd_map.get(activity)
     if not resume_fn:
-        return  # combat / surface / explore 等無法意義恢復，不存
+        return  # combat / surface 等無法意義恢復，不存
 
     try:
         resume_cmd = resume_fn(goal, progress)
@@ -724,8 +699,6 @@ def _format_runtime_command(frame: dict | None) -> str | None:
         return f"smelt {goal.get('target', 'unknown')} {goal.get('count', 0)}"
     if activity == "mining":
         return f"mine {goal.get('target', 'unknown')} {goal.get('count', 0)}"
-    if activity == "explore":
-        return f"explore {goal.get('target', 'general')}"
     if activity == "surface":
         return "surface"
     if activity == "combat":
@@ -1511,6 +1484,25 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
         actions = result if isinstance(result, list) else [result]
 
         for a in actions:
+            if isinstance(a, dict) and a.get('action') == 'wait_for_food':
+                pending = task_memory.load() or {}
+                resume_original = bool(pending) and (pending.get('runtime') or {}).get('food_wait_resume_task', True)
+                if not pending:
+                    task_memory.save('補充食物', [], source='self_task')
+                recovery.invalidate()
+                if executor.is_running():
+                    executor.abort(preserve_task=True, reason='waiting_for_food_change')
+                else:
+                    task_memory.interrupt('waiting_for_food_change')
+                snapshot = food_recovery.snapshot(state)
+                recovery.hold_for_change('food', snapshot, 'no_local_food_source')
+                task_memory.update_runtime({
+                    'supervision': recovery.status(), 'food_wait_snapshot': snapshot,
+                    'food_wait_resume_task': resume_original,
+                })
+                await ws.send(json.dumps({'command': 'stopall'}))
+                await _send_chat(ws, a['text'])
+                continue
             if isinstance(a, dict) and a.get("action") == "plan":
                 commands = a.get("commands", [])
                 goal = a.get("goal", "")

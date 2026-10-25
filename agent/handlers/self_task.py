@@ -8,14 +8,13 @@ from agent.handlers.knowledge import knowledge
 from agent.handlers.prompts import render_prompt
 from agent.handlers.command_validation import validate_commands
 from agent import task_memory
-from agent import exploration_memory
 from agent.context_builder import (
     build_for_skill,
 )
 
 _SELF_TASK_COMMAND_KEYS = [
     "hunt", "fish", "getfood", "chop", "mine", "smelt", "preparetool", "equip",
-    "home", "deposit", "explore", "tp", "idle",
+    "home", "deposit", "tp", "idle",
 ]
 _SELF_TASK_COMMANDS = command_list(_SELF_TASK_COMMAND_KEYS)
 
@@ -144,7 +143,7 @@ def _food_decision_error(result: dict, state: dict) -> str | None:
                 return (
                     f"getfood 需要足夠生食：目前 raw_total={raw_total}，"
                     f"計畫最多準備 {planned_raw}，但要求製作 {requested}；"
-                    "請增加 hunt/fish 數量，必要時先 explore animals"
+                    "請增加 hunt/fish 數量，附近沒有來源時請玩家補給或帶路"
                 )
             planned_raw -= requested
     return None
@@ -185,15 +184,12 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                 return {"action": "plan", "commands": remaining, "goal": task["goal"], "resume_task": True}
 
 
-    mem_summary = exploration_memory.summary_for_prompt()
-    mem_section = f"\n【已知資源位置（探索記憶）】\n{mem_summary}\n" if mem_summary else ""
 
     task_history = build_for_skill("self_task", task_memory.recent_events(), task_memory.recent_failures(), task_memory.interrupted_tasks())
 
     prompt = (
         "請根據以下機器人狀態摘要，決定下一個自主任務。\n\n"
         f"{summary_json(state)}"
-        f"{mem_section}"
         f"{task_history}"
     )
 

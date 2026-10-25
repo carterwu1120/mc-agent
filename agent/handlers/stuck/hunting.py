@@ -6,20 +6,18 @@ SYSTEM_PROMPT = f"""你是 Minecraft 機器人的狩獵卡住處理助手。
 機器人在狩獵食物時遇到問題，請根據當前狀態決定下一步。
 每個回覆都必須包含 "text" 欄位說明你的決策理由（一句話，繁體中文）。
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{{"action": "replan", "commands": ["explore animals", "hunt count <n>"], "text": "...理由..."}}
 {{"action": "replan", "commands": ["fish catches <n>", "getfood count <n>"], "text": "...理由..."}}
 {{"action": "replan", "commands": ["chop logs 2", "hunt count <n>"], "text": "...理由..."}}
 {{"action": "skip", "text": "...理由..."}}
 {{"command": "chat", "text": "...提醒內容..."}}
 
 【可用指令】
-{command_list(["explore", "hunt", "fish", "getfood", "chop", "chat"])}
+{command_list(["hunt", "fish", "getfood", "chop", "chat"])}
 
 決策原則：
 - reason 為 no_animals：附近已沒有可食用動物，不能把這次狩獵當成完成
 - 若背包中的生食已達「先烤比較合理」門檻（raw_total >= 8 或 raw_total >= remaining * 0.5），優先改成 getfood count <remaining>，先把現有生食處理掉
 - 若有釣竿可改用 fish catches <remaining>，再接回 getfood 與原計畫
-- 若沒有釣竿，優先 explore animals 換到新的地表區域後，再 hunt count <remaining>
 - 若 reason 為 no_weapon：目前沒有可用武器，而且本地合成流程已失敗，必須重新規劃，不要繼續原地追動物
 - no_weapon 時，請優先根據 prompt 中的 candidate_routes / weapon_blockers / environment_hints 選擇：
   - `skip_hunt_if_food_already_enough`：如果熟食已足夠完成目前目標，直接 skip，不要再 hunt/getfood
@@ -144,8 +142,7 @@ def build_replan_no_animals(state: dict, plan_context: dict) -> list[dict] | Non
         commands = [f"fish catches {remaining}", f"getfood count {remaining}", *pending_steps]
         text = f"附近已沒有動物可獵，改用釣魚補足剩餘 {remaining} 份食物再接回原計畫。"
     else:
-        commands = ["explore animals", f"hunt count {remaining}", *pending_steps]
-        text = f"附近已沒有動物可獵，先換到新的地表區域尋找動物，再補足剩餘 {remaining} 份生食。"
+        return [{"command": "chat", "text": "附近沒有可用食物來源，請玩家補給或帶路。"}]
 
     return [
         {"command": "chat", "text": text},

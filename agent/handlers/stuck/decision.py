@@ -1,5 +1,5 @@
 ALLOWED_ACTIVITY_STUCK_COMMANDS = {
-    "chop", "mine", "chat", "idle", "home", "back", "surface", "explore", "withdraw", "fishing_decision",
+    "chop", "mine", "chat", "idle", "home", "back", "surface", "withdraw", "fishing_decision",
     "equip", "getfood", "smelt", "deposit", "hunt", "fish",
 }
 
@@ -65,14 +65,6 @@ def is_valid_decision(decision: dict) -> bool:
     if command == "withdraw":
         args = decision.get("args") or []
         return isinstance(args, list) and len(args) >= 2
-
-    if command == "explore":
-        args = decision.get("args") or []
-        goal = decision.get("goal") or {}
-        return (
-            (isinstance(args, list) and len(args) >= 1 and isinstance(args[0], str))
-            or (isinstance(goal, dict) and isinstance(goal.get("target"), str))
-        )
 
     if command == "fishing_decision":
         action = decision.get("action")

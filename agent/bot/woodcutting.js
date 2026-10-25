@@ -261,7 +261,7 @@ async function _loop(bot, goal = {}) {
                 reason: 'no_trees',
                 suggested_actions: Math.floor(bot.entity.position.y) < 60
                     ? ['surface', 'back', 'home', 'idle']
-                    : ['explore', 'home', 'idle'],
+                    : ['home', 'idle'],
                 detail: Math.floor(bot.entity.position.y) < 60
                     ? '目前位置偏地下，可能需要先回到地表或前一個位置再砍樹'
                     : '目前附近沒有可砍的樹，可能需要探索其他地表區域',

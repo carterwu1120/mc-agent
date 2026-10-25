@@ -2,11 +2,9 @@
 
 For architecture overview and event types, see agent/CLAUDE.md
 
-Exploration (`explore.js`) currently uses server `/tp`, which requires permission.
-Surface/animal candidates require skylight evidence; animal exploration must not
-restrict surface height relative to an underground start. A failed landing emits
-one `activity_stuck` with `reason=movement_failed` and origin/target/actual positions.
-Only validated arrivals can be recorded as resource-negative explored areas.
+Autonomous exploration is removed. Legacy exploration commands report
+`unsupported_command` without moving. Current nearby/entity observations,
+ordinary movement, surface escape and mining tunnels remain available.
 
 ---
 

@@ -20,12 +20,11 @@ RECOVERY_TIMEOUT = 150.0
 _ACTIVITY_FOR_COMMAND = {
     'mine': 'mining', 'chop': 'chopping', 'fish': 'fishing', 'smelt': 'smelting',
     'combat': 'combat', 'hunt': 'hunting', 'getfood': 'getfood', 'surface': 'surface',
-    'explore': 'explore',
 }
 
 _STOP_COMMANDS = frozenset({
     'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat',
-    'stophunt', 'stopgetfood', 'stopsurface', 'stopexplore', 'stopall',
+    'stophunt', 'stopgetfood', 'stopsurface', 'stopall',
 })
 
 _CHOP_LOG_NAMES = frozenset({
@@ -63,7 +62,7 @@ def _cmd_to_activity(cmd_str: str) -> str:
     return {
         'mine': 'mining', 'chop': 'chopping', 'fish': 'fishing',
         'smelt': 'smelting', 'hunt': 'hunting', 'getfood': 'getfood',
-        'explore': 'explore', 'equip': 'equip', 'deposit': 'deposit',
+        'equip': 'equip', 'deposit': 'deposit',
     }.get(verb, verb)
 
 
@@ -503,7 +502,7 @@ class PlanExecutor:
 
                     # Heartbeats prove transport liveness, not command progress.
                     elapsed_command = now - self._command_sent_at
-                    long_running = msg['command'] in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface', 'explore'}
+                    long_running = msg['command'] in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface'}
                     limit = ACTIVITY_START_TIMEOUT if long_running else ACTION_TIMEOUT
                     if msg['command'] == 'preparetool':
                         limit = 120.0
@@ -943,7 +942,7 @@ class PlanExecutor:
 
     def idle_timeout(self) -> float:
         command = (self._current_command or {}).get('command')
-        return ACTION_TIMEOUT if command and command not in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface', 'explore'} else ACTIVITY_START_TIMEOUT
+        return ACTION_TIMEOUT if command and command not in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface'} else ACTIVITY_START_TIMEOUT
 
     async def _send_summary(self, ws) -> None:
         if not self._step_results:

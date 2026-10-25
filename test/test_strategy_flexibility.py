@@ -29,8 +29,8 @@ def test_respawn_uses_validated_flexible_prerequisites(monkeypatch):
     _empty_history(monkeypatch, respawn)
     llm = FakeLLM({
         "action": "plan",
-        "commands": ["explore animals", "hunt count 4"],
-        "text": "空背包且附近沒有動物，先探索再取得食物。",
+        "commands": ["hunt count 4"],
+        "text": "附近有動物，先取得生食。",
     })
     state = {
         "cause": "other",
@@ -48,7 +48,7 @@ def test_respawn_uses_validated_flexible_prerequisites(monkeypatch):
     result = asyncio.run(respawn.handle(state, llm))
 
     plan = result[1]
-    assert plan["commands"] == ["explore animals", "hunt count 4", "resumetask"]
+    assert plan["commands"] == ["hunt count 4", "resumetask"]
     assert plan["preserve_task"] is True
     prompt = llm.calls[0]["messages"][0]["content"]
     assert "完整決策狀態" in prompt

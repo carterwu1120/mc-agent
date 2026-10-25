@@ -27,17 +27,16 @@ SYSTEM_PROMPTS = {
 只能回覆以下其中一種 JSON（不要加任何其他文字）：
 {{"command": "back", "text": "...理由..."}}
 {{"command": "surface", "text": "...理由..."}}
-{{"command": "explore", "args": ["trees"], "text": "...理由..."}}
+{{"command": "args": ["trees"], "text": "...理由..."}}
 {{"command": "home", "text": "...理由..."}}
 {{"command": "chat", "text": "...提醒內容..."}}
 {{"command": "idle", "text": "...理由..."}}
 
 【可用指令】
-{command_list(["back", "surface", "explore", "home", "chat", "idle"])}
+{command_list(["back", "surface", "home", "chat", "idle"])}
 
 決策原則：
 - 若目前明顯在地底或附近沒有樹，但這次任務仍是砍樹，優先用 surface；若不確定 surface 是否可行，再用 back 回到先前位置
-- 若已經在地表但附近沒有樹，優先回覆 explore trees，移動到新的地表區域繼續砍樹任務
 - 若已設定 home 且判斷回基地更合理，可用 home
 - 若沒有明確安全的下一步，才用 chat 或 idle
 - 不要回 chop；目前 chopping activity 已經卡住，先脫離目前位置再說

@@ -318,32 +318,13 @@ class TestChoppingNoTrees:
         # Call the internal deterministic dispatch directly
         return activity_stuck._deterministic_shortcut(state, plan_context or _chopping_plan_context())
 
-    def test_no_trees_surface_produces_explore_replan(self):
-        state = _chopping_state(nearby={"trees": False})
-        result = self._call(state)
-        assert result is not None
-        replan = next((a for a in result if a.get("action") == "replan"), None)
-        assert replan is not None
-        assert any("explore" in c for c in replan["commands"])
-
-    def test_no_trees_underground_includes_surface_first(self):
-        state = _chopping_state(nearby={"trees": False}, pos={"x": 0, "y": 20, "z": 0})
-        result = self._call(state)
-        assert result is not None
-        replan = next((a for a in result if a.get("action") == "replan"), None)
-        assert replan is not None
-        cmds = replan["commands"]
-        assert cmds[0] == "surface"
-        assert any("explore" in c for c in cmds)
-
-    def test_no_trees_underground_preserves_pending_steps(self):
+    @pytest.mark.parametrize('y', [10, 20, 64])
+    def test_no_trees_requests_help_without_replacing_pending_steps(self, y):
         plan = _chopping_plan_context(pending=["equip"])
-        state = _chopping_state(nearby={"trees": False}, pos={"x": 0, "y": 10, "z": 0})
+        state = _chopping_state(nearby={"trees": False}, pos={"x": 0, "y": y, "z": 0})
         result = self._call(state, plan)
-        assert result is not None
-        replan = next((a for a in result if a.get("action") == "replan"), None)
-        assert replan is not None
-        assert "equip" in replan["commands"]
+        assert result and all(item.get('command') == 'chat' for item in result)
+        assert plan['pending_steps'] == ['equip']
 
     def test_no_trees_with_nearby_trees_returns_none(self):
         # If trees are actually nearby, deterministic shortcut should not fire

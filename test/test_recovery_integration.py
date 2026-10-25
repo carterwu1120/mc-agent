@@ -340,3 +340,29 @@ def test_standalone_food_retry_replaces_failed_plan_instead_of_resuming_it(runti
         assert launch.call_args.kwargs['preserve_task'] is False
 
     asyncio.run(scenario())
+
+
+def test_no_local_food_waits_and_keeps_task_without_llm(runtime, monkeypatch):
+    app, task = runtime
+    monkeypatch.setattr(app.task_memory, 'load_any', lambda: task)
+    monkeypatch.setattr(app, '_is_stale_response', lambda *_: False)
+    model = AsyncMock()
+    monkeypatch.setattr(app, 'llm', model)
+    ws = type('Socket', (), {'send': AsyncMock()})()
+
+    async def scenario():
+        state = {'type': 'food_low', 'food': 8, 'health': 20,
+                 'inventory': [], 'entities': [], 'activity': 'idle'}
+        await app._handle_and_send(state, app.food_handler.handle, ws)
+        assert app.recovery.phase == 'waiting_for_change'
+        assert task['id'] == 'original'
+        assert task['goal'] == '取得鐵'
+        assert task['runtime']['food_wait_resume_task'] is True
+        assert not app.executor.is_running()
+        sent = [json.loads(c.args[0]) for c in ws.send.call_args_list]
+        assert any(m['command'] == 'stopall' for m in sent)
+        assert not any(m['command'] == 'explore' for m in sent)
+        assert await app._handle_waiting_for_change(state, ws)
+        assert app.recovery.phase == 'waiting_for_change'
+        model.chat.assert_not_called()
+    asyncio.run(scenario())

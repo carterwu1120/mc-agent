@@ -21,8 +21,8 @@ from agent.handlers.llm_response import parse_llm_json
 
 _PLANNER_ALLOWED_KEYS = [
     "mine", "chop", "fish", "hunt", "getfood", "smelt", "combat",
-    "stopmine", "stopchop", "stopfish", "stopsmelt", "stopcombat", "stopsurface", "stopexplore",
-    "home", "back", "surface", "explore",
+    "stopmine", "stopchop", "stopfish", "stopsmelt", "stopcombat", "stopsurface",
+    "home", "back", "surface",
     "deposit", "withdraw", "makechest", "labelchest", "preparetool", "equip", "come", "tp",
 ]
 # come/tp get planner-specific guidance below instead of the generic registry line.
@@ -443,7 +443,6 @@ def _stop_command_for_activity(activity: str) -> str | None:
         "mining": "stopmine",
         "smelting": "stopsmelt",
         "surface": "stopsurface",
-        "explore": "stopexplore",
         "combat": "stopcombat",
         "hunting": "stophunt",
         "getfood": "stopgetfood",
@@ -662,7 +661,6 @@ def _maybe_plan_come(message: str, activity: str, player_name: str | None) -> di
         "mining": "stopmine",
         "smelting": "stopsmelt",
         "surface": "stopsurface",
-        "explore": "stopexplore",
         "combat": "stopcombat",
         "hunting": "stophunt",
         "getfood": "stopgetfood",
@@ -691,7 +689,6 @@ def _maybe_plan_surface(message: str, activity: str) -> dict | None:
         "mining": "stopmine",
         "smelting": "stopsmelt",
         "surface": "stopsurface",
-        "explore": "stopexplore",
         "combat": "stopcombat",
         "hunting": "stophunt",
         "getfood": "stopgetfood",

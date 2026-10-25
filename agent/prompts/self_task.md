@@ -18,7 +18,6 @@ $commands
 - 只為明確缺口規劃。先看 inventory，不要假設缺少已有的物品；背包夠用就 idle。
 - 木材少、原礦未冶煉本身不是任務；只有目前目標需要時，才 chop 或 smelt 實際需要的量。
 - 需要插入 smelt 時，一次把該原料燒成合理的大批次（多出的錠下次可用），計畫中不要出現重複的 smelt。
-- prompt 有「已知資源位置」時，需要挖礦、砍樹或補食物就優先 tp 到該位置，而不是隨機 explore。
 - 不要輸出 chat、follow、withdraw、combat。
 
 $capabilities

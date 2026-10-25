@@ -13,7 +13,6 @@ COMMANDS: dict[str, dict] = {
     "combat":      {"desc": "開始戰鬥",       "usage": "combat"},
     "hunt":        {"desc": "狩獵動物",       "usage": "hunt count <n>",               "example": "hunt count 5"},
     "getfood":     {"desc": "冶煉背包生食成熟食", "usage": "getfood count <n>",         "example": "getfood count 5"},
-    "explore":     {"desc": "探索新區域",     "usage": "explore <target>",                 "example": "explore trees、explore animals、explore surface"},
     "surface":     {"desc": "移動到附近地表", "usage": "surface"},
     # ── Stop activities ───────────────────────────────────────
     "stopmine":    {"desc": "停止挖礦",       "usage": "stopmine"},
@@ -24,7 +23,6 @@ COMMANDS: dict[str, dict] = {
     "stophunt":    {"desc": "停止狩獵",       "usage": "stophunt"},
     "stopgetfood": {"desc": "停止尋食",       "usage": "stopgetfood"},
     "stopsurface": {"desc": "停止移動到地表", "usage": "stopsurface"},
-    "stopexplore": {"desc": "停止探索",       "usage": "stopexplore"},
     # ── Navigation ────────────────────────────────────────────
     "home":        {"desc": "傳送回基地",       "usage": "home"},
     "back":        {"desc": "回到目前活動的起始位置", "usage": "back"},

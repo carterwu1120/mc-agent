@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-EQUIP_WORTHY_NEXT = {"mine", "combat", "hunt", "explore"}
+EQUIP_WORTHY_NEXT = {"mine", "combat", "hunt"}
 EQUIP_WORTHY_PREV = {"mine", "smelt", "withdraw"}
 EQUIPMENT_CHANGING = {"mine", "smelt", "withdraw", "makechest"}
 NON_PROGRESS = {"chat", "idle"}
@@ -108,14 +108,9 @@ def infer_step_reason(cmd: str, next_cmd: str | None = None) -> str:
             return "在戰鬥前切換到最佳可用裝備"
         if next_name == "hunt":
             return "在狩獵前切換到最佳可用武器"
-        if next_name == "explore":
-            return "在探索前整理目前裝備"
         return "更新目前裝備"
     if name == "surface":
         return "先回到較安全、可行動的地表"
-    if name == "explore":
-        target = parts[1] if len(parts) >= 2 else "新區域"
-        return f"探索以尋找 {target}"
     if name == "home":
         return "返回基地"
     if name == "back":

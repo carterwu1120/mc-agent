@@ -13,7 +13,7 @@
 【決策原則】
 - 優先讓空閒且狀態良好的機器人接任務
 - 食物不足時，依飢餓值、熟食/生食庫存與分配任務風險決定補給數量；沒有生食時不可直接 getfood
-- commands 必須是合法指令（mine, chop, hunt, fish, explore, equip, smelt, getfood, idle 等）
+- commands 必須是合法指令（mine, chop, hunt, fish, equip, smelt, getfood, idle 等）
 - 禁止使用 craft 指令，它不存在。需要工具時用 equip（會自動製作）；需要熟食時用 getfood
 - 多機器人分工只在 command 類型真的不同時才適用（mine + chop = OK；hunt + hunt = 絕對不行；getfood + getfood = 絕對不行）
 - 同一個 command 類型（hunt、getfood、mine、chop、fish 等）只能分配給一個機器人，數量不同也算同一種類

@@ -61,9 +61,6 @@ def validate_command(command: str, allowed_commands: set[str] | None = None) -> 
     if name == "come":
         return None if len(args) <= 1 else "`come` 最多只能有一個玩家名稱"
 
-    if name == "explore":
-        return None if len(args) == 1 else "`explore` 格式應為 `explore <target>`"
-
     if name == "mine":
         if len(args) != 2 or not _is_positive_int(args[1]):
             return "`mine` 格式應為 `mine <ore> <count>`，且 count 必須是正整數"
