@@ -25,3 +25,42 @@ def parse_llm_json(raw: dict, label: str) -> dict:
     except ValidationError as e:
         print(f"[{label}] Pydantic 驗證失敗: {e}")
         return raw
+
+
+def parse_json_object(text: str) -> dict:
+    """Parse a model reply that should be one JSON object.
+
+    Tolerates prose around the object and a reply cut off before its closing braces.
+    """
+    import json
+
+    def first_object(candidate: str) -> dict | None:
+        decoder = json.JSONDecoder()
+        idx = candidate.find("{")
+        while idx != -1:
+            try:
+                obj, _end = decoder.raw_decode(candidate[idx:])
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                pass
+            idx = candidate.find("{", idx + 1)
+        return None
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Close a truncated top-level object before scanning, or the scan would return
+    # its first complete nested object instead.
+    stripped = text.strip()
+    missing = stripped.count("{") - stripped.count("}")
+    if stripped.startswith("{") and missing > 0:
+        try:
+            return json.loads(stripped + "}" * missing)
+        except json.JSONDecodeError:
+            pass
+    found = first_object(text)
+    if found is not None:
+        return found
+    raise json.JSONDecodeError("No valid JSON object found", text, 0)

@@ -18,7 +18,6 @@ from agent.handlers import craft_decision as craft_decision_handler
 from agent.handlers import coordinator as coordinator_handler
 from agent.handlers import food as food_handler
 from agent.handlers import planner as planner_handler
-from agent.handlers import self_task as self_task_handler
 from agent.handlers import task_arbitration as task_arbitration_handler
 from agent.handlers import respawn as respawn_handler
 from agent.handlers import tool_durability as tool_durability_handler
@@ -483,11 +482,6 @@ _thinking: set[str] = set()  # 正在處理中的事件 type，防止重複 call
 _planner_lock: "asyncio.Lock | None" = None  # unified executor ownership — initialized in run()
 _bg_tasks: set["asyncio.Task"] = set()  # floating create_task handles for cancellation on disconnect
 _coordinator_poll_running: bool = False  # serializes coordinator interactions — at most one in-flight
-_last_self_task_at = 0.0
-SELF_TASK_COOLDOWN = 60.0
-_idle_started_at: float | None = None
-_last_self_task_fingerprint: str | None = None
-_last_provider_pause_reason: str | None = None
 _recent_stuck_events: deque[dict] = deque(maxlen=8)
 _latest_state: dict = {}
 
@@ -897,39 +891,6 @@ def _inventory_fingerprint(state: dict) -> tuple[tuple[str, int], ...]:
     ))
 
 
-def _self_task_fingerprint(state: dict) -> str:
-    """Only material world/task changes trigger another autonomous decision."""
-    pos = state.get('pos') or {}
-    task = task_memory.load_any() or {}
-    failures = task.get('recentFailures') or []
-    latest_failure = failures[0] if failures else {}
-    relevant = {
-        'position_cell': [
-            int(float(pos.get('x', 0)) // 4),
-            int(float(pos.get('y', 0)) // 4),
-            int(float(pos.get('z', 0)) // 4),
-        ],
-        'health': state.get('health'),
-        'food': state.get('food'),
-        'mode': state.get('mode'),
-        'activity': state.get('activity'),
-        'inventory': _inventory_fingerprint(state),
-        'equipment': state.get('equipment'),
-        'nearby': state.get('nearby'),
-        'task': {
-            'id': task.get('id'),
-            'status': task.get('status'),
-            'currentStep': task.get('currentStep'),
-            'interruptedBy': task.get('interruptedBy'),
-            'failure': {
-                'reason': latest_failure.get('reason'),
-                'cmd': latest_failure.get('cmd'),
-            },
-        },
-    }
-    return json.dumps(relevant, ensure_ascii=False, sort_keys=True, default=str)
-
-
 def _is_stale_response(event_type: str, request_state: dict) -> bool:
     if not _latest_state:
         return False
@@ -1022,7 +983,6 @@ async def _run_coordinator_task(envelope: dict, state: dict, ws) -> bool:
     set_task_id(uuid.uuid4().hex[:8])
 
     async def _exec_and_report(_cmds=cmds, _goal=goal, _cid=cid):
-        global _idle_started_at
         status = None
         try:
             await executor.execute(_cmds, ws, goal=_goal, source="coordinator", task_id=_cid)
@@ -1036,7 +996,6 @@ async def _run_coordinator_task(envelope: dict, state: dict, ws) -> bool:
             task_memory.failed()
             status = "failed"
         finally:
-            _idle_started_at = None
             # Interrupted/recovery-held tasks stay remotely running instead of
             # being falsely marked failed while a replacement plan continues.
             if status:
@@ -1268,11 +1227,7 @@ async def _coordinator_poll(state: dict, ws) -> None:
 
 async def _handle_and_send(state: dict, handler, ws) -> None:
     event_type = state.get("type")
-    global _last_self_task_at
-    global _idle_started_at
     global _coordinator_poll_running
-    global _last_self_task_fingerprint
-    global _last_provider_pause_reason
     if _should_suppress_automatic_event(event_type):
         if event_type != "tick":
             print(
@@ -1296,14 +1251,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
         t0 = time.monotonic()
         result = await handler(state, llm)
-        if event_type == 'tick' and _llm_is_available():
-            _last_self_task_fingerprint = _self_task_fingerprint(state)
         if request_revision != recovery.revision:
-            return
-        # If coordinator took over while LLM was running, it released the lock — discard result
-        if event_type == "tick" and _lock_acquired and (_planner_lock is None or not _planner_lock.locked()):
-            print("[Agent] tick LLM 結果已被 coordinator 搶佔，丟棄")
-            _lock_acquired = False
             return
         latency_ms = int((time.monotonic() - t0) * 1000)
         path_taken = None
@@ -1314,8 +1262,6 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
                 db_only=True,
             )
         if not result:
-            if event_type == 'tick':
-                _reset_llm_session('self_task_evaluation_finished')
             return
         if _is_stale_response(event_type, state):
             print(f"[Agent] 忽略過期的 {event_type} 回應")

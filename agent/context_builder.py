@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 SKILL_BUDGETS: dict[str, dict] = {
     "activity_stuck": {"events": 4, "failures": 3, "interrupted": 1},
     "planner":        {"events": 6, "failures": 4, "interrupted": 2},
-    "self_task":      {"events": 4, "failures": 3, "interrupted": 2},
     "inventory":      {"events": 3, "failures": 2, "interrupted": 0},
     "tool_durability": {"events": 3, "failures": 2, "interrupted": 0},
     "respawn":        {"events": 4, "failures": 3, "interrupted": 1},

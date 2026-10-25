@@ -70,65 +70,6 @@ Actual step/goal verification stays in PlanExecutor. No inference is made on eve
 heartbeat. Timeout cancels the CLI subprocess through its existing cancellation
 cleanup. Tests use fake model/transport responses, never paid inference.
 
-## activity_stuck — Legacy deterministic rules / replay reference
-
-The following module remains for existing replay tests and reference. The live
-agent router now uses the supervised recovery handler above.
-
-`stuck/prompt_builder.py` includes the bounded `state.navigation` diagnostic when
-present (adaptive mining pilot), so the model sees failed movement profiles and
-does not treat resending the identical mine command as terrain recovery.
-
-`activity_stuck.py` 實作四層規則系統，確保規則在系統層強制執行，不依賴 LLM 記憶。
-
-### 架構
-
-```
-activity_stuck event
-  │
-  ▼
-[Layer 1] Pre-LLM 狀態豐富化
-  _compute_is_critical_subtask() → 注入 state["is_critical_subtask"]
-  prompt_builder 若 is_critical_subtask=True，在 prompt 加 ⚠ 警告
-  │
-  ▼
-  Deterministic shortcuts（各 stuck/ 子模組）
-  │
-  ▼
-  LLM call
-  │
-  ▼
-[Layer 2] Post-LLM Skip 驗證
-  _block_invalid_skip() → 由 _CRITICAL_DEPENDENCY_PAIRS 驅動
-  若 skip 被阻擋，轉為 replan 並走 Layer 3 pipeline
-  │
-  ▼
-[Layer 3] Post-LLM Replan Pipeline（_apply_replan_pipeline）
-  _enforce_pending_steps()          — 自動補上漏掉的 pending_steps
-  _filter_done_steps_from_replan()  — 移除 replan 開頭已完成的步驟
-  _deduplicate_adjacent_cmds()      — 移除連續重複指令（如 equip equip）
-```
-
-Tool acquisition fixes shared by multiple stuck handlers live in `stuck/tool_acquisition.py`.
-Use its resource fingerprint before retrying the same craft/equip recovery path; if the
-inventory/tool resources have not changed, let the normal LLM path decide instead of
-deterministically emitting the same replan again.
-
-### 擴充規則
-
-新增 skip 禁止規則只需在 `_CRITICAL_DEPENDENCY_PAIRS` 加一行：
-
-```python
-_CRITICAL_DEPENDENCY_PAIRS: frozenset[tuple[str, str]] = frozenset({
-    # ("smelting", "mining"),  # 範例格式
-    # 從 production log 確認有強依賴才加，不要猜
-})
-```
-
-**重要**：這個 pair 的條件是 child activity 在 LIFO `stack` 裡真的是 parent 的子任務（JS push 出來的）。若 smelting 和 mining 只是 executor plan 裡的平行步驟（siblings），這個 rule 不會觸發——需改用 `plan_context.pending_steps` 判斷。
-
----
-
 ## LLM Response Formats
 
 **Single command:**
@@ -156,7 +97,6 @@ If `text` field is present in any response, it is sent as a chat message to the 
 
 `PlanExecutor` sequences plan commands, waiting for `action_done` / `activity_done` between steps.
 
-Runtime context substitution: `{new_chest_id}` in command strings is replaced after `makechest` succeeds (executor stores `new_chest_id` from `action_done` state into `_context`).
 
 `task_memory` schema (`agent/data/task.json`):
 ```json
@@ -177,25 +117,10 @@ Step status: `pending` / `running` / `done` / `failed`. Resume skips `done` step
 
 ---
 
-## Chest + Makechest Flow
-
-When a handler plans chest operations:
-```python
-["makechest", "labelchest {new_chest_id} ore", "deposit {new_chest_id}"]
-```
-`{new_chest_id}` is a runtime placeholder — executor substitutes it after `makechest` sends `action_done` with `new_chest_id`. **Never replace with a literal number in the plan.**
-
----
-
 ## Operating Modes
 
-| Mode | `self_task` behaviour |
-|------|-----------------------|
-| `companion` | Does not run |
-| `survival` | Runs — handles food/tool shortages |
-| `workflow` | Runs + auto-resumes interrupted tasks on idle |
-
-Switch: `!setmode <mode>` or LLM sends `setmode <mode>` command.
+The bot never starts work on its own: idle ticks only drive liveness and supervision,
+and interrupted tasks resume only when the player asks. `setmode` remains for manual use.
 
 ---
 

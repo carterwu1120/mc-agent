@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from agent.handlers import craft_decision, inventory, planner, recovery, respawn, self_task, tool_durability
+from agent.handlers import craft_decision, inventory, planner, recovery, respawn, tool_durability
 from agent.handlers.commands_ref import COMMANDS
 from agent.handlers.knowledge import KNOWLEDGE_DIR, knowledge
 
@@ -14,7 +14,7 @@ MINING_STUCK = {'activity': 'mining', 'reason': 'no_tools'}
 
 def _all_prompts():
     return [
-        planner.SYSTEM_PROMPT, self_task.SYSTEM_PROMPT, respawn.SYSTEM_PROMPT,
+        planner.SYSTEM_PROMPT, respawn.SYSTEM_PROMPT,
         tool_durability.SYSTEM_PROMPT, craft_decision.SYSTEM_PROMPT,
         craft_decision.SYSTEM_PROMPT_MATERIAL, inventory.SYSTEM_PROMPT,
         recovery.system_prompt(MINING_STUCK),
@@ -35,8 +35,7 @@ def test_prompts_embed_their_knowledge():
     assert knowledge('durability') in tool_durability.SYSTEM_PROMPT
     assert knowledge('crafting', '選擇合成選項') in craft_decision.SYSTEM_PROMPT
     assert knowledge('crafting', '缺少合成材料') in craft_decision.SYSTEM_PROMPT_MATERIAL
-    for prompt in (planner.SYSTEM_PROMPT, self_task.SYSTEM_PROMPT):
-        assert knowledge('bot_capabilities', '鎬子與工具鏈') in prompt
+    assert knowledge('bot_capabilities', '鎬子與工具鏈') in planner.SYSTEM_PROMPT
 
 
 def test_recovery_prompt_only_carries_the_stuck_activity():
@@ -68,7 +67,6 @@ def test_recovery_prompt_only_carries_the_stuck_activity():
     (lambda: recovery.system_prompt({'activity': 'mining', 'reason': 'no_blocks'}), 1900),
     (lambda: recovery.system_prompt(MINING_STUCK), 2400),
     (lambda: recovery.system_prompt({'activity': 'hunting', 'watchdog': True, 'activity_name': 'hunting'}), 2500),
-    (lambda: self_task.SYSTEM_PROMPT, 2200),
     (lambda: respawn.SYSTEM_PROMPT, 2300),
     (lambda: tool_durability.SYSTEM_PROMPT, 1150),
     (lambda: craft_decision.SYSTEM_PROMPT_MATERIAL, 2000),
@@ -101,5 +99,4 @@ def test_backticked_commands_exist(name):
 
 def test_preparetool_is_plannable_where_knowledge_recommends_it():
     assert 'preparetool' in planner._PLANNER_ALLOWED_KEYS
-    assert 'preparetool' in self_task.ALLOWED_COMMANDS
     assert 'preparetool' in recovery.ALLOWED

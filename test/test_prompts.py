@@ -3,7 +3,7 @@ import re
 import pytest
 
 from agent.handlers import (coordinator, craft_decision, inventory, planner, recovery, respawn,
-                            self_task, task_arbitration, tool_durability)
+                            task_arbitration, tool_durability)
 from agent.handlers.prompts import PROMPTS_DIR, placeholders, render_prompt
 
 TEMPLATES = sorted(p.stem for p in PROMPTS_DIR.glob('*.md') if p.stem != 'README')
@@ -12,7 +12,7 @@ HANDLERS_DIR = PROMPTS_DIR.parent / 'handlers'
 
 def _rendered():
     return [
-        planner.SYSTEM_PROMPT, self_task.SYSTEM_PROMPT, respawn.SYSTEM_PROMPT,
+        planner.SYSTEM_PROMPT, respawn.SYSTEM_PROMPT,
         tool_durability.SYSTEM_PROMPT, craft_decision.SYSTEM_PROMPT,
         craft_decision.SYSTEM_PROMPT_MATERIAL, inventory.SYSTEM_PROMPT,
         coordinator.SYSTEM_PROMPT, task_arbitration.SYSTEM_PROMPT,

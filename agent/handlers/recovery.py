@@ -5,7 +5,7 @@ from agent.handlers.commands_ref import command_list
 from agent.handlers.knowledge import knowledge
 from agent.handlers.prompts import render_prompt
 from agent.handlers.state_summary import summary_json
-from agent.handlers.stuck.llm_utils import parse_json_with_repair
+from agent.handlers.llm_response import parse_json_object
 from agent.plan_utils import normalize_commands
 
 # These commands have completion semantics in PlanExecutor. Pure chat/idle and
@@ -97,7 +97,7 @@ async def handle(state, llm):
         system=system_prompt(state),
         reasoning_effort=effort,
     )
-    result = parse_json_with_repair(response)
+    result = parse_json_object(response)
     if not isinstance(result, dict):
         raise ValueError("decision must be an object")
     if not isinstance(result.get("text"), str) or not result["text"].strip():

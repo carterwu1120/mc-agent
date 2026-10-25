@@ -338,12 +338,11 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 | `preparetool <pickaxe>` | Prepares the requested minimum pickaxe tier from available materials |
 | `chop logs <count>` | Chops trees |
 | `fish catches <count>` | Fishes |
-| `smelt <material>` | Smelts items in a furnace (builds one if needed) |
+| `smelt <material> <count>` | Smelts or cooks carried input in a furnace (builds one if needed) |
 | `hunt count <n>` | Hunts animals for food |
-| `getfood count <n>` | Gets cooked food (hunts + smelts if needed) |
-| `deposit <chest_id>` | Deposits inventory to a labeled chest |
-| `makechest` / `labelchest` | Creates and labels storage chests |
-| `sethome` / `home` / `back` | Home base management |
+| `getfood count <n>` | Cooks raw food already carried; never hunts |
+| `back` | Returns to the latest task's start position |
+| `!home` / `!sethome` / `!deposit <id>` | Manual-only base and chest commands; planners never use them |
 | `!setmode <mode>` | `companion` / `survival` / `workflow` |
 
 ## Architecture

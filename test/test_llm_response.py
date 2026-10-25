@@ -24,3 +24,11 @@ def test_validation_fallback_on_bad_commands():
 def test_no_reasoning_no_extra_keys():
     result = parse_llm_json({"action": "continue"}, "Test")
     assert result == {"action": "continue"}
+
+
+def test_parse_json_object_handles_prose_and_truncation():
+    from agent.handlers.llm_response import parse_json_object
+    assert parse_json_object('{"action":"wait","text":"x"}') == {"action": "wait", "text": "x"}
+    assert parse_json_object('Plan: {"action":"replan","commands":["a"]} done') == {"action": "replan", "commands": ["a"]}
+    # A reply cut off before its last brace keeps the outer object, not the nested one.
+    assert parse_json_object('{"action":"wait","detail":{"a":1}') == {"action": "wait", "detail": {"a": 1}}

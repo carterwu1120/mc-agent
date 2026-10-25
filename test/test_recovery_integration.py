@@ -141,9 +141,6 @@ def test_idle_ticks_never_start_autonomous_tasks(runtime, monkeypatch):
     async def scenario():
         app.executor.unclaim()
         app._planner_lock = asyncio.Lock()
-        app._idle_started_at = 0
-        app._last_self_task_at = 0
-        app._last_self_task_fingerprint = None
         reset_session = Mock()
         fake_llm = type('LLM', (), {
             'is_available': lambda self: True,
@@ -164,12 +161,10 @@ def test_idle_ticks_never_start_autonomous_tasks(runtime, monkeypatch):
         app._latest_state.clear()
         app._latest_state.update(state)
         await app._handle_and_send(state, autonomous, type('Socket', (), {})())
-        app._last_self_task_at = 0
         await app._handle_and_send(dict(state), autonomous, type('Socket', (), {})())
         changed = {**state, 'food': 17}
         app._latest_state.clear()
         app._latest_state.update(changed)
-        app._last_self_task_at = 0
         await app._handle_and_send(changed, autonomous, type('Socket', (), {})())
 
         # Autonomous self-tasks were removed: the bot waits for the player.

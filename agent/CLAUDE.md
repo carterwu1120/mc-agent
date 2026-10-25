@@ -9,11 +9,8 @@ If you add a new activity module, new event type, new event handler, or change a
 
 ## Project Scope
 
-**Active codebase: `agent/` only.**
-
-The following directories are legacy/unused — do NOT read or modify them:
-- `fishing_tool/` — old CV-based fishing tool, replaced by mineflayer bot
-- `training/` — old YOLO training scripts, no longer relevant
+**Active codebase: `agent/`** (plus `backend/` for the API service and `scripts/` for
+packaging the agent skill).
 
 Entry points:
 - `agent/bot/index.js` — start the JS bot: `node agent/bot/index.js`
@@ -173,7 +170,6 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復 |
 | `inventory.py` | `inventory_full` | In-place cleanup: counted drops of surplus by-products, or `blocked` |
 | `recovery.py` | supervised `activity_stuck` | Validated replacement strategy or explicit wait for player |
-| `self_task.py` | (not routed) | 自主任務已停用；保留供參考 |
 | `respawn.py` | `player_respawned` | LLM 決定重生後恢復計畫 |
 | `tool_durability.py` | `tool_low_durability` | LLM 決定工具耐久不足的處理 |
 | `food.py` | `food_low` | 沒有食物時暫停當前任務並請玩家補給（不呼叫 LLM） |
@@ -181,7 +177,6 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
 | `commands_ref.py` | imported by handlers | Canonical command registry — `command_list(keys)` helper. **Never duplicate command descriptions inline.** |
 | `state_summary.py` | imported by handlers | `summary_json(state)`, `equipment_summary(state)` |
-| `stuck/tool_acquisition.py` | imported by stuck handlers | Shared tool-acquisition retry fingerprinting and replan helpers |
 
 ---
 
@@ -204,8 +199,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 
 `recovery.py` owns a single recovery per bot. `agent.py` routes all activity_stuck
 (including executor verification/timeouts) through it and `handlers/recovery.py`.
-The previous `handlers/activity_stuck.py` rules remain for replay/reference, but are
-not the live event handler. Local mechanical navigation remains separate.
+Local mechanical navigation remains separate.
 
 1. JS watches new spatial cells, inventory high-water marks and output counters.
    Repeated touches, gear changes, equal counters and short loops cannot keep it alive.
