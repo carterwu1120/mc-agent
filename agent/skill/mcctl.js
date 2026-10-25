@@ -44,8 +44,8 @@ const MAX_EVENTS = 500
 function _resolveBotDir() {
     const candidates = [
         process.env.MCBOT_BOT_DIR,
-        path.join(__dirname, 'bot'),                     // packaged skill
-        path.join(__dirname, '..', '..', '..', 'agent', 'bot'), // repository checkout
+        path.join(__dirname, 'bot'),       // packaged skill: scripts/mcctl.js + scripts/bot
+        path.join(__dirname, '..', 'bot'), // repository: agent/skill/mcctl.js + agent/bot
     ].filter(Boolean)
     return candidates.find(dir => fs.existsSync(path.join(dir, 'index.js'))) ?? candidates[candidates.length - 1]
 }

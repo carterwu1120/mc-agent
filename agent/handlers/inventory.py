@@ -6,6 +6,7 @@ from agent.context_builder import build_for_skill
 from agent.prompt_logging import log_prompt
 from agent.handlers.llm_response import parse_llm_json
 from agent.handlers.knowledge import knowledge
+from agent.handlers.prompts import render_prompt
 from agent.handlers.state_summary import equipment_summary
 
 LABEL_PATTERNS = {
@@ -20,15 +21,7 @@ EQUIPMENT_SUFFIXES = (
     "_leggings", "_boots", "_bow", "crossbow", "shield", "elytra", "trident",
 )
 
-SYSTEM_PROMPT = """你是 Minecraft 機器人的背包管理助手。依下方背包整理規則決定處理方式。
-只能回覆以下其中一種 JSON（不要加任何其他文字）：
-{"action": "drop", "items": ["diorite", "tuff"]}
-{"action": "plan", "commands": ["stop指令", "home", "deposit 1", "back", "resume指令"]}
-{"action": "continue"}
-
-plan 的 commands 依「存箱子的路徑」排列，chest id 從提示中的箱子資訊取得；{new_chest_id} 是佔位符，會自動填入，不要替換成數字。
-
-""" + knowledge("inventory")
+SYSTEM_PROMPT = render_prompt("inventory", knowledge=knowledge("inventory"))
 
 
 def _is_equipment(name: str) -> bool:

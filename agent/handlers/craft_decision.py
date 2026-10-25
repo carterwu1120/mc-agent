@@ -8,6 +8,7 @@ from agent.prompt_logging import log_prompt
 from agent.handlers.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
 from agent.handlers.commands_ref import command_list
 from agent.handlers.knowledge import knowledge
+from agent.handlers.prompts import render_prompt
 from agent.handlers.llm_response import parse_llm_json
 from agent.handlers.state_summary import summary_json
 
@@ -27,25 +28,16 @@ def _parse_json(text: str) -> dict:
                 pass
         raise
 
-SYSTEM_PROMPT = """你是 Minecraft 機器人的合成決策助手。
-機器人需要合成某樣物品，但有多種材料選項，請選出最適合的一個。
-只能回覆以下格式的 JSON（不要加任何其他文字）：
-{"item": "iron_axe"}
-
-""" + knowledge("crafting", "選擇合成選項")
+SYSTEM_PROMPT = render_prompt("craft_decision", knowledge=knowledge("crafting", "選擇合成選項"))
 
 _MATERIAL_ALLOWED = PLAN_ALLOWED_COMMANDS - {"equip"}
 
-SYSTEM_PROMPT_MATERIAL = """你是 Minecraft 合成前置條件規劃者。
-機器人缺少合成材料，請規劃材料取得路徑。原任務若仍存在，會在前置步驟完成後自動接回。
-只輸出以下其中一種 JSON，不要加其他文字：
-{"action":"plan","commands":["..."],"text":"策略理由"}
-{"action":"wait","text":"目前無可行路徑，以及需要玩家提供什麼"}
-
-""" + knowledge("crafting", "缺少合成材料") + "\n\n" + knowledge("bot_capabilities", "鎬子與工具鏈", "冶煉與燃料") + """
-
-可用指令：
-""" + command_list(sorted(_MATERIAL_ALLOWED), include_stops=False)
+SYSTEM_PROMPT_MATERIAL = render_prompt(
+    "craft_decision_material",
+    knowledge=knowledge("crafting", "缺少合成材料"),
+    capabilities=knowledge("bot_capabilities", "鎬子與工具鏈", "冶煉與燃料"),
+    commands=command_list(sorted(_MATERIAL_ALLOWED), include_stops=False),
+)
 
 SMELTABLE = {
     'raw_iron': 'iron_ingot', 'iron_ore': 'iron_ingot', 'deepslate_iron_ore': 'iron_ingot',

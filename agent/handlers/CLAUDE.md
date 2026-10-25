@@ -11,13 +11,14 @@ import json
 import re
 from agent.brain import LLMClient
 from agent.handlers.commands_ref import command_list
+from agent.handlers.knowledge import knowledge
+from agent.handlers.prompts import render_prompt
 from agent.handlers.state_summary import summary_json, equipment_summary
 
 _MY_COMMANDS = command_list(["mine", "chop", "chat", "idle"])
 
-SYSTEM_PROMPT = f"""...
-{_MY_COMMANDS}
-..."""
+# Text lives in agent/prompts/my_handler.md with $commands / $knowledge placeholders.
+SYSTEM_PROMPT = render_prompt("my_handler", commands=_MY_COMMANDS, knowledge=knowledge("recovery", "挖礦"))
 
 async def handle(state: dict, llm: LLMClient) -> list | dict | None:
     activity  = state.get("activity", "idle")
@@ -43,9 +44,11 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 
 **Rules:**
 - Always use `command_list(keys)` from `commands_ref.py` — never write command descriptions inline
+- System prompt text lives in `agent/prompts/<handler>.md` (see its README), not in Python.
+  Handlers only choose and fill placeholders; user prompts built from live state stay in code.
 - Domain rules (strategies, quantities, what commands can/cannot do) go in `agent/knowledge/*.md`
-  and are loaded with `knowledge(name, *sections)` from `knowledge.py`. Keep only the output
-  format and Python-specific mechanics (plan_context, pending steps, placeholders) inline.
+  and are loaded with `knowledge(name, *sections)` from `knowledge.py`. Templates keep only the
+  output format and Python-specific mechanics (plan_context, pending steps, placeholders).
   If a prompt recommends a command, that command must be in the handler's allowlist.
 - `equipment` items arrive as `{name, durability_pct}` dicts — use `_item_name(item)` / `_item_durability_pct(item)` from `state_summary.py`
 

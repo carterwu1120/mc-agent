@@ -22,4 +22,4 @@ agent/data/
 /local-server/
 
 # Built skill packages
-/skill/dist/
+/dist/
