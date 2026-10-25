@@ -6,24 +6,51 @@ let _decision = null
 let _checking = false
 let _blockedSignature = null
 let _generation = 0
-const DISPOSABLE = new Set(['cobblestone', 'cobbled_deepslate', 'diorite', 'andesite', 'granite',
-    'tuff', 'gravel', 'dirt', 'coarse_dirt', 'netherrack', 'flint', 'rotten_flesh',
-    'spider_eye', 'bone', 'clay_ball', 'sand', 'calcite'])
-const BUILDING = new Set(['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack'])
+// Last line of defence for any drop request (rules, LLM or skill). Keep in sync with
+// is_guarded() in agent/handlers/inventory.py.
+const TOOL_SUFFIXES = ['_pickaxe', '_axe', '_shovel', '_hoe', '_sword', '_helmet', '_chestplate',
+    '_leggings', '_boots', '_horse_armor']
+const GUARDED = new Set(['bow', 'crossbow', 'trident', 'shield', 'fishing_rod', 'shears',
+    'flint_and_steel', 'compass', 'clock', 'elytra', 'bucket', 'water_bucket', 'lava_bucket', 'arrow',
+    'bread', 'apple', 'golden_apple', 'enchanted_golden_apple', 'golden_carrot', 'carrot', 'potato',
+    'baked_potato', 'beetroot', 'melon_slice', 'sweet_berries', 'cookie', 'pumpkin_pie',
+    'mushroom_stew', 'beetroot_soup', 'rabbit_stew', 'dried_kelp',
+    'beef', 'porkchop', 'chicken', 'mutton', 'rabbit', 'cod', 'salmon',
+    'coal', 'charcoal', 'coal_block', 'blaze_rod', 'stick',
+    'crafting_table', 'furnace', 'chest', 'torch', 'string',
+    'diamond', 'emerald', 'lapis_lazuli', 'redstone', 'quartz', 'amethyst_shard', 'netherite_scrap',
+    'ancient_debris', 'diamond_block', 'emerald_block', 'lapis_block', 'redstone_block', 'iron_block',
+    'gold_block', 'copper_block', 'netherite_block'])
+function isGuarded(name) {
+    return GUARDED.has(name) || TOOL_SUFFIXES.some(s => name.endsWith(s)) || name.startsWith('cooked_') ||
+        name.startsWith('raw_') || ['_ore', '_ingot', '_nugget', '_log', '_wood', '_planks'].some(s => name.endsWith(s))
+}
+// Placeable blocks for pillaring/bridging: at least this many stay in total.
+const BUILDING = new Set(['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'stone'])
+const BUILDING_RESERVE = 128
 function signature(bot) {
     return bot.inventory.items().map(i => `${i.slot}:${i.name}:${i.count}`).sort().join('|')
 }
 function applyInventoryDecision(decision) { _decision = decision }
 async function dropItems(bot, items) {
+    // Face back the way we came: dropped stacks land behind the bot, not on the path
+    // the interrupted activity continues along (items can be picked up after ~2 s).
+    try { await bot.look(bot.entity.yaw + Math.PI, 0.3, true) } catch (_) {}
+    if (!execution.isCurrent()) return
     const seen = new Set()
+    const totalOf = name => bot.inventory.items().filter(i => i.name === name).reduce((n, i) => n + i.count, 0)
+    let buildingSpare = Math.max(0, [...BUILDING].reduce((n, name) => n + totalOf(name), 0) - BUILDING_RESERVE)
     for (const request of items || []) {
         if (!execution.isCurrent()) return
-        if (!request || !DISPOSABLE.has(request.name) || seen.has(request.name) || !Number.isInteger(request.count) || request.count <= 0) continue
+        if (!request || isGuarded(request.name) || seen.has(request.name) || !Number.isInteger(request.count) || request.count <= 0) continue
         seen.add(request.name)
         const item = bot.inventory.items().find(i => i.name === request.name)
         if (!item) continue
-        const total = bot.inventory.items().filter(i => i.name === request.name).reduce((n, i) => n + i.count, 0)
-        const count = Math.min(request.count, Math.max(0, total - (BUILDING.has(request.name) ? 64 : 0)))
+        let count = Math.min(request.count, totalOf(request.name))
+        if (BUILDING.has(request.name)) {
+            count = Math.min(count, buildingSpare)
+            buildingSpare -= count
+        }
         if (count > 0) await bot.toss(item.type, null, count)
     }
 }

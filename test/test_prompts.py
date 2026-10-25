@@ -33,7 +33,7 @@ def test_rendered_prompts_have_no_leftover_placeholders():
 
 def test_missing_or_unexpected_values_are_errors():
     with pytest.raises(KeyError):
-        render_prompt('inventory')
+        render_prompt('recovery', commands='x')  # knowledge missing
     with pytest.raises(KeyError):
         render_prompt('coordinator', extra='x')
 

@@ -151,7 +151,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `task_stopped` | Activity manually stopped | Yes — marks task_memory interrupted |
 | `activity_stuck` | Stuck, expired wait, orphaned pause or unexpected idle | Yes — RecoverySupervisor |
 | `recovery_paused` | Correlated JS suspension acknowledgement | Yes — resolves stop deadline; never action_done |
-| `inventory_full` | Inventory ≥ 34 slots | Yes — LLM picks counted in-place drops or `blocked` |
+| `inventory_full` | Inventory ≥ 34 slots | Yes — rules first; LLM only judges leftover misc items |
 | `craft_decision` | Needs crafting decision | Yes |
 | `food_low` | Food < 10 & idle & no food | Yes — deterministic: pause and ask the player for food |
 | `chat` | Player sent a message | Yes — planner handler |
@@ -168,7 +168,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | File | Triggered by | Purpose |
 |------|-------------|---------|
 | `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復 |
-| `inventory.py` | `inventory_full` | In-place cleanup: counted drops of surplus by-products, or `blocked` |
+| `inventory.py` | `inventory_full` | In-place cleanup: guarded items never drop; 128 building blocks kept; junk dropped by rule; LLM judges misc items only when still above 28 slots; falls back to rules on a bad reply |
 | `recovery.py` | supervised `activity_stuck` | Validated replacement strategy or explicit wait for player |
 | `respawn.py` | `player_respawned` | LLM 決定重生後恢復計畫 |
 | `tool_durability.py` | `tool_low_durability` | LLM 決定工具耐久不足的處理 |

@@ -29,7 +29,6 @@ def test_every_knowledge_file_is_used_by_a_prompt():
 
 
 def test_prompts_embed_their_knowledge():
-    assert knowledge('inventory') in inventory.SYSTEM_PROMPT
     assert knowledge('planning') in planner.SYSTEM_PROMPT
     assert knowledge('respawn') in respawn.SYSTEM_PROMPT
     assert knowledge('durability') in tool_durability.SYSTEM_PROMPT
@@ -71,7 +70,6 @@ def test_recovery_prompt_only_carries_the_stuck_activity():
     (lambda: tool_durability.SYSTEM_PROMPT, 1150),
     (lambda: craft_decision.SYSTEM_PROMPT_MATERIAL, 2000),
     (lambda: planner.SYSTEM_PROMPT, 4500),
-    (lambda: inventory.SYSTEM_PROMPT, 1850),
 ])
 def test_prompt_size_budget(prompt, limit):
     assert len(prompt()) <= limit

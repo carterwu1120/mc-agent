@@ -121,8 +121,10 @@ $MCCTL send '{"command":"inventory_decision","action":"blocked"}'
 $MCCTL send '{"command":"craft_decision","item":"stone_pickaxe"}'
 ```
 
-Inventory is cleaned in place only: drop counted, clearly surplus by-products (the bot
-keeps at least 64 of each building block) and the task resumes. There is no going home
+Inventory is cleaned in place only, following `references/inventory.md`: drop junk and
+building blocks beyond 128 in total, then misc items the current task does not need, until
+about 28 slots are used. The bot refuses to drop tools, armor, food, fuel, valuables and
+crafting essentials whatever you send. There is no going home
 or storing in chests. If nothing can be dropped safely, send `blocked`; the bot reports
 `inventory_blocked` and you ask the player to clear space.
 
