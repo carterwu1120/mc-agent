@@ -11,6 +11,7 @@ import websockets
 from dotenv import load_dotenv
 
 from agent.brain import LLMClient, build_client
+from agent.brain.cli_agent import CLIProviderError
 from agent.logger import init_logger, set_task_id
 from agent.handlers import inventory as inventory_handler
 from agent.handlers import craft_decision as craft_decision_handler
@@ -1613,7 +1614,12 @@ async def _handle_player_chat(state: dict, ws) -> None:
     revision = recovery.revision
     arb_state = _augment_state(state, player_task=message)
     arb_state['chat_task'] = {k: prior.get(k) for k in ('id', 'goal', 'status', 'interruptedBy')}
-    decision = await task_arbitration_handler.handle(arb_state, llm)
+    try:
+        decision = await task_arbitration_handler.handle(arb_state, llm)
+    except CLIProviderError as error:
+        print(f"[TaskArb] 規劃模型無法使用：{error}")
+        await _send_chat(ws, '目前無法連線到規劃模型，這則訊息沒有處理，原任務保持不變；請稍後再說一次。')
+        return
     current = task_memory.load_any() or {}
     if recovery.revision != revision or current.get('id') != prior.get('id'):
         await _send_chat(ws, '任務狀態剛才已改變，這次訊息未用來切換任務。')

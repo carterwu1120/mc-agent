@@ -90,7 +90,9 @@ async def handle(state, llm):
     context = {k: state.get(k) for k in ("reason", "detail", "goal", "progress", "plan_context", "stack",
                "navigation", "progress_evidence", "recovery_history", "decision_error", "mining_result") if state.get(k) is not None}
     recovery_history = state.get("recovery_history") or []
-    effort = "high" if len(recovery_history) >= 2 or state.get("decision_error") else "medium"
+    # Routine strategy uses CLI_REASONING_EFFORT_DEFAULT; only a third attempt or a
+    # rejected decision gets more reasoning.
+    effort = "medium" if len(recovery_history) >= 2 or state.get("decision_error") else None
     response = await llm.chat(
         [{"role": "user", "content": summary_json(state) + "\n" + json.dumps(context, ensure_ascii=False)}],
         system=system_prompt(state),

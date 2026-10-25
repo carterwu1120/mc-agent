@@ -136,7 +136,7 @@ async def _chat_with_retry(
     prompt: str,
     system: str,
     attempts: int = 3,
-    reasoning_effort: str = "medium",
+    reasoning_effort: str | None = None,
 ) -> str:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -418,7 +418,6 @@ async def _reprompt_invalid_plan(
             llm,
             reprompt,
             SYSTEM_PROMPT,
-            reasoning_effort="high",
         )
         decision = _parse_decision_text(corrected)
         if decision.get("action") != "plan":

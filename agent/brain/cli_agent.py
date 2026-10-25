@@ -273,7 +273,8 @@ class CLIAgentClient(LLMClient):
         self.timeout = float(os.getenv("CLI_AGENT_TIMEOUT", "120"))
         if self.timeout <= 0:
             raise ValueError("CLI_AGENT_TIMEOUT must be positive")
-        self.session_reuse = _enabled("CLI_SESSION_REUSE")
+        # Prompts are self-contained (full state each call), so resuming only re-sends history.
+        self.session_reuse = _enabled("CLI_SESSION_REUSE", default=False)
         self.session_max_turns = _positive_int_env("CLI_SESSION_MAX_TURNS", 8)
         self.session_max_input_tokens = _positive_int_env("CLI_SESSION_MAX_INPUT_TOKENS", 200000)
         self.usage_limit_cooldown = _positive_int_env("CLI_USAGE_LIMIT_COOLDOWN", 3600)
@@ -491,6 +492,7 @@ class CLIAgentClient(LLMClient):
                 command += ["--no-session-persistence"]
             if self.model:
                 command += ["--model", self.model]
+            command += ["--effort", reasoning_effort]
 
         stdout = await self._run(command, directory, env, prompt)
         if self.provider == "codex":

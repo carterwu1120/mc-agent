@@ -28,14 +28,18 @@ through `brain/factory.py` (default: Codex). Direct model API providers and SDK
 dependencies have been removed on this branch; invalid/old providers fail with
 migration instructions instead of falling back to another provider.
 Each handler LLM call starts a bounded noninteractive CLI process, forwards its prompt
-via stdin, and returns the final decision to the existing handler parser. By
-default, `CLI_SESSION_REUSE=true` resumes one provider conversation within a
+via stdin, and returns the final decision to the existing handler parser. Every
+prompt is self-contained (full state, task memory, recovery history), so each call
+is a fresh CLI session by default; resuming only re-sent earlier turns and grew
+input on every call. Handlers take their reasoning effort from
+`CLI_REASONING_EFFORT_DEFAULT` (passed as Codex `model_reasoning_effort` and Claude
+`--effort`); only recovery raises a third attempt or a rejected decision to medium.
+Optional `CLI_SESSION_REUSE=true` resumes one provider conversation within a
 main task; `BOT_DATA_DIR/cli_session.json` stores the provider/model/session ID,
 turn/token counters, and usage-limit cooldown across container recreation. A
 completed task or configured turn/token threshold rotates the session. Codex
 uses its emitted thread ID with `exec resume`, while Claude uses `--session-id`
-and `--resume`. A provider/model mismatch starts a new session, and the old
-isolated behavior remains available with `CLI_SESSION_REUSE=false`. Python
+and `--resume`. A provider/model mismatch starts a new session. Python
 retains task memory, event routing, and
 PlanExecutor ownership; CLI sessions do not directly control Minecraft. CLI
 calls are serialized, with timeout and cancellation cleanup. Install and

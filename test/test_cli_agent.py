@@ -50,6 +50,29 @@ def test_final_decision_and_stdin(monkeypatch, provider):
             if arg == "-c"
         ]
         assert 'model_reasoning_effort="low"' in configs
+    else:
+        assert seen["args"][seen["args"].index("--effort") + 1] == "low"
+
+
+def test_claude_accepts_per_request_reasoning_effort(monkeypatch):
+    seen = {}
+
+    async def spawn(*args, **kwargs):
+        process = AsyncMock()
+        process.returncode = 0
+        if "auth" in args:
+            process.communicate.return_value = (b'{"loggedIn":true,"authMethod":"claude.ai"}', b"")
+        else:
+            seen["args"] = args
+            process.communicate.return_value = (json.dumps({"result": '{"action":"wait"}'}).encode(), b"")
+        return process
+
+    monkeypatch.setenv("CLI_SESSION_REUSE", "false")
+    monkeypatch.setattr("agent.brain.cli_agent._executable", lambda _: ["fake-cli"])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+    assert asyncio.run(CLIAgentClient("claude").chat([], reasoning_effort="high")) == '{"action":"wait"}'
+    assert seen["args"][seen["args"].index("--effort") + 1] == "high"
 
 
 def test_codex_accepts_per_request_reasoning_effort(monkeypatch):
@@ -133,6 +156,7 @@ def test_codex_reuses_persisted_session(monkeypatch, tmp_path):
 
 
 def test_codex_replaces_missing_persisted_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLI_SESSION_REUSE", "true")  # exercises session reuse, now opt-in
     old_id = "11111111-1111-4111-8111-111111111111"
     new_id = "22222222-2222-4222-8222-222222222222"
     (tmp_path / "cli_session.json").write_text(json.dumps({
@@ -203,6 +227,7 @@ def test_claude_reuses_persisted_session(monkeypatch, tmp_path):
 
 
 def test_claude_replaces_missing_persisted_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLI_SESSION_REUSE", "true")  # exercises session reuse, now opt-in
     old_id = "33333333-3333-4333-8333-333333333333"
     (tmp_path / "cli_session.json").write_text(json.dumps({
         "schema_version": 2, "provider": "claude", "model": None,
@@ -287,6 +312,7 @@ def test_failure_does_not_leak_diagnostics(monkeypatch):
 
 
 def test_usage_limit_is_classified_and_blocks_repeat_subprocess(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLI_SESSION_REUSE", "true")  # exercises session reuse, now opt-in
     reset_at = 4102444800
     event = {
         "type": "task_complete",
@@ -317,6 +343,7 @@ def test_usage_limit_is_classified_and_blocks_repeat_subprocess(monkeypatch, tmp
 
 
 def test_session_rotates_after_turn_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLI_SESSION_REUSE", "true")  # exercises session reuse, now opt-in
     first_id = "44444444-4444-4444-8444-444444444444"
     second_id = "55555555-5555-4555-8555-555555555555"
     calls = []
@@ -478,3 +505,8 @@ def test_claude_refuses_non_subscription_before_inference(monkeypatch, auth):
         asyncio.run(CLIAgentClient("claude").chat([]))
     assert spawn.call_count == 1
     assert "auth" in spawn.call_args.args
+
+
+def test_session_reuse_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("CLI_SESSION_REUSE", raising=False)
+    assert CLIAgentClient("claude").session_reuse is False

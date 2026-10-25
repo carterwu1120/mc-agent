@@ -2,6 +2,7 @@ import json
 import re
 from agent import task_memory
 from agent.brain import LLMClient
+from agent.brain.cli_agent import CLIProviderError
 from agent.context_builder import build_for_skill
 from agent.handlers.llm_response import parse_llm_json
 from agent.handlers.state_summary import summary_json
@@ -47,7 +48,6 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         response = await llm.chat(
             [{"role": "user", "content": prompt}],
             system=SYSTEM_PROMPT,
-            reasoning_effort="medium",
         )
         clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
         clean = re.sub(r"^```[a-z]*\n?", "", clean).rstrip("`").strip()
@@ -64,6 +64,9 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             print(f"[TaskArb] decision 缺少 text，忽略: {decision}")
             return None
         return decision
+    except CLIProviderError:
+        # The model never ran; the caller must not report this as a misunderstanding.
+        raise
     except Exception as e:
         print(f"[TaskArb] 解析失敗: {e}\n原始回應: {response!r}")
         return None
