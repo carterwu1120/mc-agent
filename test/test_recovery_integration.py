@@ -135,7 +135,7 @@ def test_late_task_stopped_from_previous_step_does_not_abort_next_step(runtime):
     asyncio.run(scenario())
 
 
-def test_self_task_only_rechecks_after_material_state_change(runtime, monkeypatch):
+def test_idle_ticks_never_start_autonomous_tasks(runtime, monkeypatch):
     app, _task = runtime
 
     async def scenario():
@@ -172,7 +172,8 @@ def test_self_task_only_rechecks_after_material_state_change(runtime, monkeypatc
         app._last_self_task_at = 0
         await app._handle_and_send(changed, autonomous, type('Socket', (), {})())
 
-        assert calls == [20, 17]
+        # Autonomous self-tasks were removed: the bot waits for the player.
+        assert calls == []
 
     asyncio.run(scenario())
 

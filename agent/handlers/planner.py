@@ -32,7 +32,7 @@ SYSTEM_PROMPT = render_prompt(
     "planner",
     commands=_PLANNER_COMMANDS,
     planning=knowledge("planning"),
-    capabilities=knowledge("bot_capabilities", "鎬子與工具鏈", "裝備（equip）", "食物", "冶煉與燃料", "木材與箱子", "移動與位置"),
+    capabilities=knowledge("bot_capabilities", "鎬子與工具鏈", "裝備（equip）", "食物", "冶煉與燃料", "移動與位置"),
 )
 
 RESUME_PATTERNS = [
@@ -299,7 +299,7 @@ def _running_task_pending_mine_count(material: str) -> int:
     Also checks "interrupted" because task_arbitration interrupts the task before planner runs,
     so by the time planner is called the status is already "interrupted".
     """
-    task = task_memory.load_any()
+    task = task_memory.load()
     if not task or task.get("status") not in ("running", "interrupted"):
         return 0
     for cmd in _task_remaining_commands(task):
@@ -575,7 +575,7 @@ def _task_remaining_commands(task: dict | None) -> list[str]:
 
 
 def _find_recent_mining_task() -> dict | None:
-    current = task_memory.load_any()
+    current = task_memory.load()
     candidates: list[dict] = []
     if current:
         candidates.append(current)
@@ -748,7 +748,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     progress = top.get("progress", {})
     goal_str = f"目標：{goal}，進度：{progress}" if goal else "（無目標）"
 
-    prev_task = task_memory.load_any()
+    prev_task = task_memory.load()
     task_ctx = ""
     remaining_cmds_for_resume = []
     if prev_task:
@@ -802,7 +802,6 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         f"位置=({pos.get('x',0):.0f}, {pos.get('y',0):.0f}, {pos.get('z',0):.0f})，"
         f"血量={health}/20，飢餓={food}/20。\n"
         f"當前任務：{goal_str}{task_ctx}\n\n"
-        f"已登記箱子：\n{chests_summary}\n\n"
         f"{task_history}"
         f"狀態摘要（JSON）：\n{summary_json(state)}\n\n"
         f"請根據玩家的話決定要做什麼。"
@@ -812,14 +811,6 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
     try:
         print(f"[Planner] 玩家: {message}")
 
-        shortcut = _maybe_plan_restart_from_here(message, state)
-        if shortcut:
-            print(f"[Planner] 就地重開任務快捷規劃: {shortcut.get('commands')}")
-            return shortcut
-        shortcut = _maybe_plan_return_to_recent_mining(message, state)
-        if shortcut:
-            print(f"[Planner] 回去挖礦快捷規劃: {shortcut.get('commands')}")
-            return shortcut
         shortcut = _maybe_plan_resume(message, state)
         if shortcut:
             if shortcut.get("action") == "plan":
@@ -828,10 +819,6 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
         shortcut = _maybe_plan_come(message, activity, player_name)
         if shortcut:
             print(f"[Planner] 快捷規劃: {shortcut.get('commands')}")
-            return shortcut
-        shortcut = _equipment_goal_shortcut(message, state, activity)
-        if shortcut:
-            print(f"[Planner] 裝備目標快捷規劃: {shortcut.get('commands')}")
             return shortcut
         shortcut = _maybe_plan_surface(message, activity)
         if shortcut:

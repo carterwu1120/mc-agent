@@ -23,7 +23,7 @@ def _rendered():
 @pytest.mark.parametrize('name', TEMPLATES)
 def test_every_template_is_rendered_by_a_handler(name):
     sources = ''.join(p.read_text(encoding='utf-8') for p in HANDLERS_DIR.glob('*.py'))
-    assert re.search(rf'render_prompt\(\s*"{name}"', sources)
+    assert re.search(rf'render_prompt\(\s*["\']{name}["\']', sources)
 
 
 def test_rendered_prompts_have_no_leftover_placeholders():

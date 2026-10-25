@@ -18,8 +18,8 @@
 
 - `no_tools`：從最便宜的缺口補工具鏈，再以剩餘數量接回 mine。
 - `no_blocks`：檢查深度與挖隧道能力，仍不可行就請玩家指定礦區；鑽石在 y ≈ −58。
-- `no_safe_route`：岩漿、水或落差擋路 → home 或 surface 後從別處重試。
-- `water_loop` / `trapped_in_water`：先 home 撤離，再接回剩餘步驟。
+- `no_safe_route`：岩漿、水或落差擋路 → surface 後從別處重試。
+- `water_loop` / `trapped_in_water`：先 surface 撤離，再接回剩餘步驟。
 - 四面都是基岩或不可挖的方塊：請玩家用 /tp 救援。
 
 ## 砍樹
@@ -28,7 +28,7 @@
 
 ## 回到地表
 
-- surface 失敗：改用 back，或在已設基地時用 home；不要再 surface。
+- surface 失敗：改用 back；不要再 surface。
 
 ## 釣魚
 
@@ -48,10 +48,6 @@
 - `no_weapon`：沒有武器且本地合成已失敗，不要原地追動物。熟食已夠就停止補食；有釣竿就改 fish；缺木材但附近有樹 → chop logs 2 再 hunt。都不可行時說明並等待。
 - `no_raw_food`（getfood）：先 hunt 或 fish 取得生食，再 getfood count <還需熟食數量>（不是原本的總目標）。
 - `cook_failed`（getfood）：烹飪沒有產出熟食，依冶煉的原因處理（燃料、熔爐位置）後再 getfood。
-
-## 箱子
-
-- makechest 失敗：有空位的已登記箱子就直接 deposit；木材夠（等效 16 木板）就重試；缺木材先 chop；都不行就告知玩家。
 
 ## 工具準備
 

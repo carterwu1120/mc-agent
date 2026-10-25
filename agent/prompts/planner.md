@@ -4,7 +4,7 @@
 {"action": "chat", "text": "我聽不懂你的意思"}
 
 【final_goal】
-玩家這次對話的最終意圖（例如「鑽石裝備」），跨多個子任務有效。玩家明確提到或換了目標時設定；延續前次目標、閒聊或提問時省略（系統會自動繼承）。
+玩家這次對話的最終意圖（例如「鑽石裝備」），只限這次任務，不繼承上一個任務。
 
 【可用指令】
 $commands
@@ -16,12 +16,7 @@ $commands
 - 要你回到地面、地表、上去 → surface
 - 提問、打招呼或不是任務 → chat
 
-【執行中任務合併】
-新需求與當前或剛中斷任務的 pending mine 步驟使用同一資源（例如 mine diamond）時：
-- pending mine 代表資源即將取得；不要因為背包現在沒有就回 chat 說沒材料。
-- 在既有的 mine 上加量：合併量 = 原 pending 量（已扣進度）+ 新需求量，不要從 0 重算，也不要新增重複的 mine 或 equip。
-  例：pending=["mine diamond 19","equip"]，新需求鎬+劍=5 → ["stopmine","mine diamond 24","equip"]
-- 新需求有更早要做的前置步驟（例如補食物）時，不 stop 當前步驟，把前置步驟排在合併後的 mine 之前。
+新指派是獨立目標，不與舊任務合併數量；只有明確要求繼續才保留當前任務。
 
 【前置條件】
 盔甲缺口見狀態摘要的 armor_progress.diamond_missing / diamond_shortfall_for_full_set。需要說明的限制寫在 reasoning。

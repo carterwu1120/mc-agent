@@ -1,309 +1,86 @@
-const { Vec3 } = require('vec3')
 const bridge = require('./bridge')
-const { ensureToolFor } = require('./crafting')
-const { compactCompressibleItems } = require('./crafting')
-const { markBuried } = require('./buried')
 const activityStack = require('./activity')
 const execution = require('./execution')
-
-const INVENTORY_FULL = 34  // trigger 2 slots early so there's room to craft/place
-
-const JUNK_ITEMS = new Set([
-    // stone byproducts
-    'clay_ball',
-    'andesite', 'tuff', 'calcite', 'amethyst_block',
-    'gravel', 'smooth_basalt', 'granite', 'coarse_dirt', 'dirt',
-    // cave/nature pickups with no bot use
-    'big_dripleaf', 'small_dripleaf', 'brown_mushroom', 'red_mushroom',
-    'moss_carpet', 'moss_block', 'vine', 'lily_pad', 'dead_bush',
-    'white_banner', 'flint', 'amethyst_shard', 'azalea', 'spruce_sapling',
-    'mossy_cobblestone', 'wheat_seeds',
-    // mob drops bot doesn't use
-    'bone', 'leather', 'phantom_membrane', 'gunpowder',
-    // combat drops bot doesn't use
-    'bow', 'arrow',
-])
-
-const _ARMOR_SLOT_FOR = {
-    helmet: 'head', chestplate: 'torso', leggings: 'legs', boots: 'feet',
-}
-const _ARMOR_TIER = { leather: 1, golden: 2, chainmail: 3, iron: 4, diamond: 5, netherite: 6 }
-
-function _armorTier(name) {
-    const mat = name?.split('_')[0]
-    return _ARMOR_TIER[mat] ?? 0
-}
-
-function _durabilityPct(item) {
-    if (!item?.maxDurability) return 100
-    return Math.max(0, Math.round(((item.maxDurability - item.durabilityUsed) / item.maxDurability) * 100))
-}
-
-// Drop junk armor from inventory: broken items or leather pieces where a better tier is already worn.
-async function _dropJunkArmor(bot) {
-    const toToss = []
-    for (const item of bot.inventory.items()) {
-        const suffix = Object.keys(_ARMOR_SLOT_FOR).find(s => item.name.endsWith('_' + s))
-        if (!suffix) continue
-        const tier = _armorTier(item.name)
-        if (tier === 0) continue
-
-        const broken = _durabilityPct(item) <= 5
-        if (broken) { toToss.push(item); continue }
-
-        // Check what's currently worn in that slot
-        const bodyPart = _ARMOR_SLOT_FOR[suffix]
-        const worn = bot.inventory.slots[bot.getEquipmentDestSlot(bodyPart)]
-        if (worn && _armorTier(worn.name) > tier) {
-            toToss.push(item)
-        }
-    }
-    for (const item of toToss) {
-        try {
-            await bot.toss(item.type, null, item.count)
-            console.log(`[Inv] 丟棄垃圾裝備 ${item.name} (${_durabilityPct(item)}% 耐久 / 穿著更好裝備)`)
-        } catch (e) {
-            console.log(`[Inv] 丟棄 ${item.name} 失敗: ${e.message}`)
-        }
-    }
-    return toToss.length
-}
-
+const INVENTORY_FULL = 34
 let _decision = null
 let _checking = false
-
-function applyInventoryDecision(decision) {
-    _decision = decision
+let _blockedSignature = null
+let _generation = 0
+const DISPOSABLE = new Set(['cobblestone', 'cobbled_deepslate', 'diorite', 'andesite', 'granite',
+    'tuff', 'gravel', 'dirt', 'coarse_dirt', 'netherrack', 'flint', 'rotten_flesh',
+    'spider_eye', 'bone', 'clay_ball', 'sand', 'calcite'])
+const BUILDING = new Set(['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack'])
+function signature(bot) {
+    return bot.inventory.items().map(i => `${i.slot}:${i.name}:${i.count}`).sort().join('|')
 }
-
+function applyInventoryDecision(decision) { _decision = decision }
+async function dropItems(bot, items) {
+    const seen = new Set()
+    for (const request of items || []) {
+        if (!execution.isCurrent()) return
+        if (!request || !DISPOSABLE.has(request.name) || seen.has(request.name) || !Number.isInteger(request.count) || request.count <= 0) continue
+        seen.add(request.name)
+        const item = bot.inventory.items().find(i => i.name === request.name)
+        if (!item) continue
+        const total = bot.inventory.items().filter(i => i.name === request.name).reduce((n, i) => n + i.count, 0)
+        const count = Math.min(request.count, Math.max(0, total - (BUILDING.has(request.name) ? 64 : 0)))
+        if (count > 0) await bot.toss(item.type, null, count)
+    }
+}
 async function _handleFull(bot) {
-    return _tidyInventory(bot, { forceLlm: true })
-}
-
-async function _tidyInventory(bot, { forceLlm = false } = {}) {
-    if (!execution.isCurrent()) return
-    if (_checking) return
+    if (!execution.isCurrent() || _checking || signature(bot) === _blockedSignature) return
     _checking = true
-    return execution.run(async () => {
-        try { await _runTidyInventory(bot, forceLlm) }
-        finally { if (execution.isCurrent()) _checking = false }
-    }, execution.commandId())
-}
-
-async function _runTidyInventory(bot, forceLlm) {
-
-    // 暫停當前行為
-    activityStack.pause(bot)
-    activityStack.waitFor('inventory_recovery', 120000)
-
-    const beforeSlots = bot.inventory.items().length
-    const compacted = await compactCompressibleItems(bot)
-    const afterSlots = bot.inventory.items().length
-    if (compacted > 0) {
-        console.log(`[Inv] 已壓縮 ${compacted} 組資源方塊，背包格數 ${beforeSlots} -> ${afterSlots}`)
-    }
-    const junked = await _dropJunkArmor(bot)
-    if (junked > 0) console.log(`[Inv] 丟棄 ${junked} 件垃圾裝備`)
-
-    const junkToRemove = bot.inventory.items().filter(i => JUNK_ITEMS.has(i.name))
-    if (junkToRemove.length > 0) {
-        const junkMap = new Map(junkToRemove.map(i => [i.name, i.count]))
-        console.log(`[Inv] 埋棄雜物: ${[...junkMap.keys()].join(', ')}`)
-        await _buryItems(bot, junkMap)
-    }
-
-    if (!forceLlm || bot.inventory.items().length < INVENTORY_FULL) {
-        console.log('[Inv] 壓縮後背包已有空間，不需丟棄物品')
-        activityStack.resumeCurrent(bot)
-        _checking = false
-        return
-    }
-
-    console.log('[Inv] 背包已滿，詢問 LLM...')
-
-    bridge.sendState(bot, 'inventory_full', {})
-
-    // 等待 LLM 決策（最多 120 秒，deposit/drop 流程可能需要較長時間）
-    const decision = await _waitForDecision(120000)
-    if (!execution.isCurrent()) return
-
-    if (!decision || decision.action === 'continue') {
-        console.log('[Inv] LLM 決定繼續（或超時）')
-    } else if (decision.action === 'drop') {
-        // LLM 只回名稱清單，全部丟光（count = null）
-        const toDrop = new Map((decision.items ?? []).map(name => [name, null]))
-        await _buryItems(bot, toDrop)
-    }
-
-    // 恢復之前的行為
-    activityStack.resumeCurrent(bot)
-    _checking = false
-}
-
-async function _buryItems(bot, itemsMap) {
-    const originalYaw   = bot.entity.yaw
-    const originalPitch = bot.entity.pitch
-
-    // 先停止 pathfinder，防止之後走進洞
-    bot.pathfinder.setGoal(null)
-
-    // 1. 轉向正後方
-    const backYaw = originalYaw + Math.PI
-    await bot.look(backYaw, 0)
-
-    // 2. 計算挖洞位置：地板高度往下兩格
-    //    feet = bot 腳部所在格（通常是空氣），地板 = feet - 1
-    // snap 到最近的基本方向（N/S/E/W），避免斜角導致 dx/dz 同時為 ±1
-    const snapped = Math.round(backYaw / (Math.PI / 2)) * (Math.PI / 2)
-    const dx = Math.round(-Math.sin(snapped))
-    const dz = Math.round(-Math.cos(snapped))
-    const feet = bot.entity.position.floored()
-    const clearPos  = feet.offset(dx,  0, dz)   // bot 腳部高度的前方格
-    const clearPos2 = feet.offset(dx,  1, dz)   // bot 頭部高度的前方格
-    const topPos    = feet.offset(dx, -1, dz)   // 地板高度的前方格（封口位置）
-    const botPos    = feet.offset(dx, -2, dz)   // 地板下一格（物品落點）
-
-    // 3. 清出丟物路徑：正前方腳/頭高度
-    const pathToClear = [
-        clearPos2,                                      // 頭部高度正前方
-        clearPos,                                       // 腳部高度正前方
-    ]
-    for (const pos of pathToClear) {
-        const b = bot.blockAt(pos)
-        if (b && b.boundingBox === 'block') {
-            try { await ensureToolFor(bot, b.name); await bot.dig(b) } catch (_) {}
+    _decision = null
+    const generation = ++_generation
+    try {
+        activityStack.pause(bot)
+        bot.pathfinder?.setGoal(null)
+        bot.clearControlStates?.()
+        activityStack.waitFor('inventory_recovery', 120000)
+        bridge.sendState(bot, 'inventory_full', {})
+        const decision = await _waitForDecision(120000, generation)
+        if (generation !== _generation || !execution.isCurrent()) return
+        if (decision?.action === 'drop') await dropItems(bot, decision.items)
+        if (generation !== _generation || !execution.isCurrent()) return
+        if (bot.inventory.items().length < INVENTORY_FULL) {
+            _blockedSignature = null
+            activityStack.resumeCurrent(bot)
+        } else {
+            _blockedSignature = signature(bot)
+            bridge.sendState(bot, 'activity_stuck', { activity: activityStack.getActivity(),
+                reason: 'inventory_blocked', detail: '背包仍滿，沒有可安全清除的空間，等待玩家整理。' })
         }
+    } finally {
+        if (generation === _generation) _checking = false
     }
-
-    const topBlock = bot.blockAt(topPos)
-    if (topBlock && topBlock.boundingBox === 'block') {
-        try { await ensureToolFor(bot, topBlock.name); await bot.dig(topBlock) } catch (_) {}
-    }
-    const botBlock = bot.blockAt(botPos)
-    if (botBlock && botBlock.boundingBox === 'block') {
-        try { await ensureToolFor(bot, botBlock.name); await bot.dig(botBlock) } catch (_) {}
-    }
-
-    // 4. 丟垃圾進洞（稍微仰角讓物品拋物線落入洞中）
-    //    封口材料（cobblestone 等）至少預留 1 個，避免丟完沒東西封口
-    const FILL_BLOCKS = ['cobblestone', 'dirt', 'sand', 'netherrack', 'stone']
-    await bot.look(backYaw, -0.3)
-    for (const item of bot.inventory.items()) {
-        if (!itemsMap.has(item.name)) continue
-        const isFill = FILL_BLOCKS.includes(item.name)
-        const requested = itemsMap.get(item.name) ?? item.count
-        const tossCount = Math.min(requested, isFill ? Math.max(0, item.count - 1) : item.count)
-        if (tossCount <= 0) continue
-        await bot.toss(item.type, null, tossCount)
-        console.log(`[Inv] 埋棄 ${item.name} x${tossCount}`)
-    }
-    await _sleep(600)  // 等物品落入洞底
-
-    // 5. 如果丟出去的東西被吸回背包，重丟一次
-    const reabsorbed = bot.inventory.items().filter(i => itemsMap.has(i.name))
-    if (reabsorbed.length > 3) {
-        console.log(`[Inv] ${reabsorbed.length} 種物品被吸回，重丟`)
-        await bot.look(backYaw, -0.5)
-        for (const item of reabsorbed) {
-            const isFill = FILL_BLOCKS.includes(item.name)
-            const requested = itemsMap.get(item.name) ?? item.count
-            const tossCount = Math.min(requested, isFill ? Math.max(0, item.count - 1) : item.count)
-            if (tossCount <= 0) continue
-            try { await bot.toss(item.type, null, tossCount) } catch (_) {}
-            console.log(`[Inv] 重丟 ${item.name} x${tossCount}`)
-        }
-        await _sleep(600)
-    }
-
-    // 7. 封口：
-    //    botPos 若成功挖開 → 物品在 botPos，封 topPos
-    //    botPos 挖不動（基岩等）→ 物品在 topPos，改封 clearPos
-    const botAfter = bot.blockAt(botPos)
-    const sealPos = (botAfter && botAfter.boundingBox !== 'block') ? topPos : clearPos
-
-    const fillItem = bot.inventory.items().find(i => FILL_BLOCKS.includes(i.name))
-    if (fillItem) {
-        let sealed = false
-        for (const [ox, oy, oz] of [[1,0,0],[-1,0,0],[0,1,0],[0,0,1],[0,0,-1],[0,-1,0]]) {
-            const ref = bot.blockAt(sealPos.offset(ox, oy, oz))
-            if (!ref || ref.boundingBox !== 'block') continue
-            const faceCenter = ref.position.offset(0.5 - ox * 0.5, 0.5 - oy * 0.5, 0.5 - oz * 0.5)
-            try {
-                await bot.equip(fillItem, 'hand')
-                await bot.lookAt(faceCenter)
-                await bot.placeBlock(ref, new Vec3(-ox, -oy, -oz))
-                markBuried(sealPos)
-                markBuried(botPos)
-                console.log('[Inv] 垃圾已埋入地下')
-                sealed = true
-                break
-            } catch (_) {}
-        }
-        if (!sealed) console.log('[Inv] 無法封閉洞口')
-    } else {
-        console.log('[Inv] 沒有填埋材料，洞口未封閉')
-    }
-
-    // 8. 轉回正面
-    await bot.look(originalYaw, originalPitch)
 }
-
-function _sleep(ms) {
-    return new Promise(r => setTimeout(r, ms))
-}
-
-function _waitForDecision(timeoutMs) {
-    return new Promise((resolve) => {
-        const check = setInterval(() => {
-            if (!execution.isCurrent()) {
-                clearInterval(check)
-                clearTimeout(timer)
-                resolve(null)
-                return
-            }
-            if (_decision !== null) {
-                clearInterval(check)
-                clearTimeout(timer)
-                const d = _decision
-                _decision = null
-                resolve(d)
-            }
+function _waitForDecision(timeout, generation) {
+    return new Promise(resolve => {
+        const finish = value => { clearInterval(poll); clearTimeout(timer); resolve(value) }
+        const poll = setInterval(() => {
+            if (generation !== _generation || !execution.isCurrent()) return finish(null)
+            if (_decision !== null) { const result = _decision; _decision = null; finish(result) }
         }, 200)
-        const timer = setTimeout(() => {
-            clearInterval(check)
-            resolve(null)
-        }, timeoutMs)
+        const timer = setTimeout(() => finish(null), timeout)
     })
 }
-
 function checkFull(bot) {
-    const slots = bot.inventory.items().length
-    if (slots >= INVENTORY_FULL) {
-        _handleFull(bot)
-        return true
-    }
-    return false
-}
-
-function startMonitor(bot) {
-    bot.on('playerCollect', (collector) => {
-        if (collector.username !== bot.username) return
-        checkFull(bot)
+    if (bot.inventory.items().length < INVENTORY_FULL) { _blockedSignature = null; return false }
+    _handleFull(bot).catch(error => {
+        _blockedSignature = signature(bot)
+        bridge.sendState(bot, 'activity_stuck', { activity: activityStack.getActivity(), reason: 'inventory_blocked', detail: error.message })
     })
-    console.log('[Inv] 背包監控已啟動')
+    return true
 }
-
-async function waitUntilIdle() {
-    while (_checking) await new Promise(r => setTimeout(r, 100))
+function startMonitor(bot) {
+    bot.on('playerCollect', collector => { if (collector.username === bot.username) checkFull(bot) })
+    console.log('[Inv] 原地背包整理已啟動')
 }
-
+async function waitUntilIdle() { while (_checking) await new Promise(r => setTimeout(r, 100)) }
 module.exports = {
-    cancelRecovery() { _checking = false; _decision = null },
-    startMonitor,
-    checkFull,
-    waitUntilIdle,
-    applyInventoryDecision,
-    buryItems: _buryItems,
-    tidyInventory: _tidyInventory,
-    handleFull: _handleFull,
+    cancelRecovery() { ++_generation; _checking = false; _decision = null },
+    startMonitor, checkFull, waitUntilIdle, applyInventoryDecision,
+    // Kept as an API alias for existing callers; no digging, crafting or burial.
+    buryItems: (bot, items) => dropItems(bot, [...items].map(([name, count]) => ({ name, count }))),
+    tidyInventory: _handleFull, handleFull: _handleFull, dropItems,
 }

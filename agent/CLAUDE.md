@@ -125,13 +125,13 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `bot/commands.js` | Routes all Python→JS commands; checks `checkFull` before any activity |
 | `bot/mode.js` | Operating mode: `getMode()`, `setMode(m)` — persisted to `agent/data/mode.json` |
 | `bot/inventory.js` | Pauses top activity when full (≥34 slots), exports `checkFull(bot)` |
-| `bot/chest.js` | Chest storage — persisted to `agent/data/chests.json`. Labels: `food`, `wood`, `stone`, `ore`, `misc` |
+| `bot/chest.js` | Chest storage for manual `!` commands only; planners and the skill never use chests |
 | `bot/equipment.js` | `equipBestLoadout`, `equipSpecific`, `unequipAll` |
 | `bot/crafting.js` | `ensureToolFor`, `ensurePickaxeTier`, `applyCraftDecision` |
 | `bot/water.js` | Background water escape monitor |
 | `bot/eating.js` | Auto-eats when food < 18 |
 | `bot/buried.js` | Tracks buried item positions (avoids re-digging) |
-| `bot/home.js` | Base location — persisted to `agent/data/home.json`. `back` tps to top activity's `startPos` |
+| `bot/home.js` | `back` returns to the recorded position or latest task start; `home`/`sethome` are manual-only |
 | `bot/world.js` | Utility: `findNearestPlayer`, entity/block helpers |
 | `agent.py` | Event router — maps event types to event handlers |
 | `executor.py` | Sequences plan commands, waits for `action_done`/`activity_done` between steps |
@@ -147,16 +147,16 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 
 | Type | Meaning | Python handles? |
 |------|---------|----------------|
-| `tick` | Heartbeat every 2s | Yes — self_task (idle only, 60s cooldown) |
+| `tick` | Heartbeat every 2s | Liveness/supervision only; no autonomous tasks |
 | `activity_done` | Goal reached, bot idles | Yes — signals PlanExecutor + marks task done |
 | `action_done` | Instant action completed | Yes — signals PlanExecutor |
 | `task_started` | Activity started (via `!` command or LLM) | Yes — saves to task_memory for resume |
 | `task_stopped` | Activity manually stopped | Yes — marks task_memory interrupted |
 | `activity_stuck` | Stuck, expired wait, orphaned pause or unexpected idle | Yes — RecoverySupervisor |
 | `recovery_paused` | Correlated JS suspension acknowledgement | Yes — resolves stop deadline; never action_done |
-| `inventory_full` | Inventory ≥ 34 slots | Yes — LLM decides drop/plan |
+| `inventory_full` | Inventory ≥ 34 slots | Yes — LLM picks counted in-place drops or `blocked` |
 | `craft_decision` | Needs crafting decision | Yes |
-| `food_low` | Food < 10 & idle & no food | Yes — deterministic, no LLM |
+| `food_low` | Food < 10 & idle & no food | Yes — deterministic: pause and ask the player for food |
 | `chat` | Player sent a message | Yes — planner handler |
 | `player_died` | Bot health → 0 | Yes — aborts executor, writes `agent/data/death.json` |
 | `player_respawned` | Bot respawned | Yes — LLM respawn handler |
@@ -171,12 +171,12 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | File | Triggered by | Purpose |
 |------|-------------|---------|
 | `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復 |
-| `inventory.py` | `inventory_full` | LLM decides drop / deposit plan / continue |
+| `inventory.py` | `inventory_full` | In-place cleanup: counted drops of surplus by-products, or `blocked` |
 | `recovery.py` | supervised `activity_stuck` | Validated replacement strategy or explicit wait for player |
-| `self_task.py` | `tick` (idle, 60s) | 自主任務規劃；companion mode 不執行 |
+| `self_task.py` | (not routed) | 自主任務已停用；保留供參考 |
 | `respawn.py` | `player_respawned` | LLM 決定重生後恢復計畫 |
 | `tool_durability.py` | `tool_low_durability` | LLM 決定工具耐久不足的處理 |
-| `food.py` | `food_low` | 補充食物（確定性，不呼叫 LLM） |
+| `food.py` | `food_low` | 沒有食物時暫停當前任務並請玩家補給（不呼叫 LLM） |
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
 | `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
 | `commands_ref.py` | imported by handlers | Canonical command registry — `command_list(keys)` helper. **Never duplicate command descriptions inline.** |

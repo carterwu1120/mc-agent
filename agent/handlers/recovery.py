@@ -23,12 +23,11 @@ _ACTIVITY_KNOWLEDGE = {
     "smelting": ("冶煉", ("冶煉與燃料",)),
     "hunting": ("狩獵與補食物", ("食物",)),
     "getfood": ("狩獵與補食物", ("食物",)),
-    "makechest": ("箱子", ("木材與箱子",)),
     "preparetool": ("工具準備", ("鎬子與工具鏈",)),
 }
 _COMMAND_ACTIVITY = {"mine": "mining", "chop": "chopping", "fish": "fishing", "smelt": "smelting",
                      "hunt": "hunting", "getfood": "getfood", "surface": "surface",
-                     "makechest": "makechest", "preparetool": "preparetool"}
+                     "preparetool": "preparetool"}
 
 
 def _stuck_activity(state: dict) -> str | None:

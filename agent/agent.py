@@ -105,6 +105,15 @@ executor._verify_failed_callback = _on_verify_failed
 async def _handle_recovery(state: dict, ws) -> None:
     if recovery.busy or recovery.held:
         return
+    if state.get('reason') == 'inventory_blocked':
+        recovery.invalidate()
+        executor.abort(preserve_task=True, reason='inventory_blocked')
+        task_memory.interrupt('inventory_blocked')
+        recovery.phase = 'waiting_player'
+        recovery.reason = '背包沒有可安全清掉的空間，請玩家整理後指示繼續。'
+        await ws.send(json.dumps({'command': 'stopall'}))
+        await _send_chat(ws, recovery.reason)
+        return
     print(f"[Recovery] {state.get('reason')}: stopping old activity before strategy decision")
     _recent_stuck_events.append({k: state.get(k) for k in ('activity', 'reason', 'detail', 'remaining')})
     task_memory.record_event('activity_stuck', reason=state.get('reason'), details={
@@ -426,50 +435,12 @@ async def _on_player_died(state: dict, _llm: LLMClient):
 
 
 async def _on_player_respawned(state: dict, llm: LLMClient):
-    if not DEATH_FILE.exists():
-        return None
-
-    death_info = json.loads(DEATH_FILE.read_text(encoding='utf-8'))
     DEATH_FILE.unlink(missing_ok=True)
-
-    cause = death_info.get('cause', 'other')
-    start_pos = death_info.get('startPos')
-    death_pos = death_info.get('deathPos')
-
-    task = task_memory.load()
-    if not task or task.get('status') != 'interrupted':
-        return None
-
-    steps = task.get('steps', [])
-    current_step = task.get('currentStep', 0)
-    if steps:
-        remaining = [
-            s['cmd']
-            for s in steps[current_step:]
-            if s.get('status') != 'done'
-        ]
-    else:
-        remaining = task['commands'][current_step:]
-
-    if not remaining:
-        return None
-
-    respawn_state = dict(state)
-    respawn_state.update({
-        'cause': cause,
-        'startPos': start_pos,
-        'deathPos': death_pos,
-        'taskCurrentStep': death_info.get('taskCurrentStep'),
-        'taskCurrentCmd': death_info.get('taskCurrentCmd'),
-        'taskCurrentPos': death_info.get('taskCurrentPos'),
-        'taskWorkPos': death_info.get('taskWorkPos'),
-        'taskGoal': death_info.get('taskGoal') or {},
-        'taskProgress': death_info.get('taskProgress') or {},
-        'taskActivity': death_info.get('taskActivity'),
-        'remaining': remaining,
-        'goal': task.get('goal', ''),
-    })
-    return await respawn_handler.handle(respawn_state, llm)
+    task_memory.interrupt('player_died')
+    recovery.invalidate()
+    recovery.phase = 'waiting_player'
+    recovery.reason = '重生後等待玩家明確指示。'
+    return {"command": "chat", "text": "已重生，原任務暫停，請確認現況後指示繼續。"}
 
 
 async def _on_test_plan(state: dict, _llm: LLMClient):
@@ -492,7 +463,6 @@ HANDLERS = {
     "activity_stuck": recovery_handler.handle,
     "mining_decision": recovery_handler.handle,
     "food_low":       food_handler.handle,
-    "tick":           self_task_handler.handle,
     "action_done":    _on_done,
     "activity_done":  _on_done,
     "task_started":   _on_task_started,
@@ -1320,69 +1290,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             await _handle_recovery(state, ws)
             return
         if event_type == "tick":
-            if recovery.busy or recovery.held:
-                return
-            now = asyncio.get_running_loop().time()
-            if COORDINATOR_URL:
-                if now - _last_heartbeat_at > HEARTBEAT_INTERVAL:
-                    asyncio.create_task(_send_heartbeat())
-            if executor.is_running():
-                return
-            if state.get("activity") != "idle":
-                _idle_started_at = None
-                return
-
-            # Auto-resume transient interruptions (inventory_full, tool_low_durability) on first idle tick
-            _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability", "food_low"}
-            _pending = task_memory._load_raw()
-            if (
-                _pending
-                and _pending.get("status") == "interrupted"
-                and _pending.get("interruptedBy") in _RESUMABLE_INTERRUPTS
-                and not executor.is_running()
-            ):
-                print(f"[Agent] 自動恢復被 {_pending.get('interruptedBy')} 中斷的任務：{_pending.get('goal')}")
-                if _planner_lock is not None:
-                    await _planner_lock.acquire()
-                    _lock_acquired = True
-                executor.claim()
-                if _lock_acquired:
-                    _lock_acquired = False
-                    _planner_lock.release()
-                asyncio.create_task(executor.execute(
-                    ["resumetask"], ws,
-                    goal=_pending.get("goal", ""),
-                    preserve_task=True,
-                    source=_pending.get("source", "coordinator"),
-                ))
-                return
-
-            if _idle_started_at is None:
-                _idle_started_at = now
-                return
-            if now - _idle_started_at < SELF_TASK_COOLDOWN:
-                return
-            if now - _last_self_task_at < SELF_TASK_COOLDOWN:
-                return
-            if not _llm_is_available():
-                reason = _llm_unavailable_reason() or 'provider cooldown'
-                if reason != _last_provider_pause_reason:
-                    print(f"[Agent] 自主任務暫停：{reason}")
-                    _last_provider_pause_reason = reason
-                return
-            _last_provider_pause_reason = None
-            fingerprint = _self_task_fingerprint(state)
-            if fingerprint == _last_self_task_fingerprint:
-                return
-            # Acquire planner slot before calling LLM
-            if _planner_lock is None or _planner_lock.locked():
-                return
-            await _planner_lock.acquire()
-            _lock_acquired = True
-            # Re-check after acquire
-            if executor.is_running() or _latest_state.get("activity", "idle") != "idle":
-                return
-            _last_self_task_at = now
+            return  # Idle never creates or resumes tasks.
         skill_name = handler.__module__.split('.')[-1]
         if event_type in _LLM_EVENT_TYPES:
             print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
@@ -1676,34 +1584,11 @@ async def run():
         await history_db.init_db()
         print(f"[Agent] PostgreSQL schema ready")
 
-    # （表示上次 agent 異常終止，下次說「繼續」可以接回）
-    _startup_task = task_memory._load_raw()
-    if _startup_task:
-        _startup_status = _startup_task.get("status")
-        _startup_interrupted_by = _startup_task.get("interruptedBy")
-        _RESUMABLE_INTERRUPTS = {"inventory_full", "tool_low_durability", "food_low"}
-        if _startup_status == "running":
-            task_memory.interrupt("agent_restart")
-            print(f"[Agent] 啟動：發現未完成任務「{_startup_task.get('goal')}」，已標記為 interrupted")
-        elif _startup_status == "interrupted" and _startup_interrupted_by in _RESUMABLE_INTERRUPTS:
-            # Transient interruption — will auto-resume on first tick
-            print(f"[Agent] 啟動：發現被 {_startup_interrupted_by} 暫時中斷的任務「{_startup_task.get('goal')}」，待連線後恢復")
-        elif _startup_status == 'interrupted' and _startup_interrupted_by == 'waiting_for_food_change':
-            _runtime = _startup_task.get('runtime') or {}
-            _snapshot = _runtime.get('food_wait_snapshot')
-            if isinstance(_snapshot, dict) and _snapshot:
-                recovery.hold_for_change(
-                    'food',
-                    _snapshot,
-                    '上次尋食沒有可行路線，等待食物相關條件改善。',
-                )
-                print('[Agent] 啟動：恢復 waiting_for_change（food），只在食物條件改善時重試')
-            else:
-                recovery.phase = 'waiting_player'
-                recovery.reason = '缺少食物等待快照，任務保留，等待玩家指示。'
-        elif _startup_status == 'interrupted' and _startup_interrupted_by == 'recovery_blocked':
-            recovery.phase = 'waiting_player'
-            recovery.reason = '上次恢復失敗，任務已保留，等待玩家指示。'
+    startup_task = task_memory.load()
+    if startup_task:
+        task_memory.interrupt('agent_restart')
+        recovery.phase = 'waiting_player'
+        recovery.reason = '重新啟動後等待玩家確認並明確要求繼續。'
 
     if os.environ.get('DASHBOARD_PORT') or BOT_ID == 'bot0':
         _dashboard.init(_latest_state, _thinking, [],

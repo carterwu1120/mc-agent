@@ -21,8 +21,7 @@ const MCBOT_HOME = process.env.MCBOT_HOME || path.join(os.homedir(), '.mcbot')
 const ACTIVITY = new Set(['fish', 'chop', 'mine', 'smelt', 'combat', 'hunt', 'getfood', 'surface'])
 const ACTION_DONE = new Set([
     'stopfish', 'stopchop', 'stopmine', 'stopsmelt', 'stopcombat', 'stophunt', 'stopgetfood',
-    'stopsurface', 'stopall', 'sethome', 'home', 'back', 'makechest', 'setchest',
-    'labelchest', 'readchest', 'deposit', 'withdraw', 'preparetool', 'equip', 'unequip', 'tp', 'setmode',
+    'stopsurface', 'stopall', 'back', 'preparetool', 'equip', 'unequip', 'tp', 'setmode',
 ])
 const NO_ACK = new Set(['chat', 'come', 'look', 'inv', 'bury', 'tidy'])
 const TERMINAL = new Set(['action_done', 'activity_done', 'activity_stuck', 'mining_decision', 'recovery_paused'])

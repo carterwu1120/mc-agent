@@ -106,7 +106,7 @@ function sendState(bot, type, extra = {}) {
         food: bot.food,
         dimension: bot.game?.dimension ?? null,
         timeOfDay: bot.time?.timeOfDay ?? null,
-        home: getHome(),
+        home: null,
         equipment: _equipmentState(bot),
         nearby: {
             water: _hasNearbyBlock(bot, ['water'], 10),
@@ -121,7 +121,7 @@ function sendState(bot, type, extra = {}) {
             return entry
         }),
         inventory_slots: { used: bot.inventory.items().length, total: 36, free: 36 - bot.inventory.items().length },
-        chests: getChests(),
+        chests: [],
         entities: Object.values(bot.entities)
             .filter(e => e.id !== bot.entity.id)
             .slice(0, 20)

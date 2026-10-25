@@ -83,6 +83,10 @@ function dispatch(bot, msg) {
         }
         return
     }
+    if (['home', 'sethome', 'setchest', 'labelchest', 'makechest', 'deposit', 'withdraw'].includes(msg.command)) {
+        bridge.sendState(bot, 'activity_stuck', { activity: msg.command, reason: 'unsupported_command', detail: '目前只執行當前任務，不提供基地與存箱流程。' })
+        return
+    }
     switch (msg.command) {
         case 'suspend': {
             // Pause every frame without resuming any previous frame. Goals are

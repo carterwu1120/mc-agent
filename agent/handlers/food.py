@@ -41,16 +41,4 @@ def _build_food_plan(state: dict) -> tuple[list[str], int]:
 
 
 async def handle(state: dict, llm: LLMClient) -> list | None:
-    food = state.get("food", 20)
-    activity = state.get("activity", "idle")
-    commands, target = _build_food_plan(state)
-    if not commands:
-        return [{"action": "wait_for_food", "text": "缺少食物，附近沒有可用來源；請補給食物或帶我到有動物／可釣魚的地方。"}]
-    print(
-        f"[Skill/food] 食物不足（{food}/20），activity={activity}，"
-        f"動態目標={target}，計畫={commands}"
-    )
-    return [
-        {"command": "chat", "text": f"食物不足（{food}/20），暫停目前任務去補充食物"},
-        {"action": "plan", "commands": commands, "goal": "補充食物", "preserve_task": True},
-    ]
+    return [{"action": "wait_for_food", "text": "沒有可吃的食物，先暫停當前任務，請補給食物。"}]

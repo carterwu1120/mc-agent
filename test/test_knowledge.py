@@ -24,8 +24,8 @@ def _all_prompts():
 def test_every_knowledge_file_is_used_by_a_prompt():
     prompts = _all_prompts()
     for name in FILES:
-        lines = [l for l in knowledge(name).splitlines() if l.startswith('- ')]
-        assert any(lines[0] in p for p in prompts), name
+        body = [l for l in knowledge(name).splitlines() if l.strip() and not l.startswith('#')]
+        assert any(body[0] in p for p in prompts), name
 
 
 def test_prompts_embed_their_knowledge():

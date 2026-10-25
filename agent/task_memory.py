@@ -34,8 +34,6 @@ def save(
 ) -> dict:
     commands = normalize_commands(commands)
     prev = _load_raw()
-    if final_goal is None and prev:
-        final_goal = prev.get("final_goal")
     task = {
         "id": uuid.uuid4().hex[:8],
         "goal": goal,
@@ -186,34 +184,7 @@ def remember_interrupted(
     runtime: dict | None = None,
     reason: str = "player_interrupt",
 ) -> dict | None:
-    commands = normalize_commands(commands)
-    if not commands:
-        return None
-
-    t = _load_raw() or _normalize_root({})
-    created_at = _now_iso()
-    summary = {
-        "id": uuid.uuid4().hex[:8],
-        "goal": goal,
-        "final_goal": final_goal if final_goal is not None else t.get("final_goal"),
-        "commands": commands,
-        "steps": build_step_records(commands),
-        "currentStep": 0,
-        "context": deepcopy(context or {}),
-        "runtime": deepcopy(runtime or {}),
-        "status": "interrupted",
-        "interruptedBy": reason,
-        "createdAt": created_at,
-        "interruptedAt": created_at,
-    }
-    interrupted = list(t.get("interruptedTasks") or [])
-    if interrupted and interrupted[0].get("goal") == summary["goal"] and interrupted[0].get("commands") == summary["commands"]:
-        interrupted[0] = summary
-    else:
-        interrupted.insert(0, summary)
-    t["interruptedTasks"] = interrupted
-    _write(t)
-    return summary
+    return None  # No archived task stack in single-task mode.
 
 
 def latest_interrupted() -> dict | None:
@@ -263,6 +234,9 @@ def interrupt(reason: str) -> None:
         return
     t["status"] = "interrupted"
     t["interruptedBy"] = reason
+    for step in t.get("steps", []):
+        if step.get("status") == "running":
+            step["status"] = "interrupted"
     steps = t.get("steps") or []
     current_step = int(t.get("currentStep", 0) or 0)
     command = steps[current_step].get("cmd") if 0 <= current_step < len(steps) else None
@@ -339,34 +313,10 @@ def record_event(
     step: int | None = None,
     db_only: bool = False,
 ) -> None:
-    t = _load_raw() or _normalize_root({})
-    if db_only:
-        event = {
-            "type": event_type,
-            "goal": t.get("goal"),
-            "toGoal": to_goal,
-            "reason": reason,
-            "command": command,
-            "step": step,
-            "details": dict(details or {}),
-            "at": _now_iso(),
-        }
-        history_db.write_event(event, t.get("id"))
-        return
-    _append_event(
-        t,
-        event_type=event_type,
-        reason=reason,
-        details=details,
-        from_task=t if t.get("goal") else None,
-        to_goal=to_goal,
-        command=command,
-        step=step,
-    )
-    _write(t)
-    events = t.get("recentEvents") or []
-    if events:
-        history_db.write_event(dict(events[0]), t.get("id"))
+    t = _load_raw() or {}
+    history_db.write_event({"type": event_type, "goal": t.get("goal"),
+        "toGoal": to_goal, "reason": reason, "command": command, "step": step,
+        "details": dict(details or {}), "at": _now_iso()}, t.get("id"))
 
 
 def recent_events() -> list[dict]:
@@ -407,21 +357,8 @@ def recent_failures() -> list[dict]:
 
 
 def load() -> dict | None:
-    try:
-        t = _load_raw()
-        if t is None:
-            return None
-        if t.get("status") in ("running", "interrupted"):
-            return t
-        steps = t.get("steps", [])
-        has_pending = any(s.get("status") == "pending" for s in steps)
-        if has_pending:
-            t["status"] = "interrupted"
-            _write(t)
-            return t
-        return None
-    except Exception:
-        return None
+    t = _load_raw()
+    return t if t and t.get('status') in {'running', 'interrupted'} else None
 
 
 def clear() -> None:
@@ -442,8 +379,10 @@ def _load_raw() -> dict | None:
 def _write(data: dict) -> None:
     normalized = _normalize_root(data)
     _prune(normalized)
-    with open(FILE, 'w', encoding='utf-8') as f:
+    temporary = FILE + ".tmp"
+    with open(temporary, 'w', encoding='utf-8') as f:
         json.dump(normalized, f, indent=2, ensure_ascii=False)
+    os.replace(temporary, FILE)
 
 
 def _patch(patch: dict) -> None:
@@ -456,6 +395,8 @@ def _patch(patch: dict) -> None:
 
 def _normalize_root(data: dict) -> dict:
     root = dict(data or {})
+    for key in ("interruptedTasks", "recentTransitions", "recentEvents", "recentFailures"):
+        root[key] = []
     root.setdefault("interruptedTasks", [])
     root.setdefault("recentTransitions", [])
     root.setdefault("recentEvents", [])

@@ -98,10 +98,6 @@ Run one command at a time and wait for `done` before the next. Keep the user's
 objective in your own notes (goal, target count, steps done). The bot's
 `state.stack` only shows the current activity's goal and progress.
 
-`makechest` reports the new chest's id as `new_chest_id` in its `action_done`
-event. The references write later steps with the placeholder `{new_chest_id}`. You
-must substitute the number yourself, for example `labelchest 3 ore`, then `deposit 3`.
-
 ## 4. Events and how to respond
 
 | event | what happened | your move |
@@ -120,14 +116,15 @@ must substitute the number yourself, for example `labelchest 3 ore`, then `depos
 Decision replies use `send` with raw JSON:
 
 ```bash
-$MCCTL send '{"command":"inventory_decision","action":"drop","items":["diorite","tuff","gravel"]}'
-$MCCTL send '{"command":"inventory_decision","action":"continue"}'
+$MCCTL send '{"command":"inventory_decision","action":"drop","items":[{"name":"diorite","count":64},{"name":"gravel","count":20}]}'
+$MCCTL send '{"command":"inventory_decision","action":"blocked"}'
 $MCCTL send '{"command":"craft_decision","item":"stone_pickaxe"}'
 ```
 
-To store items instead of dropping them, send `continue`. Once the bot resumes, run
-`stopall` and then the storage path from `references/inventory.md`
-(`home`, `deposit <id>`, `back`, …). Finish by restarting the activity with its remaining count.
+Inventory is cleaned in place only: drop counted, clearly surplus by-products (the bot
+keeps at least 64 of each building block) and the task resumes. There is no going home
+or storing in chests. If nothing can be dropped safely, send `blocked`; the bot reports
+`inventory_blocked` and you ask the player to clear space.
 
 ### Recovery budget
 
@@ -147,5 +144,5 @@ player's emergency override. Use `$MCCTL run chat <text>` to speak in game. Keep
 ## 6. Finishing
 
 When the goal is met, report the result and the final inventory to the user. Leave the bot
-running if the user may give more tasks. Otherwise run `$MCCTL stop`. Bot data (home,
-chests, logs) lives in `~/.mcbot/<name>/` and persists across restarts.
+running if the user may give more tasks. Otherwise run `$MCCTL stop`. Bot logs and data
+live in `~/.mcbot/<name>/` and persists across restarts.
