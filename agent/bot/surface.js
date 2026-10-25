@@ -39,47 +39,69 @@ function _setEscapeMovements(bot) {
     })
 }
 
-function findSurfaceSpot(bot, maxRadius = 24) {
+// Bottom y of the 16-block chunk section containing y, if that section is all air.
+// Most of a column above the surface is empty sections; skipping them avoids hundreds
+// of blockAt calls per column (a deep search used to block the bot for seconds).
+function _emptySectionBottom(column, y) {
+    if (!column?.sections || column.minY === undefined) return null
+    const index = (y - column.minY) >> 4
+    if (column.sections[index]?.isEmpty?.() !== true) return null
+    return column.minY + (index << 4)
+}
+
+// Topmost sky-lit standing spot in one column, or null. Scanning stops at the first
+// solid block: nothing below it can see the sky, so the rest of the column is wasted work.
+function _columnSurface(bot, base, dx, dz, minY, maxY) {
+    let column = null
+    try { column = bot.world?.getColumnAt?.(base.offset(dx, 0, dz)) } catch (_) {}
+    for (let y = maxY - 2; y >= minY; y--) {
+        // Land on the section's lowest block (it can still be the feet position).
+        const bottom = _emptySectionBottom(column, y)
+        if (bottom !== null && bottom < y) { y = bottom + 1; continue }
+        const feet = bot.blockAt(base.offset(dx, y - base.y, dz))
+        if (!feet) return null
+        if (!isPassableSpace(feet)) return null
+        const head = bot.blockAt(base.offset(dx, y + 1 - base.y, dz))
+        const ground = bot.blockAt(base.offset(dx, y - 1 - base.y, dz))
+        if (!head || !ground || !isPassableSpace(head)) continue
+        if (isPassableSpace(ground)) continue
+        if (!isSafeGround(ground) || skyLightAt(bot, feet.position) < 14) return null
+        return feet.position.clone()
+    }
+    return null
+}
+
+// Search rings outward from the bot (including the column straight above it). Within
+// maxRadius every column is checked; beyond it, up to farRadius, every other ring and
+// column, which keeps a deep underground search bounded when the nearby surface is
+// water or tree canopy.
+function findSurfaceSpot(bot, maxRadius = 24, farRadius = 64) {
     if (bot.game?.dimension && bot.game.dimension !== 'overworld') {
         return null
     }
 
     const base = bot.entity.position.floored()
-    const minY = _worldMinY(bot)
+    const minY = Math.max(base.y, _worldMinY(bot) + 1)
     const maxY = _worldMaxY(bot)
-    const startY = Math.max(base.y, minY + 1)
-    const candidates = []
 
-    for (let r = 1; r <= maxRadius; r++) {
+    for (let r = 0; r <= farRadius; r++) {
+        const sparse = r > maxRadius
+        if (sparse && r % 2) continue
+        const candidates = []
         for (let dx = -r; dx <= r; dx++) {
             for (let dz = -r; dz <= r; dz++) {
                 if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue
-
-                for (let y = maxY - 2; y >= startY; y--) {
-                    const feet = bot.blockAt(base.offset(dx, y - base.y, dz))
-                    const head = bot.blockAt(base.offset(dx, y + 1 - base.y, dz))
-                    const ground = bot.blockAt(base.offset(dx, y - 1 - base.y, dz))
-
-                    if (!feet || !head || !ground) continue
-                    if (!isPassableSpace(feet) || !isPassableSpace(head)) continue
-                    if (!isSafeGround(ground)) continue
-
-                    const light = skyLightAt(bot, feet.position)
-                    if (light < 14) continue
-
-                    candidates.push({
-                        pos: feet.position.clone(),
-                        score: _candidateScore(bot, feet.position),
-                    })
-                    break
-                }
+                if (sparse && (dx + dz) % 2) continue
+                const pos = _columnSurface(bot, base, dx, dz, minY, maxY)
+                if (pos) candidates.push({ pos, score: _candidateScore(bot, pos) })
             }
         }
-        if (candidates.length > 0) break
+        if (candidates.length > 0) {
+            candidates.sort((a, b) => a.score - b.score)
+            return candidates[0].pos
+        }
     }
-
-    candidates.sort((a, b) => a.score - b.score)
-    return candidates[0]?.pos ?? null
+    return null
 }
 
 activityStack.register('surface', _pause)
@@ -134,8 +156,8 @@ async function _run(bot, goal = {}, token) {
         if (!target || !isSurfacing || token !== _runToken) {
             bridge.sendState(bot, 'activity_stuck', {
                 activity_name: 'surface',
-                reason: 'timeout',
-                detail: '找不到可靠的可站立地表位置',
+                reason: 'no_surface_found',
+                detail: '64 格內找不到可站立的露天地表（可能上方是水或樹冠）',
             })
             return
         }

@@ -274,10 +274,23 @@ function isActive() {
     return isCombating
 }
 
+// Self-defense (started by the health monitor) only fights near where it was attacked,
+// then hands control back to the interrupted task. It must not chase mobs through caves
+// or report the task as stuck when the attacker gets away.
+const DEFENSIVE_LEASH_HORIZONTAL = 8
+const DEFENSIVE_LEASH_VERTICAL = 4
+
+function _outsideLeash(origin, pos) {
+    return Math.hypot(pos.x - origin.x, pos.z - origin.z) > DEFENSIVE_LEASH_HORIZONTAL ||
+        Math.abs(pos.y - origin.y) > DEFENSIVE_LEASH_VERTICAL
+}
+
 async function _loop(bot, goal = {}) {
     _isPaused = false
     const _myGen = ++_loopGen
     const startTime = Date.now()
+    const defensive = goal.defensive === true
+    const origin = bot.entity.position.clone()
     let noTargetTicks = 0
     let gotoFailStreak = 0
     const MAX_GOTO_FAILS = 5
@@ -298,6 +311,10 @@ async function _loop(bot, goal = {}) {
             await _sleep(500)
             if (!execution.isCurrent()) return
             continue
+        }
+        if (defensive && _outsideLeash(origin, target.position)) {
+            console.log(`[Combat] ${target.name} 已離開自衛範圍，結束戰鬥並回到原任務`)
+            break
         }
         activityStack.touch('combat', 'target_acquired')
         noTargetTicks = 0
@@ -329,6 +346,8 @@ async function _loop(bot, goal = {}) {
                 gotoFailStreak++
                 if (gotoFailStreak >= MAX_GOTO_FAILS) {
                     console.log(`[Combat] 連續 ${gotoFailStreak} 次無法抵達目標，放棄戰鬥`)
+                    // Giving up self-defense is not a task failure; the parent activity resumes.
+                    if (defensive) break
                     isCombating = false
                     bridge.sendState(bot, 'activity_stuck', { reason: 'cannot_reach_target', detail: `failed to reach ${target.name} after ${gotoFailStreak} attempts` })
                     break
@@ -356,7 +375,12 @@ async function _loop(bot, goal = {}) {
     if (!execution.isCurrent() || _loopGen !== _myGen) return
     isCombating = false
     if (!_isPaused && _loopGen === _myGen) {
-        execution.run(() => setTimeout(async () => { await craftMissingArmor(bot); await equipArmor(bot) }, 1000), execution.commandId())
+        // After self-defense, only re-equip: auto-crafting armor would smelt the raw iron
+        // the interrupted task is collecting for its own tools.
+        execution.run(() => setTimeout(async () => {
+            if (!defensive) await craftMissingArmor(bot)
+            await equipArmor(bot)
+        }, 1000), execution.commandId())
         activityStack.pop(bot)
     }
     _isPaused = false
@@ -406,7 +430,7 @@ function startMonitor(bot) {
             const target = _findTarget(bot)
             if (target) {
                 console.log(`[Combat] 受到攻擊！血量 ${_lastHealth} → ${bot.health}，反擊 ${target.name}`)
-                startCombat(bot)
+                startCombat(bot, { defensive: true })
             } else {
                 console.log(`[Combat] 血量下降 ${_lastHealth} → ${bot.health}，附近無敵對生物（環境傷害），忽略`)
             }

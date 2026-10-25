@@ -73,10 +73,6 @@ const ORE_MIN_PICKAXE = {
 
 const PICKAXE_TIERS = ['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']
 
-function _requiredPickaxe(target) {
-    return ORE_MIN_PICKAXE[target] || 'wooden_pickaxe'
-}
-
 function _hasPickaxeFor(bot, required) {
     return bot.inventory.items().some(i => PICKAXE_TIERS.indexOf(i.name) >= PICKAXE_TIERS.indexOf(required))
 }
@@ -127,7 +123,9 @@ async function _tryBlockLava(bot, lavaPos) {
     console.log('[Mine] 無法封堵岩漿')
 }
 
+// Accepts an ore block name or a mining target ("iron"); a missing name needs no tier.
 function _requiredPickaxe(blockName) {
+    if (!blockName) return 'wooden_pickaxe'
     for (const [ore, minPick] of Object.entries(ORE_MIN_PICKAXE)) {
         if (blockName.includes(ore)) return minPick
     }
@@ -451,6 +449,7 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
     let wallNavAttempts = 0
     const bestY = goal.target ? (ORE_BEST_Y[goal.target] ?? null) : null
     let descentRotations = 0
+    let inReachLogged = false
     let descentHardFails = 0
     let tunnelFailCount = 0
     let stoneSearchFails = 0
@@ -698,7 +697,14 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
 
         const currentY = Math.floor(bot.entity.position.y)
         const needDescend = bestY !== null && currentY - bestY > 3
-        const needAscend  = bestY !== null && bestY - currentY > 3
+        // Reachable target ore at this depth beats climbing to the statistical best
+        // height (e.g. deepslate iron at y=-35 vs the iron peak at y=16).
+        const targetInReach = goal.target && bestY !== null && bestY - currentY > 3 &&
+            bot.findBlocks({ matching: b => miningPhase.matches(b.name, goal.target), maxDistance: 16, count: 20 })
+                .some(p => _isExposed(bot, p) && !_digFailed.has(p.toString()) && !_lavaOres.has(p.toString()))
+        if (targetInReach && !inReachLogged) console.log(`[Mine] 目前深度 Y=${currentY} 附近已有可挖的 ${goal.target}，不先回到 Y=${bestY}`)
+        inReachLogged = Boolean(targetInReach)
+        const needAscend  = bestY !== null && bestY - currentY > 3 && !targetInReach
 
         if (needAscend) {
             console.log(`[Mine] 位置過深 Y=${currentY}，回到目標高度 Y=${bestY}`)

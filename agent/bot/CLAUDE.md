@@ -50,6 +50,17 @@ or smelting. An explicit tier request (`preparetool`, mining) crafts that tier a
 detours through iron smelting; `_smeltIfNeeded` refuses to start while smelting is active,
 because smelting itself requests tools (e.g. to clear a furnace spot).
 
+Self-defense combat (`startCombat(bot, { defensive: true })` from the health monitor)
+only fights within 8 blocks horizontally / 4 vertically of where it was attacked. An
+attacker leaving that leash, or 5 failed approaches, ends the fight without
+`activity_stuck`, so the interrupted task resumes; only an explicit `combat` command
+reports `cannot_reach_target`. Armor auto-crafting does not run after self-defense, since
+it would smelt raw iron the task is collecting. Targeted mining that is deeper than the
+ore's best height first mines reachable exposed target ore at its current depth.
+`findSurfaceSpot` checks the column above the bot, stops each column at its first solid
+block, skips empty chunk sections, searches every column to 24 blocks and every other
+one to 64, and reports `no_surface_found` when nothing qualifies.
+
 `hunt` and `getfood` require explicit positive count goals. Their JS activities
 reject missing or invalid goals instead of supplying hidden defaults. `getfood`
 only processes raw food already present in inventory; acquiring raw food belongs
