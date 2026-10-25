@@ -66,6 +66,13 @@ def _restore_remaining_goal(commands: list[str], plan_context: dict | None) -> l
     required = ([current_cmd] if current_cmd else []) + list(context.get('pending_steps') or [])
     if not required:
         return commands
+    # The model usually rewrites the remaining steps with adjusted counts. If the replan
+    # already reaches the final goal step (same command and target, any count), appending
+    # the old steps again would duplicate the whole chain on every recovery.
+    goal_steps = [c for c in required if c.split()[0] != 'equip'] or required
+    goal_key = goal_steps[-1].split()[:2]
+    if any(c.split()[:2] == goal_key for c in commands):
+        return commands
     if len(commands) >= len(required) and commands[-len(required):] == required:
         return commands
     for overlap in range(min(len(commands), len(required)), 0, -1):

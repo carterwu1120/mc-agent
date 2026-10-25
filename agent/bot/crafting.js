@@ -99,7 +99,8 @@ function _canStartBasicToolChain(bot) {
 
 // 通用工具合成：確保背包有指定類型且達到最低等級的工具
 // minTier: e.g. 'iron_pickaxe'（需要鐵稿以上），null 代表任何等級都可以
-async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false, allowCraft = true) {
+// allowSmelt=false: craft only from carried materials, never start smelting raw ore.
+async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false, allowCraft = true, allowSmelt = true) {
     const priority = TOOL_PRIORITY[toolSuffix] ?? []
     const minIdx = minTier ? priority.indexOf(minTier) : priority.length - 1
     // acceptable = priority 裡等級 >= minTier 的選項（index 越小等級越高）
@@ -136,7 +137,10 @@ async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false, 
         return bot.recipesFor(item.id, null, 1, table).length > 0
     })
 
+    // An explicit tier request (preparetool, mining) gets that tier; only an
+    // unspecified "any tool" request may detour through smelting for an upgrade.
     const shouldTrySmeltUpgrade =
+        allowSmelt && !minTier &&
         acceptable.some(name => name.startsWith('iron_')) &&
         !craftable.some(name => name.startsWith('iron_')) &&
         craftable.some(name => name.startsWith('wooden_') || name.startsWith('stone_') || name.startsWith('golden_'))
@@ -186,7 +190,7 @@ async function _ensureTool(bot, toolSuffix, minTier = null, autoChoose = false, 
         }
 
         // 嘗試燒製原礦後重試
-        const smelted = await _smeltIfNeeded(bot, toolSuffix)
+        const smelted = allowSmelt && await _smeltIfNeeded(bot, toolSuffix)
         if (smelted) {
             const table2 = await ensureCraftingTable(bot)
             const craftable2 = acceptable.filter(name => {
@@ -223,8 +227,8 @@ async function ensureAxe(bot)                      { return _ensureTool(bot, '_a
 async function ensurePickaxe(bot)                  { return _ensureTool(bot, '_pickaxe') }
 async function ensureShovel(bot)                   { return _ensureTool(bot, '_shovel') }
 async function ensureSword(bot)                    { return _ensureTool(bot, '_sword', null, true) }
-async function ensurePickaxeTier(bot, minTier, autoChoose = false, allowCraft = true) {
-    return _ensureTool(bot, '_pickaxe', minTier, autoChoose, allowCraft)
+async function ensurePickaxeTier(bot, minTier, autoChoose = false, allowCraft = true, allowSmelt = true) {
+    return _ensureTool(bot, '_pickaxe', minTier, autoChoose, allowCraft, allowSmelt)
 }
 
 const _BLOCK_TOOL = [
@@ -487,6 +491,9 @@ const _TOOL_INGOT = { _pickaxe: 'iron_ingot', _axe: 'iron_ingot', _shovel: 'iron
 async function _smeltIfNeeded(bot, toolSuffix) {
     const neededIngot = _TOOL_INGOT[toolSuffix]
     if (!neededIngot) return false
+    // Smelting itself needs tools (e.g. a pickaxe to clear a furnace spot). Starting it
+    // again from inside that request only returns "already smelting" and deadlocks.
+    if (require('./smelting').isActive()) return false
 
     const oreEntry = bot.inventory.items().find(i => _ORE_TO_INGOT[i.name] === neededIngot)
     if (!oreEntry) return false

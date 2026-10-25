@@ -65,3 +65,18 @@ def test_finishing_prerequisite_does_not_complete_diamond_task(tmp_path, monkeyp
         assert [event['reason'] for event in recoveries] == ['objective_incomplete']
 
     asyncio.run(run())
+
+
+def test_replan_with_adjusted_remaining_steps_is_not_duplicated():
+    # Seen live: the model rewrote "mine iron 3" as "mine iron 1"; the old steps were
+    # appended again and the plan grew 4 -> 9 -> 11 -> 18 steps.
+    context = {'current_cmd': 'mine iron 3',
+               'pending_steps': ['smelt raw_iron 3', 'preparetool iron_pickaxe', 'mine diamond 10']}
+    replan = ['preparetool stone_pickaxe', 'mine iron 1', 'smelt raw_iron 3',
+              'preparetool iron_pickaxe', 'mine diamond 8']
+    assert _restore_remaining_goal(replan, context) == replan
+
+
+def test_replan_that_drops_the_goal_still_gets_it_back():
+    context = {'current_cmd': 'mine iron 3', 'pending_steps': ['mine diamond 10', 'equip']}
+    assert _restore_remaining_goal(['surface'], context) == ['surface', 'mine iron 3', 'mine diamond 10', 'equip']

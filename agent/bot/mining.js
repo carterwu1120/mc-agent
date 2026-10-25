@@ -71,6 +71,16 @@ const ORE_MIN_PICKAXE = {
     // coal, copper, lapis, redstone, stone → 木稿即可，不需特別限制
 }
 
+const PICKAXE_TIERS = ['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']
+
+function _requiredPickaxe(target) {
+    return ORE_MIN_PICKAXE[target] || 'wooden_pickaxe'
+}
+
+function _hasPickaxeFor(bot, required) {
+    return bot.inventory.items().some(i => PICKAXE_TIERS.indexOf(i.name) >= PICKAXE_TIERS.indexOf(required))
+}
+
 function _isLava(block) {
     return block && (block.name === 'lava' || block.name === 'flowing_lava')
 }
@@ -226,6 +236,8 @@ function _sendNoToolsStuck(bot) {
 // 回傳 true = 有稿子可繼續；false = 已送 stuck，呼叫方應 break。
 async function _ensurePickaxeOrStuck(bot) {
     if (_currentGoal.target && !_hasPickaxe(bot)) {
+        if (await _replaceBrokenPickaxe(bot, _requiredPickaxe(_currentGoal.target))) return true
+        if (_shouldAbort()) return false
         isMining = false
         _sendNoToolsStuck(bot)
         return false
@@ -298,6 +310,21 @@ async function _dig(bot, block) {
 
 function _hasPickaxe(bot) {
     return bot.inventory.items().some(i => i.name.endsWith('_pickaxe'))
+}
+
+// A named resource task only starts with an adequate pickaxe. If it breaks mid-task,
+// replace it with the same tier from carried materials. This never gathers or smelts,
+// so a real material shortage still yields no_tools for the planner.
+async function _replaceBrokenPickaxe(bot, required) {
+    console.log(`[Mine] 稿子已損壞，嘗試用背包材料補一把 ${required}`)
+    activityStack.waitFor('craft_pickaxe', 60000)
+    try {
+        await ensurePickaxeTier(bot, required, true, true, false)
+    } catch (_) {
+    } finally {
+        activityStack.endWait()
+    }
+    return _hasPickaxeFor(bot, required)
 }
 
 function _resetStaleMining(bot, reason = 'stale') {
@@ -441,9 +468,8 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
         })
     }
     // A named resource task does not secretly craft or pursue prerequisite ores.
-    const tiers = ['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']
-    const required = ORE_MIN_PICKAXE[goal.target] || 'wooden_pickaxe'
-    if (goal.target && !bot.inventory.items().some(i => tiers.indexOf(i.name) >= tiers.indexOf(required))) {
+    const required = _requiredPickaxe(goal.target)
+    if (goal.target && !_hasPickaxeFor(bot, required)) {
         yieldDecision('no_tools', { required_tool: required, ..._buildNoToolsState(bot) })
         if (activityStack.isTopActivity('mining')) activityStack.pop(bot)
         return
@@ -480,9 +506,13 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
     }
 
     while (!_shouldAbort(_myGen)) {
-        if (goal.target && !bot.inventory.items().some(i => tiers.indexOf(i.name) >= tiers.indexOf(required))) {
-            yieldDecision('no_tools', { required_tool: required })
-            break
+        if (goal.target && !_hasPickaxeFor(bot, required)) {
+            const replaced = await _replaceBrokenPickaxe(bot, required)
+            if (_shouldAbort(_myGen)) return
+            if (!replaced) {
+                yieldDecision('no_tools', { required_tool: required })
+                break
+            }
         }
         _targetCount = Math.max(0, miningPhase.count(bot, goal.target) - _inventoryBaseline)
         const nextPhase = bestY !== null && bot.entity.position.y > bestY + 1 ? 'descending' : 'collecting'

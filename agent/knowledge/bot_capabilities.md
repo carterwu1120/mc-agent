@@ -2,7 +2,7 @@
 
 ## 鎬子與工具鏈
 
-- `mine <ore> <n>`（含 `mine stone`）不會自己做鎬子，沒有足夠等級時直接回報 `no_tools`。
+- `mine <ore> <n>`（含 `mine stone`）開始時若沒有足夠等級的鎬子，直接回報 `no_tools`。途中鎬子壞掉時，會用背包現有材料補一把同等級的；材料不夠才回報 `no_tools`。
 - 最低等級：iron、lapis、copper → stone_pickaxe；gold、redstone、diamond、emerald → iron_pickaxe；ancient_debris → diamond_pickaxe；其他 → wooden_pickaxe。
 - 只補缺的那一段：木鎬 `chop logs 3` → `preparetool wooden_pickaxe`；石鎬 `mine stone 3` → `preparetool stone_pickaxe`；鐵鎬 `mine iron 3` → `smelt raw_iron 3` → `preparetool iron_pickaxe`；鑽石鎬 `mine diamond 3` → `preparetool diamond_pickaxe`。
 

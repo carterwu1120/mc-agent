@@ -37,6 +37,13 @@ material decision at most once per minute; `crafting.js` rate-limits the missing
 workbench-material message. These cooldowns suppress identical attempts only;
 inventory, capability and environment state remains present in bridge snapshots.
 
+Targeted mining (`mine <ore> <n>`) never acquires its starting pickaxe: without the
+required tier it yields `no_tools`. If that pickaxe breaks mid-task, it crafts the same
+tier from carried materials (`ensurePickaxeTier(..., allowSmelt=false)`), never gathering
+or smelting. An explicit tier request (`preparetool`, mining) crafts that tier and never
+detours through iron smelting; `_smeltIfNeeded` refuses to start while smelting is active,
+because smelting itself requests tools (e.g. to clear a furnace spot).
+
 `hunt` and `getfood` require explicit positive count goals. Their JS activities
 reject missing or invalid goals instead of supplying hidden defaults. `getfood`
 only processes raw food already present in inventory; acquiring raw food belongs
