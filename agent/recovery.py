@@ -75,6 +75,15 @@ class RecoverySupervisor:
         self._episodes.clear()
         self.history.clear()
 
+    def note_progress(self):
+        """A long-running step finished in the world, so earlier episodes were resolved.
+
+        Only the rolling episode count resets; strategy history stays, so an identical
+        failed strategy is still rejected. Instant steps (back, equip) do not count, or a
+        stuck loop could renew its budget forever.
+        """
+        self._episodes.clear()
+
     def acknowledge(self, state):
         if state.get("request_id") == self._request_id and self._ack and not self._ack.done():
             self._ack.set_result(state)

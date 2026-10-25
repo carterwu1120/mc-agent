@@ -13,7 +13,15 @@ HEARTBEAT_TIMEOUT = 30.0   # seconds without a tick before declaring JS unrespon
 POLL_INTERVAL = 2.0
 ACTIVITY_START_TIMEOUT = 15.0
 ACTION_TIMEOUT = 45.0
+STOP_ACK_TIMEOUT = 5.0  # stopall before a replanned step must be acknowledged
 RECOVERY_TIMEOUT = 150.0
+
+# Long-running commands and the activity whose activity_done completes them.
+_ACTIVITY_FOR_COMMAND = {
+    'mine': 'mining', 'chop': 'chopping', 'fish': 'fishing', 'smelt': 'smelting',
+    'combat': 'combat', 'hunt': 'hunting', 'getfood': 'getfood', 'surface': 'surface',
+    'explore': 'explore',
+}
 
 _STOP_COMMANDS = frozenset({
     'stopmine', 'stopchop', 'stopfish', 'stopsmelt', 'stopcombat',
@@ -302,6 +310,7 @@ class PlanExecutor:
         self._pending_stopall = False
         self._replan_commands: list | None = None
         self._replan_path = None
+        self._replan_reason = None
         self._skip_path = None
         self._in_stuck_recovery = False
         self._current_command = None
@@ -349,6 +358,7 @@ class PlanExecutor:
         self._ws = ws
         self._replan_commands = None
         self._replan_path = None
+        self._replan_reason = None
         self._skip_path = None
         self._step_results = []
         self._context = {}
@@ -435,10 +445,19 @@ class PlanExecutor:
                 self._done.clear()
                 await ws.send(json.dumps({'command': 'stopall', '_task_id': get_task_id()}))
                 try:
-                    await asyncio.wait_for(self._done.wait(), 5)
+                    await asyncio.wait_for(self._done.wait(), STOP_ACK_TIMEOUT)
                 except asyncio.TimeoutError:
                     await self._request_recovery('stop_not_confirmed', ws)
-                    return
+                    if self._run_id != my_run_id:
+                        return
+                    # Returning here would leave _running set with nobody consuming
+                    # the recovery plan; continue with it or stop cleanly.
+                    replanned = self._consume_replan(i, commands, cmd_str, preserve_task)
+                    if replanned is None:
+                        self.abort(preserve_task=True, reason='stop_not_confirmed')
+                        return
+                    commands = replanned
+                    continue
                 if self._run_id != my_run_id:
                     return
                 self._current_command = msg
@@ -509,7 +528,11 @@ class PlanExecutor:
                         await asyncio.wait_for(self._done.wait(), self.recovery_timeout)
                     except asyncio.TimeoutError:
                         await self._request_recovery('recovery_timeout', ws)
-                        return
+                        if self._run_id != my_run_id:
+                            return
+                        if self._replan_commands is None:
+                            self.abort(preserve_task=True, reason='recovery_timeout')
+                            return
 
                     # abort() increments _run_id while unblocking _done
                     if self._run_id != my_run_id:
@@ -533,27 +556,9 @@ class PlanExecutor:
                         self._current_command = None
                         continue
 
-                    if self._replan_commands is not None:
-                        new_cmds = self._replan_commands
-                        self._replan_commands = None
-                        self._pending_stopall = True
-                        print(f'[Executor] 接受重新規劃 step {i}: 舊剩餘={commands[i:]} → 新={new_cmds}')
-                        if not preserve_task:
-                            task_memory.mark_step_failed(i, "replanned")
-                            task_memory.record_event(
-                                'replan',
-                                reason='activity_stuck_replan',
-                                command=cmd_str,
-                                step=i,
-                                details={'new_commands': list(new_cmds), 'path_taken': self._replan_path},
-                            )
-                        self._replan_path = None
-                        self._step_results.append({"cmd": cmd_str, "status": "replanned", "error": "replanned"})
-                        if not preserve_task:
-                            task_memory.replace_remaining_steps(i, new_cmds)
-                        commands = commands[:i] + new_cmds
-                        self._current_command = None
-                        print(f'[Executor] 替換後完整計畫: {commands}，從步驟 {i} 繼續')
+                    replanned = self._consume_replan(i, commands, cmd_str, preserve_task)
+                    if replanned is not None:
+                        commands = replanned
                         continue  # don't increment i — commands[i] is now the first new step
 
                     # Single-step recovery completed — verify before marking done.
@@ -688,20 +693,21 @@ class PlanExecutor:
         if event_type != 'activity_done':
             return
 
-        expected_activity = {
-            'mine': 'mining',
-            'chop': 'chopping',
-            'fish': 'fishing',
-            'smelt': 'smelting',
-            'combat': 'combat',
-            'hunt': 'hunting',
-            'getfood': 'getfood',
-            'surface': 'surface',
-            'explore': 'explore',
-        }.get(command)
+        expected_activity = _ACTIVITY_FOR_COMMAND.get(command)
 
         if expected_activity and (state or {}).get('activity') == expected_activity:
             self._done.set()
+
+    def completes_current_activity(self, state: dict | None) -> bool:
+        """True when this activity_done finishes the running long-running step."""
+        command = self._current_command or {}
+        state = state or {}
+        if not self._running or state.get('type') != 'activity_done':
+            return False
+        if state.get('command_id') and state['command_id'] != command.get('_command_id'):
+            return False
+        expected = _ACTIVITY_FOR_COMMAND.get(command.get('command'))
+        return bool(expected) and state.get('activity') == expected
 
     def accepts_task_stopped(self, state: dict | None = None) -> bool:
         """True when task_stopped is the expected result of an executor stop step."""
@@ -725,17 +731,7 @@ class PlanExecutor:
 
         if event_type == 'activity_done':
             command = (self._current_command or {}).get('command')
-            expected_activity = {
-                'mine': 'mining',
-                'chop': 'chopping',
-                'fish': 'fishing',
-                'smelt': 'smelting',
-                'combat': 'combat',
-                'hunt': 'hunting',
-                'getfood': 'getfood',
-                'surface': 'surface',
-                'explore': 'explore',
-            }.get(command)
+            expected_activity = _ACTIVITY_FOR_COMMAND.get(command)
             completing = (state or {}).get('activity')
             if expected_activity and completing == expected_activity:
                 # Original step finished after recovery — unblock
@@ -744,6 +740,36 @@ class PlanExecutor:
             # else: some other recovery activity finished (e.g. surface during
             # chop step). Keep waiting — the original step must explicitly
             # finish, be skipped, or be replanned.
+
+    def _consume_replan(self, i: int, commands: list, cmd_str: str, preserve_task: bool) -> list | None:
+        """Apply a pending recovery replan at step i; returns the new command list or None."""
+        if self._replan_commands is None:
+            return None
+        new_cmds = self._replan_commands
+        self._replan_commands = None
+        self._pending_stopall = True
+        print(f'[Executor] 接受重新規劃 step {i}: 舊剩餘={commands[i:]} → 新={new_cmds}')
+        if not preserve_task:
+            # Record why the step was replaced; a bare "replanned" reads to the model
+            # as "this command keeps failing" without the actual cause.
+            reason = self._replan_reason
+            task_memory.mark_step_failed(i, f"replanned:{reason}" if reason else "replanned")
+            task_memory.record_event(
+                'replan',
+                reason='activity_stuck_replan',
+                command=cmd_str,
+                step=i,
+                details={'new_commands': list(new_cmds), 'path_taken': self._replan_path},
+            )
+        self._replan_path = None
+        self._replan_reason = None
+        self._step_results.append({"cmd": cmd_str, "status": "replanned", "error": "replanned"})
+        if not preserve_task:
+            task_memory.replace_remaining_steps(i, new_cmds)
+        replanned = commands[:i] + new_cmds
+        self._current_command = None
+        print(f'[Executor] 替換後完整計畫: {replanned}，從步驟 {i} 繼續')
+        return replanned
 
     def notify_stuck(self) -> None:
         """Signal that activity_stuck fired. Pauses executor until resume or replan."""
@@ -760,7 +786,7 @@ class PlanExecutor:
         else:
             self.abort(preserve_task=True, reason=reason)
 
-    def replan(self, new_commands: list, path_taken: str | None = None) -> None:
+    def replan(self, new_commands: list, path_taken: str | None = None, reason: str | None = None) -> None:
         """Accept new plan from LLM. Unblocks the paused executor."""
         previous_command = None
         task = task_memory.load()
@@ -776,6 +802,7 @@ class PlanExecutor:
         self._in_stuck_recovery = False
         self._replan_commands = normalized
         self._replan_path = path_taken
+        self._replan_reason = reason
         self._done.set()
 
     def skip_step(self, path_taken: str | None = None) -> None:
@@ -882,6 +909,7 @@ class PlanExecutor:
                 )
                 task_memory.replace_remaining_steps(i, new_cmds)
             self._replan_path = None
+            self._replan_reason = None
             self._step_results.append({'cmd': cmd_str, 'status': 'replanned', 'error': 'verify_replanned'})
             return new_cmds
 
@@ -901,6 +929,7 @@ class PlanExecutor:
         self._current_command = None
         self._replan_commands = None
         self._replan_path = None
+        self._replan_reason = None
         self._skip_path = None
         self._in_stuck_recovery = False
         self._done.set()

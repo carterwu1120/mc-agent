@@ -194,3 +194,30 @@ def test_skill_preserves_explicit_wait_instead_of_silent_idle():
         llm = type("LLM", (), {"chat": AsyncMock(return_value=json.dumps(answer))})()
         assert await skill.handle(STATE, llm) == answer
     asyncio.run(scenario())
+
+
+def test_real_progress_between_recoveries_renews_the_budget():
+    # Seen live: no_blocks, no_input and no_animals were each resolved and the plan
+    # kept finishing activities, yet the third unrelated problem exhausted the budget.
+    async def scenario():
+        r = RecoverySupervisor()
+        ws = Socket(r)
+        for index in range(5):
+            plan = {**PLAN, "commands": [f"chop logs {index + 1}"]}
+            await r.recover({**STATE, "reason": f"problem_{index}"}, ws,
+                            decide=AsyncMock(return_value=plan), apply=AsyncMock(), blocked=AsyncMock())
+            assert r.phase == "executing", f"recovery {index} was blocked"
+            r.note_progress()
+    asyncio.run(scenario())
+
+
+def test_progress_does_not_allow_repeating_the_same_failed_strategy():
+    async def scenario():
+        r = RecoverySupervisor()
+        ws = Socket(r)
+        blocked = AsyncMock()
+        await r.recover(STATE, ws, decide=AsyncMock(return_value=PLAN), apply=AsyncMock(), blocked=blocked)
+        r.note_progress()
+        await r.recover(STATE, ws, decide=AsyncMock(return_value=PLAN), apply=AsyncMock(), blocked=blocked)
+        assert r.held and "same_failed_strategy" in r.reason
+    asyncio.run(scenario())

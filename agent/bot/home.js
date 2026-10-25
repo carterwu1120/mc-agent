@@ -71,13 +71,9 @@ function recordReturnPos(bot) {
 function back(bot) {
     const stack = activityStack.getStack()
     const top = stack[stack.length - 1]
-    if (!top) {
-        console.log('[Back] 沒有活動可返回')
-        bot.chat('沒有活動可返回')
-        return false
-    }
-    // 優先用 goHome 前記住的位置，否則 fallback 到 startPos
-    const sp = _returnPos ?? top.startPos
+    // 優先用 goHome / surface 前記住的位置，其次目前活動的起點，最後是最近一次任務的起點。
+    // 後者讓 recovery（suspend 清空 stack）與 stopX 之後的 back 仍能回到工作位置。
+    const sp = _returnPos ?? top?.startPos ?? activityStack.lastTaskStartPos()
     _returnPos = null
     if (!sp) {
         console.log('[Back] 沒有記錄的返回點')

@@ -61,6 +61,10 @@ ore's best height first mines reachable exposed target ore at its current depth.
 block, skips empty chunk sections, searches every column to 24 blocks and every other
 one to 64, and reports `no_surface_found` when nothing qualifies.
 
+`back` returns to the position recorded by `home`/`surface`, else the top frame's
+start, else `activityStack.lastTaskStartPos()` (the latest non-combat bottom frame).
+Recovery `suspend` and `stopX` clear the stack, so `back` must not require a frame.
+
 `hunt` and `getfood` require explicit positive count goals. Their JS activities
 reject missing or invalid goals instead of supplying hidden defaults. `getfood`
 only processes raw food already present in inventory; acquiring raw food belongs

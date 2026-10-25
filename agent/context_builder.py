@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # How many events/failures/interrupted tasks each skill gets in its prompt.
 # Lower budget = shorter prompt = faster LLM, but less context.
@@ -16,6 +16,11 @@ SKILL_BUDGETS: dict[str, dict] = {
     "task_arbitration":  {"events": 3, "failures": 2, "interrupted": 1},
 }
 _DEFAULT_BUDGET: dict = {"events": 4, "failures": 3, "interrupted": 1}
+
+# Older history describes conditions that may no longer hold (e.g. failures from before
+# the bot was given /tp permission steered the planner away from surface), so prompts
+# only see recent events and failures. The full history stays in task.json and the DB.
+MEMORY_MAX_AGE = timedelta(minutes=30)
 
 
 def _parse_at(value: str | None) -> datetime | None:
@@ -156,14 +161,30 @@ def build_interrupted_tasks_section(tasks: list[dict], limit: int = 2) -> str:
     return "\n【最近中斷任務摘要】\n" + "\n".join(lines) + "\n"
 
 
+def _recent_only(items: list[dict], now: datetime) -> list[dict]:
+    """Drop entries older than MEMORY_MAX_AGE; undated entries are kept."""
+    kept = []
+    for item in items or []:
+        at = _parse_at((item or {}).get("at"))
+        if at is not None and at.tzinfo is not None:
+            at = at.astimezone(timezone.utc).replace(tzinfo=None)  # task_memory stores naive UTC
+        if at is None or now - at <= MEMORY_MAX_AGE:
+            kept.append(item)
+    return kept
+
+
 def build_for_skill(
     skill: str,
     events: list[dict],
     failures: list[dict],
     interrupted: list[dict] | None = None,
+    now: datetime | None = None,
 ) -> str:
     """Build the combined recent-history section for a skill, respecting per-skill budget."""
     budget = SKILL_BUDGETS.get(skill, _DEFAULT_BUDGET)
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    events = _recent_only(events, now)
+    failures = _recent_only(failures, now)
     parts = []
     section = build_recent_events_section(events, limit=budget["events"])
     if section:

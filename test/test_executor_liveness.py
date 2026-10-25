@@ -95,3 +95,75 @@ def test_timeout_recovery_replaces_strategy_within_same_executor_run(monkeypatch
         assert e._run_id == 1
         assert not e.is_running()
     asyncio.run(scenario())
+
+
+def test_recovery_plan_after_unacknowledged_stopall_is_executed(monkeypatch):
+    # stop_not_confirmed used to return from execute() with _running still set, so the
+    # recovery plan handed to replan() was never run and the task looked busy forever.
+    async def scenario():
+        monkeypatch.setattr(module, "STOP_ACK_TIMEOUT", 0.01)
+        monkeypatch.setattr(module.task_memory, "interrupt", lambda *_: None)
+        e = module.PlanExecutor()
+        e.heartbeat()
+        e._pending_stopall = True
+        sent = []
+
+        async def send(raw):
+            command = json.loads(raw)
+            sent.append(command["command"])
+            if command["command"] != "stopall" or sent.count("stopall") > 1:
+                e.signal_done({"type": "action_done", "command_id": command.get("_command_id")})
+
+        async def recover(state, ws):
+            assert state["reason"] == "stop_not_confirmed"
+            e.notify_stuck()
+            e.replan(["home"])
+
+        e._verify_failed_callback = recover
+        ws = type("Socket", (), {"send": staticmethod(send)})()
+        await asyncio.wait_for(e.execute(["mine iron 3"], ws, preserve_task=True), 1)
+        assert sent == ["stopall", "stopall", "home"], sent
+        assert not e.is_running()
+    asyncio.run(scenario())
+
+
+def test_unacknowledged_stopall_without_a_recovery_plan_stops_cleanly(monkeypatch):
+    async def scenario():
+        monkeypatch.setattr(module, "STOP_ACK_TIMEOUT", 0.01)
+        monkeypatch.setattr(module.task_memory, "interrupt", lambda *_: None)
+        e = module.PlanExecutor()
+        e.heartbeat()
+        e._pending_stopall = True
+
+        async def recover(state, ws):
+            pass  # e.g. recovery already busy with another event
+
+        e._verify_failed_callback = recover
+        ws = type("Socket", (), {"send": AsyncMock()})()
+        await asyncio.wait_for(e.execute(["mine iron 3"], ws, preserve_task=True), 1)
+        assert not e.is_running(), "a later recovery must be able to launch a fresh plan"
+    asyncio.run(scenario())
+
+
+def test_only_the_current_long_running_step_counts_as_progress():
+    e = module.PlanExecutor()
+    e._running = True
+    e._current_command = {"command": "mine", "args": ["iron", "3"], "_command_id": "c1"}
+    assert e.completes_current_activity({"type": "activity_done", "activity": "mining", "command_id": "c1"})
+    assert not e.completes_current_activity({"type": "activity_done", "activity": "mining", "command_id": "old"})
+    assert not e.completes_current_activity({"type": "activity_done", "activity": "surface", "command_id": "c1"})
+    assert not e.completes_current_activity({"type": "action_done", "command_id": "c1"})
+    e._current_command = {"command": "back", "_command_id": "c2"}
+    assert not e.completes_current_activity({"type": "action_done", "command_id": "c2"}), "instant steps do not renew"
+
+
+def test_replanned_step_records_the_stuck_reason(monkeypatch):
+    failed = []
+    monkeypatch.setattr(module.task_memory, "mark_step_failed", lambda step, error=None: failed.append(error))
+    monkeypatch.setattr(module.task_memory, "record_event", lambda *a, **k: None)
+    monkeypatch.setattr(module.task_memory, "replace_remaining_steps", lambda *a, **k: None)
+    monkeypatch.setattr(module.task_memory, "load", lambda: None)
+    e = module.PlanExecutor()
+    e.replan(["explore animals", "hunt count 4"], path_taken="supervised_recovery", reason="no_animals")
+    assert e._consume_replan(0, ["hunt count 4"], "hunt count 4", preserve_task=False) == ["explore animals", "hunt count 4"]
+    assert failed == ["replanned:no_animals"]

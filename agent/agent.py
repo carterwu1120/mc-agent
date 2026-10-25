@@ -132,7 +132,7 @@ async def _handle_recovery(state: dict, ws) -> None:
     async def apply(result):
         task_memory.record_event('recovery_plan', reason=state.get('reason'), details=result)
         if executor.is_running():
-            executor.replan(result['commands'], path_taken='supervised_recovery')
+            executor.replan(result['commands'], path_taken='supervised_recovery', reason=state.get('reason'))
         else:
             executor.claim()
             _launch_plan(result['commands'], ws, goal=task.get('goal') or '恢復中斷活動',
@@ -168,7 +168,14 @@ async def _handle_recovery(state: dict, ws) -> None:
 
         task_memory.update_runtime({'supervision': recovery.status()})
         task_memory.record_event('recovery_blocked', reason=reason)
-        await asyncio.wait_for(_send_chat(ws, '任務已保留，暫停等待協助：' + reason[:180]), 5)
+        if 'recovery_budget_exhausted' in reason:
+            # The raw exception name means nothing to a player; say what happened.
+            message = ('短時間內連續恢復都沒有讓任務前進，先暫停並保留任務。'
+                       f"最後的問題：{state.get('reason')}（{str(state.get('detail') or '')[:80]}）。"
+                       '請告訴我要繼續、改做什麼，或幫我排除障礙。')
+        else:
+            message = '任務已保留，暫停等待協助：' + reason[:180]
+        await asyncio.wait_for(_send_chat(ws, message), 5)
 
     async def decide(snapshot):
         started = time.monotonic()
@@ -306,6 +313,10 @@ def _record_to_exploration_memory(state: dict) -> None:
 async def _on_done(_state: dict, _llm: LLMClient):
     if recovery.busy or recovery.held:
         return None
+    if executor.completes_current_activity(_state):
+        # A multi-step task that keeps finishing real activities is progressing; earlier
+        # recoveries must not exhaust the budget of a later, unrelated problem.
+        recovery.note_progress()
     if executor.is_running() and executor.is_in_stuck_recovery():
         executor.signal_done_after_stuck(_state)
     else:

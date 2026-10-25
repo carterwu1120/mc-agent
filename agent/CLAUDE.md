@@ -220,6 +220,10 @@ not the live event handler. Local mechanical navigation remains separate.
    resuming old routes, clears motion and reports local cancellation success.
 5. Decision deadline is RECOVERY_DECISION_TIMEOUT (60s default), two attempts per
    episode, at most three episodes in a rolling 5 minutes between explicit tasks.
+   When the running step's long-running activity reports `activity_done`
+   (`executor.completes_current_activity`), `recovery.note_progress()` clears the
+   episode window; instant steps (back, equip) never renew it, and strategy history is
+   kept so an identical failed strategy is still rejected.
    Duplicate events coalesce. A repeated strategy in the same position/inventory/
    goal fingerprint is rejected. These are call budgets, not exact token quotas.
 6. A valid plan includes commands and an observable expected_outcome. The latter
@@ -232,7 +236,14 @@ not the live event handler. Local mechanical navigation remains separate.
 8. New tasks, manual stops, death/disconnect invalidate pending AI responses.
    Commands carry correlation IDs; late completions cannot complete a different
    command. PlanExecutor clears completion flags before sending, and old runs may
-   not clear the replacement run's command in finally blocks.
+   not clear the replacement run's command in finally blocks. Every path that asks
+   for recovery from inside `execute()` (stop_not_confirmed, recovery_timeout)
+   either consumes the resulting replan or aborts; returning with `_running` set
+   would strand the plan handed to `executor.replan()`.
+9. Prompt short-term memory (`context_builder.build_for_skill`) only includes events
+   and failures from the last 30 minutes (`MEMORY_MAX_AGE`); older entries describe
+   conditions that may no longer hold. A replaced step is recorded as
+   `replanned:<stuck reason>`, not a bare "replanned".
 
 `live_state.json` includes supervision phase/deadline/expected_outcome. Recovery
 attempts and final blocking reasons are recorded in task history. Runtime waits and

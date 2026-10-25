@@ -119,6 +119,14 @@ function getActivityOptions(name) {
 // ── Stack operations ──────────────────────────────────────────────────────────
 
 // Push a new activity onto the stack. Auto-pauses the current top.
+// Start position of the most recent task (bottom frame, not transient combat). Recovery
+// suspends and manual stops clear the stack, but `back` must still know where work was.
+let _lastTaskStartPos = null
+
+function lastTaskStartPos() {
+    return _lastTaskStartPos
+}
+
 function push(bot, name, goal, resumeFn) {
     if (!execution.isCurrent()) return
     if (_stack.length > 0) {
@@ -127,6 +135,7 @@ function push(bot, name, goal, resumeFn) {
     const startPos = bot.entity?.position
         ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z }
         : null
+    if (_stack.length === 0 && name !== 'combat' && startPos) _lastTaskStartPos = startPos
     _stack.push({ activity: name, goal: { ...goal }, progress: {}, startPos, startTime: Date.now(), resumeFn, commandId: execution.commandId(), scope: execution.current() })
     markStarted(name, 'push')
     console.log(`[Activity] push ${name} -> ${_stackLabel()}`)
@@ -269,7 +278,7 @@ module.exports = {
     waitFor, endWait,
     register, push, pop, remove, pause, resumeCurrent,
     updateProgress, updateTopGoal, updateTopFrame, getTopFrame,
-    getActivity, getStack, clearStack,
+    getActivity, getStack, clearStack, lastTaskStartPos,
     markStarted, markPaused, markStopped, touch,
     has,
     getRuntimeState, isTopActivity, isStale, forget, getActivityOptions,
