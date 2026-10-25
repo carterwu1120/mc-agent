@@ -1,4 +1,4 @@
-from agent.skills.food import _build_food_plan
+from agent.handlers.food import _build_food_plan
 
 
 def test_food_plan_uses_existing_raw_food_with_dynamic_target():

@@ -2,21 +2,21 @@ import asyncio
 import json
 import re
 from agent.brain import LLMClient
-from agent.skills.command_validation import (
+from agent.handlers.command_validation import (
     PLAN_ALLOWED_COMMANDS,
     build_reprompt_suffix,
     validate_commands,
 )
-from agent.skills.state_summary import summary_json
-from agent.skills.commands_ref import command_list
-from agent.skills.knowledge import knowledge
+from agent.handlers.state_summary import summary_json
+from agent.handlers.commands_ref import command_list
+from agent.handlers.knowledge import knowledge
 from agent import task_memory
 from agent.context_builder import (
     build_chests_summary,
     build_for_skill,
 )
 from agent.plan_utils import normalize_commands
-from agent.skills.llm_response import parse_llm_json
+from agent.handlers.llm_response import parse_llm_json
 
 _PLANNER_ALLOWED_KEYS = [
     "mine", "chop", "fish", "hunt", "getfood", "smelt", "combat",

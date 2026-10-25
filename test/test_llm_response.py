@@ -1,4 +1,4 @@
-from agent.skills.llm_response import parse_llm_json
+from agent.handlers.llm_response import parse_llm_json
 
 
 def test_reasoning_stripped_from_output(capsys):

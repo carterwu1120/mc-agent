@@ -1,5 +1,5 @@
-from agent.skills.commands_ref import command_list
-from agent.skills.stuck import tool_acquisition
+from agent.handlers.commands_ref import command_list
+from agent.handlers.stuck import tool_acquisition
 
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的燒製卡住處理助手。

@@ -3,8 +3,8 @@ import re
 from agent import task_memory
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
-from agent.skills.llm_response import parse_llm_json
-from agent.skills.state_summary import summary_json
+from agent.handlers.llm_response import parse_llm_json
+from agent.handlers.state_summary import summary_json
 
 SYSTEM_PROMPT = """你是 Minecraft 陪玩型 agent 的玩家任務仲裁助手。
 當玩家插入新任務時，你要判斷：

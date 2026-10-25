@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from agent.recovery import RecoverySupervisor
-from agent.skills import recovery as skill
+from agent.handlers import recovery as skill
 
 
 PLAN = {"action": "replan", "commands": ["chop logs 8", "mine iron 3"],

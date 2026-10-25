@@ -4,17 +4,17 @@ import time
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
 from agent.prompt_logging import log_prompt
-from agent.skills.llm_response import parse_llm_json
+from agent.handlers.llm_response import parse_llm_json
 from agent import task_memory as _task_memory
-from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
-from agent.skills.stuck import decision as decision_utils
-from agent.skills.stuck import getfood as getfood_stuck
-from agent.skills.stuck import hunting as hunting_stuck
-from agent.skills.stuck import llm_utils
-from agent.skills.stuck import mining as mining_stuck
-from agent.skills.stuck import prompt_builder
-from agent.skills.stuck import prompts as stuck_prompts
-from agent.skills.stuck import smelting as smelting_stuck
+from agent.handlers.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
+from agent.handlers.stuck import decision as decision_utils
+from agent.handlers.stuck import getfood as getfood_stuck
+from agent.handlers.stuck import hunting as hunting_stuck
+from agent.handlers.stuck import llm_utils
+from agent.handlers.stuck import mining as mining_stuck
+from agent.handlers.stuck import prompt_builder
+from agent.handlers.stuck import prompts as stuck_prompts
+from agent.handlers.stuck import smelting as smelting_stuck
 
 ALLOWED_COMMANDS = decision_utils.ALLOWED_ACTIVITY_STUCK_COMMANDS
 
@@ -269,7 +269,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
                 {"action": "replan", "commands": new_cmds},
             ], 'deterministic')
         # no usable chest and makechest keeps failing → drop junk to free space
-        from agent.skills.stuck.smelting import _find_droppable
+        from agent.handlers.stuck.smelting import _find_droppable
         inventory = state.get("inventory") or []
         droppable = _find_droppable(inventory)
         if droppable:

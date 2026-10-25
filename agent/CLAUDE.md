@@ -3,7 +3,7 @@
 ## Maintenance Rule
 
 **When making architectural changes, update this file (and relevant sub-CLAUDE.md).**
-If you add a new activity module, new event type, new skill handler, or change any core pattern — update the relevant section here before finishing the task.
+If you add a new activity module, new event type, new event handler, or change any core pattern — update the relevant section here before finishing the task.
 
 **Never commit after making changes** unless the user explicitly asks you to commit.
 
@@ -27,8 +27,8 @@ CLI planning providers: `LLM_PROVIDER=codex|claude` selects `brain/cli_agent.py`
 through `brain/factory.py` (default: Codex). Direct model API providers and SDK
 dependencies have been removed on this branch; invalid/old providers fail with
 migration instructions instead of falling back to another provider.
-Each skill call starts a bounded noninteractive CLI process, forwards its prompt
-via stdin, and returns the final decision to the existing skill parser. By
+Each handler LLM call starts a bounded noninteractive CLI process, forwards its prompt
+via stdin, and returns the final decision to the existing handler parser. By
 default, `CLI_SESSION_REUSE=true` resumes one provider conversation within a
 main task; `BOT_DATA_DIR/cli_session.json` stores the provider/model/session ID,
 turn/token counters, and usage-limit cooldown across container recreation. A
@@ -72,18 +72,18 @@ agent/bot/                                      agent/agent.py
 ```
 
 - **JS bot** — controls the Minecraft bot directly (movement, digging, fishing, combat). Runs async activity loops. Sends events to Python when something happens.
-- **Python agent** — receives events, routes to skill handlers, calls LLM, sends command strings back to JS.
+- **Python agent** — receives events, routes to event handlers, calls LLM, sends command strings back to JS.
 
 For JS bot internals (activity pattern, bridge state, commands.js): see agent/bot/CLAUDE.md
-For Python skill internals (skill pattern, LLM format, task_memory): see agent/skills/CLAUDE.md
+For Python handler internals (handler pattern, LLM format, task_memory): see agent/handlers/CLAUDE.md
 
 ---
 
 ## Agent Skill Package (`skill/`)
 
 Domain knowledge (what commands really do, tool chains, food, recovery, inventory,
-respawn, durability, crafting) lives once in `agent/knowledge/*.md`. Python skills load
-it through `skills/knowledge.py` after their own JSON output format; the agent skill
+respawn, durability, crafting) lives once in `agent/knowledge/*.md`. Python handlers load
+it through `handlers/knowledge.py` after their own JSON output format; the agent skill
 ships the same files as `references/`. Knowledge must match `agent/bot/` behaviour and
 stay interface-neutral (see `agent/knowledge/README.md`); `test/test_knowledge.py`
 checks wiring, command names and section names.
@@ -122,7 +122,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `bot/buried.js` | Tracks buried item positions (avoids re-digging) |
 | `bot/home.js` | Base location — persisted to `agent/data/home.json`. `back` tps to top activity's `startPos` |
 | `bot/world.js` | Utility: `findNearestPlayer`, entity/block helpers |
-| `agent.py` | Event router — maps event types to skill handlers |
+| `agent.py` | Event router — maps event types to event handlers |
 | `executor.py` | Sequences plan commands, waits for `action_done`/`activity_done` between steps |
 | `task_memory.py` | Persists current task to `agent/data/task.json` |
 | `brain/` | `build_client()` selects Codex or Claude Code; `CLIAgentClient` implements `LLMClient` |
@@ -143,16 +143,16 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `inventory_full` | Inventory ≥ 34 slots | Yes — LLM decides drop/plan |
 | `craft_decision` | Needs crafting decision | Yes |
 | `food_low` | Food < 10 & idle & no food | Yes — deterministic, no LLM |
-| `chat` | Player sent a message | Yes — planner skill |
+| `chat` | Player sent a message | Yes — planner handler |
 | `player_died` | Bot health → 0 | Yes — aborts executor, writes `agent/data/death.json` |
-| `player_respawned` | Bot respawned | Yes — LLM respawn skill |
+| `player_respawned` | Bot respawned | Yes — LLM respawn handler |
 | `tool_low_durability` | Main hand ≤ 10% durability (every 5s, 60s cooldown) | Yes — LLM decides |
 
 **Key rule:** `activity_done` is NOT routed to LLM — it signals PlanExecutor only. Only `activity_stuck` triggers LLM intervention.
 
 ---
 
-## Skill Files (`agent/skills/`)
+## Event Handlers (`agent/handlers/`)
 
 | File | Triggered by | Purpose |
 |------|-------------|---------|
@@ -165,8 +165,8 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `food.py` | `food_low` | 補充食物（確定性，不呼叫 LLM） |
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
 | `task_arbitration.py` | called by `_handle_player_chat` | 判斷玩家訊息是否 interrupt/queue/defer 當前任務 |
-| `commands_ref.py` | imported by skills | Canonical command registry — `command_list(keys)` helper. **Never duplicate command descriptions inline.** |
-| `state_summary.py` | imported by skills | `summary_json(state)`, `equipment_summary(state)` |
+| `commands_ref.py` | imported by handlers | Canonical command registry — `command_list(keys)` helper. **Never duplicate command descriptions inline.** |
+| `state_summary.py` | imported by handlers | `summary_json(state)`, `equipment_summary(state)` |
 | `stuck/tool_acquisition.py` | imported by stuck handlers | Shared tool-acquisition retry fingerprinting and replan helpers |
 
 ---
@@ -177,7 +177,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 2. **goal_reached → idle** — bot stops and waits. Next command comes from player or orchestration.
 3. **stuck → LLM** — only `activity_stuck` triggers LLM intervention.
 4. **LIFO stack** — pushing auto-pauses current top; popping auto-resumes previous.
-5. **Prompts live in skills** — system prompts belong in `agent/skills/`, not in JS. Domain rules they share live in `agent/knowledge/`.
+5. **Prompts live in handlers** — system prompts belong in `agent/handlers/`, not in JS. Domain rules they share live in `agent/knowledge/`.
 6. **Command descriptions live in `commands_ref.py`** — import `command_list(keys)`, never duplicate inline.
 7. **Death → LLM** — `player_died` aborts executor; `player_respawned` routes to `respawn.py`.
 8. **Inventory check at dispatch** — `commands.js` calls `checkFull(bot)` before any activity command. Do not add per-activity checks.
@@ -189,8 +189,8 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 ## Stuck / Recovery Model
 
 `recovery.py` owns a single recovery per bot. `agent.py` routes all activity_stuck
-(including executor verification/timeouts) through it and `skills/recovery.py`.
-The previous `skills/activity_stuck.py` rules remain for replay/reference, but are
+(including executor verification/timeouts) through it and `handlers/recovery.py`.
+The previous `handlers/activity_stuck.py` rules remain for replay/reference, but are
 not the live event handler. Local mechanical navigation remains separate.
 
 1. JS watches new spatial cells, inventory high-water marks and output counters.

@@ -1,11 +1,11 @@
-"""Generate references/commands.md from the canonical registry in agent/skills/commands_ref.py."""
+"""Generate references/commands.md from the canonical registry in agent/handlers/commands_ref.py."""
 import importlib.util
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# Load the file directly: importing the agent.skills package pulls in the whole agent runtime.
-_spec = importlib.util.spec_from_file_location("commands_ref", ROOT / "agent" / "skills" / "commands_ref.py")
+# Load the file directly: importing the agent.handlers package pulls in the whole agent runtime.
+_spec = importlib.util.spec_from_file_location("commands_ref", ROOT / "agent" / "handlers" / "commands_ref.py")
 _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)
 COMMANDS = _module.COMMANDS
@@ -27,7 +27,7 @@ def render() -> str:
     lines = [
         "# Bot commands",
         "",
-        "Generated from `agent/skills/commands_ref.py`. Descriptions are in Traditional Chinese.",
+        "Generated from `agent/handlers/commands_ref.py`. Descriptions are in Traditional Chinese.",
         "Run with `mcctl run <usage>`. `chat <text>` speaks in game, `idle` is a no-op.",
         "Counts must be explicit positive integers.",
         "",

@@ -1,8 +1,8 @@
-from agent.skills.commands_ref import command_list
-from agent.skills.stuck import getfood as getfood_stuck
-from agent.skills.stuck import hunting as hunting_stuck
-from agent.skills.stuck import mining as mining_stuck
-from agent.skills.stuck import smelting as smelting_stuck
+from agent.handlers.commands_ref import command_list
+from agent.handlers.stuck import getfood as getfood_stuck
+from agent.handlers.stuck import hunting as hunting_stuck
+from agent.handlers.stuck import mining as mining_stuck
+from agent.handlers.stuck import smelting as smelting_stuck
 
 
 PLAN_CONTEXT_SUFFIX = """

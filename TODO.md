@@ -273,7 +273,7 @@
   - coordinator LLM 看到 source，決策更精準；abort 指令對應 `aborts` 欄位
 
 - [x] **Coordinator agent（基本版 → HTTP 升級版）**
-  - `agent/skills/coordinator.py`：LLM 調度員，讀取所有 bot 狀態，智慧分配任務
+  - `agent/handlers/coordinator.py`：LLM 調度員，讀取所有 bot 狀態，智慧分配任務
   - `@coord <request>` chat prefix 觸發調度
   - 同類型指令禁止分配給多個 bot、text 欄位需如實描述現況
 

@@ -168,7 +168,7 @@ The CLI uses its subscription login and built-in default model. `LLM_MODEL` can
 override the model. Optional `CODEX_CLI_PATH` / `CLAUDE_CLI_PATH` selects an
 executable (not a shell command); `CLI_AGENT_TIMEOUT` defaults to 120 seconds.
 Routine requests default to `CLI_REASONING_EFFORT_DEFAULT=low`; planning and
-recovery skills raise individual calls to `medium` or `high` when needed.
+recovery handlers raise individual calls to `medium` or `high` when needed.
 `CLI_SESSION_REUSE=true` resumes one provider conversation within a task. The
 session identifier and counters are stored in `BOT_DATA_DIR/cli_session.json`,
 so they survive an agent container recreation. A completed task starts a fresh
@@ -193,7 +193,7 @@ If an existing .env sets LLM_PROVIDER=gemini/openai/vertex/ollama, change it to
 codex or claude and clear the old LLM_MODEL. Old providers now fail explicitly;
 their Python SDKs and implementations have been removed.
 
-This is a planning adapter: existing skills send game state to `codex exec` or
+This is a planning adapter: existing handlers send game state to `codex exec` or
 `claude --print`, then validate and execute the returned JSON through
 PlanExecutor and Mineflayer. Each decision still uses a bounded CLI subprocess,
 but it resumes that bot's saved provider session by default; Python task memory
@@ -317,7 +317,7 @@ The `backend` service includes a Docker healthcheck that probes `GET /ready`.
 | `LLM_PROVIDER` | `codex` | `codex` or `claude`; restart after changing |
 | `LLM_MODEL` | CLI default | Optional model supported by your subscription |
 | `CLI_AGENT_TIMEOUT` | `120` | Maximum seconds per CLI call |
-| `CLI_REASONING_EFFORT_DEFAULT` | `low` | Default Codex reasoning effort; complex skills override per request |
+| `CLI_REASONING_EFFORT_DEFAULT` | `low` | Default Codex reasoning effort; complex handlers override per request |
 | `CLI_SESSION_REUSE` | `true` | Resume one Codex/Claude conversation per bot and persist its ID in `BOT_DATA_DIR` |
 | `CLI_SESSION_MAX_TURNS` | `8` | Rotate a reused CLI session after this many successful model turns |
 | `CLI_SESSION_MAX_INPUT_TOKENS` | `200000` | Rotate when cumulative session input reaches this threshold |
@@ -355,7 +355,7 @@ Dashboard :3002 → Backend API :8000 → Coordinator :3010 / state files / Post
 ```
 
 - `agent/bot/`: game connection, movement, gathering, activity stack, and stall detection.
-- `agent/brain/`, `agent/skills/`: CLI adapters and planning skills.
+- `agent/brain/`, `agent/handlers/`: CLI adapters and event handlers.
 - `agent/executor.py`, `agent/recovery.py`: plan execution, result verification, and bounded recovery retries; waits for player help when needed.
 - `agent/task_memory.py`: task goals, execution progress, and recent events.
 - `backend/`: public API; the dashboard serves the page and fetches data from the backend.

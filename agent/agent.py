@@ -12,18 +12,18 @@ from dotenv import load_dotenv
 
 from agent.brain import LLMClient, build_client
 from agent.logger import init_logger, set_task_id
-from agent.skills import inventory as inventory_skill
-from agent.skills import craft_decision as craft_decision_skill
-from agent.skills import coordinator as coordinator_skill
-from agent.skills import food as food_skill
-from agent.skills import planner as planner_skill
-from agent.skills import self_task as self_task_skill
-from agent.skills import task_arbitration as task_arbitration_skill
-from agent.skills import respawn as respawn_skill
-from agent.skills import tool_durability as tool_durability_skill
+from agent.handlers import inventory as inventory_handler
+from agent.handlers import craft_decision as craft_decision_handler
+from agent.handlers import coordinator as coordinator_handler
+from agent.handlers import food as food_handler
+from agent.handlers import planner as planner_handler
+from agent.handlers import self_task as self_task_handler
+from agent.handlers import task_arbitration as task_arbitration_handler
+from agent.handlers import respawn as respawn_handler
+from agent.handlers import tool_durability as tool_durability_handler
 from agent.executor import PlanExecutor
 from agent.recovery import RecoverySupervisor
-from agent.skills import recovery as recovery_skill
+from agent.handlers import recovery as recovery_handler
 from agent import task_memory
 from agent import exploration_memory
 from agent import food_recovery
@@ -96,7 +96,7 @@ async def _on_verify_failed(state: dict, ws) -> None:
     """Callback for executor post-action verification failures.
     Routes a synthetic activity_stuck state through the normal LLM pipeline.
     A failed decision preserves the task in an explicit waiting state."""
-    await _handle_and_send(state, recovery_skill.handle, ws)
+    await _handle_and_send(state, recovery_handler.handle, ws)
 
 
 executor._verify_failed_callback = _on_verify_failed
@@ -172,7 +172,7 @@ async def _handle_recovery(state: dict, ws) -> None:
     async def decide(snapshot):
         started = time.monotonic()
         try:
-            return await recovery_skill.handle(snapshot, llm)
+            return await recovery_handler.handle(snapshot, llm)
         finally:
             task_memory.record_event('llm_call', reason=state.get('reason'), details={
                 'skill': 'recovery', 'latency_ms': round((time.monotonic() - started) * 1000),
@@ -256,7 +256,7 @@ async def _handle_waiting_for_change(state: dict, ws) -> bool:
             })
         await _send_chat(ws, f"食物條件已改善（{reason}），重新規劃一次尋食。")
         retry_state = {**state, 'type': 'food_low'}
-        await _handle_and_send(retry_state, food_skill.handle, ws)
+        await _handle_and_send(retry_state, food_handler.handle, ws)
         return True
 
     return True
@@ -480,7 +480,7 @@ async def _on_player_respawned(state: dict, llm: LLMClient):
         'remaining': remaining,
         'goal': task.get('goal', ''),
     })
-    return await respawn_skill.handle(respawn_state, llm)
+    return await respawn_handler.handle(respawn_state, llm)
 
 
 async def _on_test_plan(state: dict, _llm: LLMClient):
@@ -498,12 +498,12 @@ async def _on_test_plan(state: dict, _llm: LLMClient):
 
 # ── 各事件對應的 skill handler ────────────────────────────
 HANDLERS = {
-    "inventory_full": inventory_skill.handle,
-    "craft_decision": craft_decision_skill.handle,
-    "activity_stuck": recovery_skill.handle,
-    "mining_decision": recovery_skill.handle,
-    "food_low":       food_skill.handle,
-    "tick":           self_task_skill.handle,
+    "inventory_full": inventory_handler.handle,
+    "craft_decision": craft_decision_handler.handle,
+    "activity_stuck": recovery_handler.handle,
+    "mining_decision": recovery_handler.handle,
+    "food_low":       food_handler.handle,
+    "tick":           self_task_handler.handle,
     "action_done":    _on_done,
     "activity_done":  _on_done,
     "task_started":   _on_task_started,
@@ -511,8 +511,8 @@ HANDLERS = {
     "test_plan":      _on_test_plan,
     "player_died":        _on_player_died,
     "player_respawned":   _on_player_respawned,
-    "tool_low_durability": tool_durability_skill.handle,
-    "chat":           planner_skill.handle,
+    "tool_low_durability": tool_durability_handler.handle,
+    "chat":           planner_handler.handle,
 }
 
 _LLM_EVENT_TYPES = {
@@ -875,7 +875,7 @@ async def _enqueue_player_task(goal: str, interrupt: bool, ws) -> None:
         recovery.invalidate()
     if not COORDINATOR_URL:
         state = _augment_state({"type": "chat", "message": goal}, player_task=goal)
-        await _handle_and_send(state, planner_skill.handle, ws)
+        await _handle_and_send(state, planner_handler.handle, ws)
         return
     task_id = f"player_{uuid.uuid4().hex[:8]}"
     try:
@@ -888,7 +888,7 @@ async def _enqueue_player_task(goal: str, interrupt: bool, ws) -> None:
     except Exception as e:
         print(f"[Agent] player task enqueue 失敗，fallback 直接執行: {e}")
         state = _augment_state({"type": "chat", "message": goal}, player_task=goal)
-        await _handle_and_send(state, planner_skill.handle, ws)
+        await _handle_and_send(state, planner_handler.handle, ws)
 
 
 async def _dispatch_result(item: dict, state: dict, ws) -> None:
@@ -1052,7 +1052,7 @@ async def _run_coordinator_task(envelope: dict, state: dict, ws) -> bool:
 
     if not cmds:
         planner_state = _augment_state({**state, "message": goal})
-        decision = await planner_skill.handle(planner_state, llm)
+        decision = await planner_handler.handle(planner_state, llm)
         if isinstance(decision, dict) and decision.get("action") == "plan":
             cmds = decision.get("commands") or []
 
@@ -1563,7 +1563,7 @@ async def _handle_player_chat(state: dict, ws) -> None:
 
     if state.get("coordinator_mode"):
         print(f"[Coordinator] 收到調度請求: {message}")
-        result = await coordinator_skill.handle(state, llm, message)
+        result = await coordinator_handler.handle(state, llm, message)
         if result:
             for item in (result if isinstance(result, list) else [result]):
                 await _dispatch_result(item, state, ws)
@@ -1586,7 +1586,7 @@ async def _handle_player_chat(state: dict, ws) -> None:
             await _enqueue_player_task(planner_message, interrupt=True, ws=ws)
             return
 
-    if any(re.search(p, message, re.IGNORECASE) for p in planner_skill.RESUME_PATTERNS):
+    if any(re.search(p, message, re.IGNORECASE) for p in planner_handler.RESUME_PATTERNS):
         await _enqueue_player_task(message, interrupt=False, ws=ws)
         return
 
@@ -1595,7 +1595,7 @@ async def _handle_player_chat(state: dict, ws) -> None:
 
     if busy:
         arb_state = _augment_state(state, player_task=message)
-        decision = await task_arbitration_skill.handle(arb_state, llm)
+        decision = await task_arbitration_handler.handle(arb_state, llm)
         if decision:
             text = decision.get("text", "").strip()
             choice = decision.get("decision")

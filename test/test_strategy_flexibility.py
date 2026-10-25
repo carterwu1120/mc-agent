@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from agent.skills import craft_decision, respawn
+from agent.handlers import craft_decision, respawn
 
 
 class FakeLLM:

@@ -1,9 +1,9 @@
 import json
 import math
 
-from agent.skills.state_summary import summary_json
-from agent.skills.stuck import hunting as hunting_stuck
-from agent.skills.stuck.prompts import REASON_DESC
+from agent.handlers.state_summary import summary_json
+from agent.handlers.stuck import hunting as hunting_stuck
+from agent.handlers.stuck.prompts import REASON_DESC
 
 
 def build_fishing_prompt(state: dict, health, food) -> str:
@@ -102,7 +102,7 @@ def build_activity_prompt(
         summary = state.get("summary") or {}
         raw_total = ((((summary.get("resources") or {}).get("food") or {}).get("raw_total", None)))
         if raw_total is None:
-            from agent.skills.state_summary import summarize_state
+            from agent.handlers.state_summary import summarize_state
             raw_total = int((((summarize_state(state).get("resources") or {}).get("food") or {}).get("raw_total", 0)) or 0)
         remaining_for_food = remaining if isinstance(remaining, int) and remaining > 0 else None
         if remaining_for_food is not None:

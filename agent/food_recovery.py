@@ -1,7 +1,7 @@
 """Semantic change detection for a paused food-recovery episode."""
 from __future__ import annotations
 
-from agent.skills.state_summary import summarize_state
+from agent.handlers.state_summary import summarize_state
 
 
 FOOD_CRISIS_RESOLVED_LEVEL = 10

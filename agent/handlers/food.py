@@ -1,7 +1,7 @@
 import math
 
 from agent.brain import LLMClient
-from agent.skills.state_summary import summarize_state
+from agent.handlers.state_summary import summarize_state
 
 RISKY_ACTIVITIES = {'mining', 'combat', 'hunting', 'explore', 'fishing'}
 

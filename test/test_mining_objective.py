@@ -1,6 +1,6 @@
 from agent.mining_objective import create, progress
-from agent.skills.recovery import _restore_remaining_goal
-from agent.skills.command_validation import validate_command
+from agent.handlers.recovery import _restore_remaining_goal
+from agent.handlers.command_validation import validate_command
 
 
 def state(**items):

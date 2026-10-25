@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from agent.skills.commands_ref import COMMANDS, command_list
+from agent.handlers.commands_ref import COMMANDS, command_list
 
 
 PLAN_ALLOWED_COMMANDS = set(COMMANDS) - {"chat", "idle", "setmode"}

@@ -2,7 +2,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock
 
-from agent.skills import recovery
+from agent.handlers import recovery
 
 
 def test_supervised_replan_cannot_drop_current_goal_or_pending_steps():

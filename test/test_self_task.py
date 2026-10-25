@@ -1,8 +1,8 @@
 import asyncio
 import json
 
-from agent.skills import self_task
-from agent.skills.self_task import (
+from agent.handlers import self_task
+from agent.handlers.self_task import (
     _food_decision_error,
     _normalize_result,
     _is_valid_command_result,

@@ -2,9 +2,9 @@ import re
 
 import pytest
 
-from agent.skills import craft_decision, inventory, planner, recovery, respawn, self_task, tool_durability
-from agent.skills.commands_ref import COMMANDS
-from agent.skills.knowledge import KNOWLEDGE_DIR, knowledge
+from agent.handlers import craft_decision, inventory, planner, recovery, respawn, self_task, tool_durability
+from agent.handlers.commands_ref import COMMANDS
+from agent.handlers.knowledge import KNOWLEDGE_DIR, knowledge
 
 FILES = sorted(p.stem for p in KNOWLEDGE_DIR.glob('*.md') if p.stem != 'README')
 # Bot commands handled by bot/commands.js but not listed in the Python registry.

@@ -53,7 +53,7 @@ def test_router_replans_existing_executor_and_preserves_remaining_goal(runtime, 
 
         ws = type('Socket', (), {'send': staticmethod(send)})()
         await app._handle_and_send({'type': 'activity_stuck', 'activity': 'mining', 'reason': 'no_progress',
-                                    'pos': {'x': 0, 'y': 64, 'z': 0}}, app.recovery_skill.handle, ws)
+                                    'pos': {'x': 0, 'y': 64, 'z': 0}}, app.recovery_handler.handle, ws)
         assert app.executor.is_running(), 'coordinator/executor retains ownership'
         assert app.executor._replan_commands == plan['commands']
         assert not app.executor.is_in_stuck_recovery()
@@ -78,7 +78,7 @@ def test_router_holds_failed_decision_and_tick_cannot_replace_the_task(runtime, 
                 app.recovery.acknowledge({'request_id': msg['request_id'], 'stopped': True})
 
         ws = type('Socket', (), {'send': staticmethod(send)})()
-        await app._handle_and_send({'type': 'activity_stuck', 'activity': 'mining', 'reason': 'no_progress'}, app.recovery_skill.handle, ws)
+        await app._handle_and_send({'type': 'activity_stuck', 'activity': 'mining', 'reason': 'no_progress'}, app.recovery_handler.handle, ws)
         assert app.recovery.held
         assert task['interruptedBy'] == 'recovery_blocked'
         assert not app.executor.is_running()

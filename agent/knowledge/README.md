@@ -3,8 +3,8 @@
 Markdown in this directory is the single source of Minecraft/bot domain knowledge
 for two consumers:
 
-- the Python agent — skills load it into their system prompts through
-  `agent/skills/knowledge.py` (`knowledge(name, *sections)`), after their own
+- the Python agent — handlers load it into their system prompts through
+  `agent/handlers/knowledge.py` (`knowledge(name, *sections)`), after their own
   output-format instructions;
 - the packaged agent skill — `skill/build.sh` copies every file except this README
   into `references/`.
@@ -12,7 +12,7 @@ for two consumers:
 Rules for editing:
 
 - Write interface-neutral knowledge: what commands do, which strategy fits which
-  situation, quantities. Output formats (Python JSON shapes) stay in the skill's
+  situation, quantities. Output formats (Python JSON shapes) stay in the handler's
   Python file; CLI usage (`mcctl`) stays in `skill/minecraft-bot/SKILL.md`.
 - State only behaviour the bot code actually has; check `agent/bot/` before writing
   "the bot will …".

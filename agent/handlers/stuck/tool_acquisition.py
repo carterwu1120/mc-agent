@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.skills.state_summary import summarize_state
+from agent.handlers.state_summary import summarize_state
 
 
 _LAST_ATTEMPTS: dict[tuple[str, str, str], dict] = {}

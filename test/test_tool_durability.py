@@ -1,7 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-from agent.skills import tool_durability
+from agent.handlers import tool_durability
 
 
 def test_mining_pickaxe_durability_is_handled_locally_without_llm():

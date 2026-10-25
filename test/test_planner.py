@@ -1,4 +1,4 @@
-from agent.skills.planner import _parse_decision_text                                                                                                        
+from agent.handlers.planner import _parse_decision_text                                                                                                        
                                                                                                                                                                
 def test_plan_with_reasoning():
     r = _parse_decision_text('{"action":"plan","goal":"挖鐵","reasoning":"缺鐵鎬","commands":["mine iron 3"]}')

@@ -5,8 +5,8 @@ recovery commands WITHOUT calling the LLM.
 """
 import pytest
 from unittest.mock import patch
-from agent.skills.stuck import mining as mining_stuck
-from agent.skills.stuck import smelting as smelting_stuck
+from agent.handlers.stuck import mining as mining_stuck
+from agent.handlers.stuck import smelting as smelting_stuck
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ def _plan_context(current_cmd="mine diamond 10", pending=None):
 
 
 def test_llm_replan_always_returns_to_failed_goal_before_pending_steps():
-    from agent.skills.activity_stuck import _apply_replan_pipeline
+    from agent.handlers.activity_stuck import _apply_replan_pipeline
 
     decision = {
         "action": "replan",
@@ -64,7 +64,7 @@ def test_llm_replan_always_returns_to_failed_goal_before_pending_steps():
 class TestMiningNoTools:
     def setup_method(self):
         # Reset tool_acquisition fingerprint between tests
-        from agent.skills.stuck import tool_acquisition
+        from agent.handlers.stuck import tool_acquisition
         tool_acquisition._LAST_ATTEMPTS.clear()
 
     def test_no_tools_can_make_pickaxe_produces_replan(self):
@@ -162,7 +162,7 @@ class TestMiningNoTools:
 
 class TestMiningWaterLoop:
     def setup_method(self):
-        from agent.skills.stuck import tool_acquisition
+        from agent.handlers.stuck import tool_acquisition
         tool_acquisition._LAST_ATTEMPTS.clear()
 
     def test_water_loop_with_plan_prepends_home(self):
@@ -192,7 +192,7 @@ class TestMiningWaterLoop:
 
 class TestSmeltingNoInput:
     def setup_method(self):
-        from agent.skills.stuck import tool_acquisition
+        from agent.handlers.stuck import tool_acquisition
         tool_acquisition._LAST_ATTEMPTS.clear()
 
     def _smelting_state(self, **kwargs):
@@ -314,7 +314,7 @@ def _chopping_plan_context(pending=None):
 
 class TestChoppingNoTrees:
     def _call(self, state, plan_context=None):
-        from agent.skills import activity_stuck
+        from agent.handlers import activity_stuck
         # Call the internal deterministic dispatch directly
         return activity_stuck._deterministic_shortcut(state, plan_context or _chopping_plan_context())
 
@@ -356,7 +356,7 @@ class TestChoppingNoTrees:
 
 class TestMiningAdditional:
     def setup_method(self):
-        from agent.skills.stuck import tool_acquisition
+        from agent.handlers.stuck import tool_acquisition
         tool_acquisition._LAST_ATTEMPTS.clear()
 
     def test_no_tools_with_iron_ingots_includes_equip(self):

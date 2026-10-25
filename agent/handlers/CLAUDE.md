@@ -1,17 +1,17 @@
-# Python Skills Development Guide
+# Python Event Handlers Development Guide
 
-For architecture overview and skill file list, see agent/CLAUDE.md
+For architecture overview and handler file list, see agent/CLAUDE.md
 
 ---
 
-## Skill Pattern
+## Handler Pattern
 
 ```python
 import json
 import re
 from agent.brain import LLMClient
-from agent.skills.commands_ref import command_list
-from agent.skills.state_summary import summary_json, equipment_summary
+from agent.handlers.commands_ref import command_list
+from agent.handlers.state_summary import summary_json, equipment_summary
 
 _MY_COMMANDS = command_list(["mine", "chop", "chat", "idle"])
 
@@ -46,16 +46,16 @@ async def handle(state: dict, llm: LLMClient) -> list | dict | None:
 - Domain rules (strategies, quantities, what commands can/cannot do) go in `agent/knowledge/*.md`
   and are loaded with `knowledge(name, *sections)` from `knowledge.py`. Keep only the output
   format and Python-specific mechanics (plan_context, pending steps, placeholders) inline.
-  If a prompt recommends a command, that command must be in the skill's allowlist.
+  If a prompt recommends a command, that command must be in the handler's allowlist.
 - `equipment` items arrive as `{name, durability_pct}` dicts — use `_item_name(item)` / `_item_durability_pct(item)` from `state_summary.py`
 
 ---
 
 ## Supervised recovery (live event handler)
 
-`recovery.py` is the live activity_stuck strategy skill. `agent/recovery.py` owns
+`recovery.py` is the live activity_stuck strategy handler. `agent/recovery.py` owns
 stop acknowledgement, concurrency, timeouts, duplicate-strategy checks and retry
-budgets. The skill makes one CLI call per attempt. It uses commands_ref and
+budgets. The handler makes one CLI call per attempt. It uses commands_ref and
 command_validation; normalizing to an empty plan is an error, not completion.
 The response is either replan with 1-8 commands, text and expected_outcome, or wait
 with a concrete reason. Chat-only/idle/skip do not settle a recovery. Current state,
@@ -70,7 +70,7 @@ cleanup. Tests use fake model/transport responses, never paid inference.
 ## activity_stuck — Legacy deterministic rules / replay reference
 
 The following module remains for existing replay tests and reference. The live
-agent router now uses the supervised recovery skill above.
+agent router now uses the supervised recovery handler above.
 
 `stuck/prompt_builder.py` includes the bounded `state.navigation` diagnostic when
 present (adaptive mining pilot), so the model sees failed movement profiles and
@@ -176,7 +176,7 @@ Step status: `pending` / `running` / `done` / `failed`. Resume skips `done` step
 
 ## Chest + Makechest Flow
 
-When a skill plans chest operations:
+When a handler plans chest operations:
 ```python
 ["makechest", "labelchest {new_chest_id} ore", "deposit {new_chest_id}"]
 ```

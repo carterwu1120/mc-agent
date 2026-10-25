@@ -4,9 +4,9 @@ from agent import task_memory
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
 from agent.prompt_logging import log_prompt
-from agent.skills.llm_response import parse_llm_json
-from agent.skills.knowledge import knowledge
-from agent.skills.state_summary import equipment_summary
+from agent.handlers.llm_response import parse_llm_json
+from agent.handlers.knowledge import knowledge
+from agent.handlers.state_summary import equipment_summary
 
 LABEL_PATTERNS = {
     "food": ["cooked_", "bread", "apple", "carrot", "potato", "beef", "pork", "chicken", "mutton", "rabbit", "salmon", "cod"],

@@ -1,5 +1,5 @@
-from agent.skills.commands_ref import command_list
-from agent.skills.state_summary import summarize_state
+from agent.handlers.commands_ref import command_list
+from agent.handlers.state_summary import summarize_state
 
 
 SYSTEM_PROMPT = f"""你是 Minecraft 機器人的食物補充卡住處理助手。

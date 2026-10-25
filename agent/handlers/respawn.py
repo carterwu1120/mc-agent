@@ -4,11 +4,11 @@ from agent import task_memory
 from agent.brain import LLMClient
 from agent.context_builder import build_for_skill
 from agent.plan_utils import normalize_commands
-from agent.skills.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
-from agent.skills.llm_response import parse_llm_json
-from agent.skills.state_summary import equipment_summary, summary_json
-from agent.skills.commands_ref import command_list
-from agent.skills.knowledge import knowledge
+from agent.handlers.command_validation import PLAN_ALLOWED_COMMANDS, validate_commands
+from agent.handlers.llm_response import parse_llm_json
+from agent.handlers.state_summary import equipment_summary, summary_json
+from agent.handlers.commands_ref import command_list
+from agent.handlers.knowledge import knowledge
 
 _RESPAWN_COMMANDS = command_list(sorted(PLAN_ALLOWED_COMMANDS), include_stops=False)
 

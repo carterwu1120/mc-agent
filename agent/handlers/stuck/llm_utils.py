@@ -2,7 +2,7 @@ import json
 import re
 
 from agent.brain import LLMClient
-from agent.skills.command_validation import (
+from agent.handlers.command_validation import (
     PLAN_ALLOWED_COMMANDS,
     build_reprompt_suffix,
     validate_commands,
