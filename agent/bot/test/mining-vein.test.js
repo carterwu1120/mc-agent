@@ -110,3 +110,34 @@ test('a stair landing over a cave gets a placed floor instead of giving up', asy
     await mining._stairDown(noBlocks, -Math.PI / 2, 1)
     assert.deepEqual([noBlocks.placed, noBlocks.dug], [[], []], 'without blocks it still refuses the hole')
 })
+
+// The bot stands at (0,-58,0) on rock; `air` lists cave blocks. goto moves the bot onto the goal.
+function caveBot(air) {
+    const bot = makeBot([], [], { air })
+    bot.pathfinder.goto = async goal => { bot.entity.position = new Vec3(goal.x, goal.y, goal.z) }
+    return bot
+}
+const box = (x0, x1, y0, y1) => {
+    const blocks = []
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) blocks.push(new Vec3(x, y, 0))
+    return blocks
+}
+
+test('standing on a thin layer over a cave, the bot walks down into the cave', async () => {
+    // Seen live: every stair direction had a hole under it and the task stopped at y=-20.
+    const mining = loadMining()
+    const shallow = caveBot(box(1, 3, -61, -59))           // floor at y=-62, top of it y=-61
+    assert.equal(await mining._walkDownCave(shallow, -100), true)
+    assert.equal(shallow.entity.position.y, -61)
+
+    const deep = caveBot(box(1, 6, -70, -59))              // a 12-block-deep cave
+    assert.equal(await mining._walkDownCave(deep, -100), true)
+    assert.equal(deep.entity.position.y, -70, 'goes to the lowest floor, not just the first drop')
+})
+
+test('with no cave floor in reach the walk fails so the descent shifts sideways', async () => {
+    const mining = loadMining()
+    const solid = caveBot([])
+    assert.equal(await mining._walkDownCave(solid, -100), false)
+    assert.deepEqual(solid.entity.position, new Vec3(0, -58, 0))
+})

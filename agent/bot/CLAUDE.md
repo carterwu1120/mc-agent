@@ -87,7 +87,11 @@ invalidates execution and halts every frame (`haltActivities`), so nothing resum
 the spawn point. Staircase descent only steps onto a solid block (`_hasSolidFloor`). Air
 or water under the next stair is first filled with a carried non-falling block
 (`_placeFloor`); only lava, no blocks or a failed placement turn the descent instead of
-falling into a cave.
+falling into a cave. When all four stair directions fail (typically a thin layer over a
+cave), `_walkDownCave` walks to the lowest nearby cave floor (first floor per column within
+12 blocks and 24 down, no digging, drops ≤ 3); if none is reachable the bot tunnels 6
+blocks sideways and stairs down there, and reports `no_safe_route` after 3 such shifts.
+Descent strategy is JS; recovery prompts can only re-issue commands, not change it.
 
 `hunt` and `getfood` require explicit positive count goals. Their JS activities
 reject missing or invalid goals instead of supplying hidden defaults. `getfood`

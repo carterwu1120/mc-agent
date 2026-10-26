@@ -797,16 +797,25 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                 console.log('[Mine] 下潛方向受阻，旋轉 90° 繼續')
                 if (descentRotations >= 4) {
                     descentRotations = 0
-                    if (descentHardFails >= 2) {
-                        console.log('[Mine] 多次無法下潛，停止')
-                        yieldDecision('no_safe_route', { attempts: { descent_rotations: 4, escape_attempts: descentHardFails }, navigation: navigation.lastResult(bot) })
-                        break
+                    // No stair direction is safe, usually because the bot stands on a thin
+                    // layer over a cave. Walk down through the cave; if that is a sheer drop,
+                    // tunnel sideways to solid ground and stair down there.
+                    if (await _walkDownCave(bot, bestY)) {
+                        if (_shouldAbort(_myGen)) return
+                        descentHardFails = 0
+                    } else {
+                        if (_shouldAbort(_myGen)) return
+                        if (descentHardFails >= MAX_SIDE_SHIFTS) {
+                            console.log('[Mine] 多次無法下潛，停止')
+                            yieldDecision('no_safe_route', { attempts: { descent_rotations: 4, cave_walk: 'none_reachable', side_shifts: descentHardFails }, navigation: navigation.lastResult(bot) })
+                            break
+                        }
+                        descentHardFails++
+                        console.log(`[Mine] 四方下方都無法安全下去，往旁邊挖 ${SIDE_SHIFT} 格換位置（第 ${descentHardFails} 次）`)
+                        await _digTunnel(bot, tunnelYaw, SIDE_SHIFT, null, {}, _myGen)
+                        if (_shouldAbort(_myGen)) return
+                        tunnelYaw += Math.PI / 2
                     }
-                    const digY = Math.min(2, Math.floor(bot.entity.position.y) - bestY)
-                    console.log(`[Mine] 四方受阻，嘗試往下直挖 ${digY} 格`)
-                    await _digEscape(bot, Math.floor(bot.entity.position.y) - digY)
-                    if (_shouldAbort(_myGen)) return
-                    descentHardFails++
                 }
             } else {
                 descentRotations = 0
@@ -1145,6 +1154,59 @@ function _shouldReturnToResumePos(bot, resumePos) {
 function _hasSolidFloor(bot, pos) {
     const block = bot.blockAt(pos)
     return !!block && block.boundingBox === 'block' && !_isLava(block)
+}
+
+const CAVE_SCAN_RADIUS = 12
+const CAVE_SCAN_DEPTH = 24
+const CAVE_MAX_DROP = 3   // falls of 3 blocks or less do no damage
+const SIDE_SHIFT = 6
+const MAX_SIDE_SHIFTS = 3
+
+function _isOpen(block) {
+    return !!block && block.boundingBox === 'empty' && !_isLava(block) && !_isWaterBlock(block)
+}
+
+// The first floor in each nearby column below the bot (solid block with two open blocks
+// above), lowest first. Rock under the bot hides deeper floors, so only the top one counts.
+function _caveFloors(bot, targetY) {
+    const here = bot.entity.position.floored()
+    const bottom = Math.max(targetY - 2, here.y - CAVE_SCAN_DEPTH)
+    const floors = []
+    for (let dx = -CAVE_SCAN_RADIUS; dx <= CAVE_SCAN_RADIUS; dx++) {
+        for (let dz = -CAVE_SCAN_RADIUS; dz <= CAVE_SCAN_RADIUS; dz++) {
+            for (let y = here.y - 2; y >= bottom; y--) {
+                const pos = new Vec3(here.x + dx, y, here.z + dz)
+                const below = bot.blockAt(pos.offset(0, -1, 0))
+                if (!below) break
+                if (below.boundingBox !== 'block') continue
+                if (_isOpen(bot.blockAt(pos)) && _isOpen(bot.blockAt(pos.offset(0, 1, 0))) &&
+                    !_isLava(below) && !_hasAdjacentLava(bot, pos) && !_isNearWaterHazard(pos)) floors.push(pos)
+                break
+            }
+        }
+    }
+    return floors.sort((a, b) => a.y - b.y || a.distanceTo(here) - b.distanceTo(here))
+}
+
+// Walk down to the lowest cave floor reachable without digging and with drops of at most
+// CAVE_MAX_DROP blocks. Returns true when the bot ended at least two blocks lower.
+async function _walkDownCave(bot, targetY) {
+    const startY = Math.floor(bot.entity.position.y)
+    for (const floor of _caveFloors(bot, targetY).slice(0, 6)) {
+        if (_shouldAbort()) return false
+        const movements = applyMovements(bot, { canDig: false })
+        if (movements) movements.maxDropDown = CAVE_MAX_DROP
+        try {
+            await _goto(bot, new goals.GoalBlock(floor.x, floor.y, floor.z), 10000)
+        } catch (_) {}
+        _setMovements(bot)
+        if (Math.floor(bot.entity.position.y) <= startY - 2) {
+            console.log(`[Mine] 從洞穴走下去：Y=${startY} → Y=${Math.floor(bot.entity.position.y)}`)
+            activityStack.touch('mining', 'descending')
+            return true
+        }
+    }
+    return false
 }
 
 // Non-falling blocks a stair landing may be built from (gravel/sand would drop into the hole).
