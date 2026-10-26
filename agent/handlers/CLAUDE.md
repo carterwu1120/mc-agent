@@ -98,26 +98,32 @@ If `text` field is present in any response, it is sent as a chat message to the 
 `PlanExecutor` sequences plan commands, waiting for `action_done` / `activity_done` between steps.
 
 
-`task_memory` schema (`agent/data/task.json`):
+`task_memory` schema (`BOT_DATA_DIR/task.json`) — the current task only, keys in this order:
 ```json
 {
   "id": "abc12345",
   "goal": "幫我挖鑽石",
-  "commands": ["equip", "mine diamond 10"],
-  "steps": [
-    {"cmd": "equip",          "status": "done",    "error": null},
-    {"cmd": "mine diamond 10","status": "running", "error": null}
-  ],
-  "currentStep": 1,
   "status": "running",
-  "interruptedBy": null
+  "source": "player",
+  "createdAt": "2026-10-26T08:00:00",
+  "currentStep": 1,
+  "steps": [
+    {"cmd": "preparetool iron_pickaxe", "status": "done"},
+    {"cmd": "mine diamond 10",          "status": "running"}
+  ],
+  "context": {"workPos": {"x": -153, "y": -58, "z": 118}, "objective": {"kind": "mine", "count": 10}},
+  "runtime": {"supervision": {"phase": "idle"}}
 }
 ```
-Step status: `pending` / `running` / `done` / `failed`. Resume skips `done` steps.
-`context` and each step's `context` hold only `workPos` (plus `objective` on the task);
-live activity/stack/progress belongs in `runtime`, which is overwritten, not accumulated.
-Player chat 「清除任務」/「取消任務」/`cancel task` stops the activity and deletes task.json
-(current and interrupted tasks), so 「繼續」 has nothing to resume.
+Step status: `pending` / `running` / `interrupted` / `done` / `failed` (failed steps add `error`).
+Resume skips `done` steps. Optional keys appear only when set: `final_goal`, `interruptedBy`,
+and on completion `goalVerified` / `goal_count` / `actual_count`. `context` holds where the work
+is (`workPos`) and the mining `objective`; `runtime` holds live coordination state (recovery
+`supervision`, food-wait snapshot) and is overwritten. The live activity/stack/position is in
+`live_state.json`, not here. Events, failures and finished tasks go to the database only; the
+file keeps no history, and loading an older file drops its obsolete keys.
+Player chat 「清除任務」/「取消任務」/`cancel task` stops the activity and deletes task.json,
+so 「繼續」 has nothing to resume.
 
 ---
 

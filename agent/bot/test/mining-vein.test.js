@@ -4,11 +4,11 @@ const fs = require('node:fs')
 const vm = require('node:vm')
 const { Vec3 } = require('vec3')
 
-function loadMining() {
+function loadMining(water = { isEscaping: () => false }) {
     const stubs = {
         './mining_phase': require('../mining_phase'), './activity': require('../activity'),
         './execution': require('../execution'), './crafting': {}, './bridge': { sendState() {} },
-        './buried': {}, './eating': { isEating: () => false }, './water': { isEscaping: () => false },
+        './buried': {}, './eating': { isEating: () => false }, './water': water,
         './hazards': { isNear: () => false }, './movement_prefs': { applyMovements: () => ({}) },
         './navigation': { enabled: () => false, cancel() {}, lastResult: () => null },
     }
@@ -75,3 +75,17 @@ test('buried ore is not seen: only exposed ore is mined (no x-ray)', async () =>
     assert.deepEqual(bot.dug, ['1,-58,0'])
 })
 
+
+test('mining does not dig while a hazard escape is digging the bot out', async () => {
+    // Seen live: tunnel digs and the suffocation escape kept aborting each other
+    // ("Digging aborted") until falling gravel killed the bot.
+    let escaping = true
+    const mining = loadMining({ isEscaping: () => escaping })
+    const bot = makeBot([new Vec3(1, -58, 0)])
+    const run = mining._finishVein(bot, { target: 'diamond', count: 1 }, null)
+    await new Promise(r => setTimeout(r, 300))
+    assert.deepEqual(bot.dug, [], 'waits for the escape')
+    escaping = false
+    await run
+    assert.deepEqual(bot.dug, ['1,-58,0'])
+})

@@ -63,6 +63,10 @@ in front of the bot; stone/cobblestone/deepslate targets are excluded.
 **No x-ray:** every ore search targets only exposed ore (`_isExposed`: touching air or
 cave air), and logs never report buried ore. Digging an ore exposes its neighbours, so a
 connected vein is still followed. Do not add targeting of buried blocks.
+**Hazard escapes own the bot:** while `water.isEscaping()` (suffocation, lava, water),
+mining's `_dig` and each tunnel block wait (`_waitForHazardEscape`), and `_dig` re-reads
+the block first. Concurrent digs abort each other; a bot buried by falling gravel died
+with both sides cancelling every dig.
 `findSurfaceSpot` checks the column above the bot, stops each column at its first solid
 block, skips empty chunk sections, searches every column to 24 blocks and every other
 one to 64, and reports `no_surface_found` when nothing qualifies.

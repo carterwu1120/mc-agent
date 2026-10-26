@@ -300,9 +300,19 @@ function _shouldAbort(expectedGen = null) {
     return !isMining || (expectedGen !== undefined && expectedGen !== null && _loopGen !== expectedGen)
 }
 
+// A hazard escape (suffocation, lava, water) digs and moves on its own. Digging at the
+// same time cancels its dig ("Digging aborted") and each side keeps undoing the other;
+// a bot buried by falling gravel suffocated that way.
+async function _waitForHazardEscape(expectedGen = null) {
+    while (water.isEscaping() && !_shouldAbort(expectedGen)) await _sleep(200)
+}
+
 async function _dig(bot, block) {
+    await _waitForHazardEscape()
     if (_shouldAbort()) throw new Error('mining aborted')
-    await bot.dig(block)
+    const current = bot.blockAt(block.position)
+    if (!current || current.name !== block.name) throw new Error(`block changed to ${current?.name ?? 'unloaded'}`)
+    await bot.dig(current)
     if (_shouldAbort()) throw new Error('mining aborted')
 }
 
@@ -1276,6 +1286,8 @@ async function _digTunnel(bot, yaw, length = 8, targetY = null, goal = {}, expec
         ])
 
         for (const pos of [feetPos, headPos, feetPos2, headPos2]) {
+            await _waitForHazardEscape(expectedGen)
+            if (_shouldAbort(expectedGen)) return false
             if (_isNearWaterHazard(pos)) {
                 console.log('[Tunnel] 前方靠近已知水域，放棄此方向')
                 return false

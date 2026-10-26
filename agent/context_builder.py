@@ -148,9 +148,9 @@ def build_interrupted_tasks_section(tasks: list[dict], limit: int = 2) -> str:
         remaining = [
             s.get("cmd") for s in steps[current_step:]
             if s.get("status") not in ("done", "failed") and s.get("cmd")
-        ] or list(task.get("commands") or [])[current_step:]
+        ]
         context = task.get("context") or {}
-        work_pos = context.get("workPos") or context.get("currentPos")
+        work_pos = context.get("workPos")
         lines.append(
             f"- goal={_trim_text(task.get('goal') or '（無）', 48)}"
             f" next={_trim_text((remaining[0] if remaining else '（無）'), 48)}"

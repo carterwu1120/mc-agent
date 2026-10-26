@@ -552,77 +552,6 @@ _NATURAL_INTERRUPT_PATTERNS = (
 )
 
 
-def _save_current_task_to_memory(state: dict) -> None:
-    """把目前 activity stack 的頂層任務壓成短期 interrupted 記憶。"""
-    stack = state.get("stack", [])
-    if not stack:
-        return
-    top = stack[-1]
-    activity = top.get("activity", "")
-    goal = top.get("goal", {})
-    progress = top.get("progress", {})
-
-    def _remaining(g: dict, p: dict, goal_key: str, progress_key: str) -> int:
-        target = g.get(goal_key)
-        if isinstance(target, bool) or not isinstance(target, (int, float)) or target <= 0:
-            raise ValueError(f"missing or invalid {goal_key}")
-        completed = p.get(progress_key, 0)
-        if isinstance(completed, bool) or not isinstance(completed, (int, float)):
-            completed = 0
-        remaining = int(target) - max(0, int(completed))
-        if remaining <= 0:
-            raise ValueError("activity goal is already complete")
-        return remaining
-
-    def _target(g: dict) -> str:
-        target = g.get("target")
-        if not isinstance(target, str) or not target.strip():
-            raise ValueError("missing target")
-        return target.strip()
-
-    resume_cmd_map = {
-        "fishing":  lambda g, p: f"fish catches {_remaining(g, p, 'catches', 'catches')}",
-        "chopping": lambda g, p: f"chop logs {_remaining(g, p, 'logs', 'logs')}",
-        "mining":   lambda g, p: f"mine {_target(g)} {_remaining(g, p, 'count', 'count')}",
-        "smelting": lambda g, p: f"smelt {_target(g)} {_remaining(g, p, 'count', 'smelted')}",
-        "hunting":  lambda g, p: f"hunt count {_remaining(g, p, 'count', 'count')}",
-        "getfood":  lambda g, p: f"getfood count {_remaining(g, p, 'count', 'count')}",
-    }
-
-    resume_fn = resume_cmd_map.get(activity)
-    if not resume_fn:
-        return  # combat / surface 等無法意義恢復，不存
-
-    try:
-        resume_cmd = resume_fn(goal, progress)
-    except Exception:
-        return
-
-    goal_str = f"{activity} {goal}"
-    current_pos = _clean_pos(state.get("pos"))
-    work_pos = _clean_pos(top.get("startPos")) or current_pos
-    context = {"workPos": work_pos}
-    runtime = {
-        "activeActivity": activity,
-        "activeCommand": resume_cmd,
-        "activityStack": _stack_activity_names(state),
-        "activeGoal": goal,
-        "activeProgress": progress,
-        "activeWorkPos": work_pos,
-        "currentPos": current_pos,
-    }
-    step_context = {"workPos": work_pos}
-    task_memory.remember_interrupted(
-        goal_str,
-        [resume_cmd],
-        context=context,
-        runtime=runtime,
-        reason="player_interrupt",
-    )
-    task_memory.update_latest_interrupted_step_context(0, step_context)
-    print(f"[TaskMem] 儲存任務: {goal_str} → [{resume_cmd}]")
-
-
 def _augment_state(state: dict, player_task: str | None = None) -> dict:
     copied = dict(state)
     copied["queued_tasks"] = []  # queued player tasks now live in coordinator queue
@@ -658,35 +587,6 @@ def _matching_work_frame(state: dict, expected_activity: str | None) -> dict | N
     return None
 
 
-def _format_runtime_command(frame: dict | None) -> str | None:
-    if not frame:
-        return None
-    activity = frame.get("activity")
-    goal = frame.get("goal") or {}
-
-    if activity == "hunting":
-        return f"hunt count {goal.get('count', 0)}"
-    if activity == "getfood":
-        return f"getfood count {goal.get('count', 0)}"
-    if activity == "smelting":
-        return f"smelt {goal.get('target', 'unknown')} {goal.get('count', 0)}"
-    if activity == "mining":
-        return f"mine {goal.get('target', 'unknown')} {goal.get('count', 0)}"
-    if activity == "surface":
-        return "surface"
-    if activity == "combat":
-        return "combat"
-    if activity == "chopping":
-        return f"chop logs {goal.get('logs', 0)}"
-    if activity == "fishing":
-        return f"fish catches {goal.get('catches', 0)}"
-    return activity
-
-
-def _stack_activity_names(state: dict) -> list[str]:
-    return [frame.get("activity") for frame in (state.get("stack") or []) if frame.get("activity")]
-
-
 def _summarize_result(result) -> list | None:
     if not result:
         return None
@@ -707,34 +607,11 @@ def _sync_task_context(state: dict) -> None:
     if idx >= len(steps):
         return
 
-    current_cmd = steps[idx].get("cmd", "")
-    expected_activity = _EXPECTED_ACTIVITY.get(_command_name(current_cmd))
-    stack = state.get("stack") or []
-    top_frame = stack[-1] if stack else None
+    expected_activity = _EXPECTED_ACTIVITY.get(_command_name(steps[idx].get("cmd", "")))
     frame = _matching_work_frame(state, expected_activity)
-    current_pos = _clean_pos(state.get("pos"))
-    active_activity = (top_frame or {}).get("activity") or state.get("activity")
-    active_goal = (top_frame or {}).get("goal") or {}
-    active_progress = (top_frame or {}).get("progress") or {}
-    active_work_pos = _clean_pos((top_frame or {}).get("startPos")) or current_pos
-    active_command = _format_runtime_command(top_frame)
-    stack_names = _stack_activity_names(state)
-
-    task_memory.update_runtime({
-        "activeActivity": active_activity,
-        "activeCommand": active_command,
-        "activityStack": stack_names,
-        "activeGoal": active_goal,
-        "activeProgress": active_progress,
-        "activeWorkPos": active_work_pos,
-        "currentPos": current_pos,
-    })
-
-    # task.json keeps only where the work happens; live state already lives in runtime.
-    work_pos = (_clean_pos(frame.get("startPos")) if frame else None) or current_pos
-    if frame:
+    work_pos = _clean_pos(frame.get("startPos")) if frame else None
+    if work_pos:
         task_memory.update_context({"workPos": work_pos})
-    task_memory.update_step_context(idx, {"workPos": work_pos})
 
 
 

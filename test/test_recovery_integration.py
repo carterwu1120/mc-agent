@@ -173,30 +173,6 @@ def test_idle_ticks_never_start_autonomous_tasks(runtime, monkeypatch):
     asyncio.run(scenario())
 
 
-def test_interrupted_activity_memory_never_invents_a_missing_quantity(runtime, monkeypatch):
-    app, _task = runtime
-    remembered = Mock()
-    updated = Mock()
-    monkeypatch.setattr(app.task_memory, 'remember_interrupted', remembered)
-    monkeypatch.setattr(app.task_memory, 'update_latest_interrupted_step_context', updated)
-
-    app._save_current_task_to_memory({
-        'stack': [{'activity': 'chopping', 'goal': {}, 'progress': {}}],
-        'pos': {'x': 1, 'y': 64, 'z': 2},
-    })
-    remembered.assert_not_called()
-
-    app._save_current_task_to_memory({
-        'stack': [{
-            'activity': 'chopping',
-            'goal': {'logs': 5},
-            'progress': {'logs': 2},
-        }],
-        'pos': {'x': 1, 'y': 64, 'z': 2},
-    })
-    assert remembered.call_args.args[1] == ['chop logs 3']
-
-
 def test_food_wait_auto_resumes_only_after_hunger_recovers(runtime, monkeypatch):
     app, task = runtime
 

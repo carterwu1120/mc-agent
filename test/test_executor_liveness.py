@@ -183,3 +183,28 @@ def test_smelting_food_is_verified_by_its_cooked_output():
     # Seen live: smelt chicken 4 produced 4 cooked_chicken but was judged "+-4 chicken".
     assert module._verify_step("smelt chicken 4", _inv(chicken=8), _inv(chicken=4, cooked_chicken=4)) is None
     assert module._verify_step("smelt raw_iron 3", _inv(raw_iron=3), _inv(iron_ingot=3)) is None
+
+
+def test_resume_runs_the_remaining_steps_of_the_stored_task(tmp_path, monkeypatch):
+    # task.json stores only steps; resuming after respawn read a removed "commands" key.
+    monkeypatch.setattr(module.task_memory, "FILE", str(tmp_path / "task.json"))
+    for name in ("archive_task", "write_event", "write_failure"):
+        monkeypatch.setattr(module.task_memory.history_db, name, lambda *a, **k: None)
+    module.task_memory.save("砍樹", ["chop logs 3", "back"])
+    module.task_memory.mark_step_done(0)
+    module.task_memory.update_step(1)
+    module.task_memory.interrupt("player_died")
+
+    async def scenario():
+        e = module.PlanExecutor()
+        sent = []
+
+        async def send(raw):
+            command = json.loads(raw)
+            sent.append(command["command"])
+            e.signal_done({"type": "action_done", "command_id": command["_command_id"]})
+
+        ws = type("Socket", (), {"send": staticmethod(send)})()
+        await asyncio.wait_for(e.execute([], ws, resume_task=True), 1)
+        assert sent[0] == "back", "resumes at the first unfinished step"
+    asyncio.run(scenario())

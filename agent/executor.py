@@ -368,9 +368,9 @@ class PlanExecutor:
         if resume_task:
             resumed = task_memory.resume_interrupted(commands if commands else None, goal=goal or None)
             if resumed:
-                commands = resumed['commands']
+                commands = task_memory.commands(resumed)
         elif goal and not preserve_task:
-            task_memory.save(goal, commands, final_goal=final_goal, source=source, reason=reason, task_id=task_id)
+            task_memory.save(goal, commands, final_goal=final_goal, source=source, task_id=task_id)
 
         if not preserve_task:
             task = task_memory.load() or {}
@@ -417,7 +417,7 @@ class PlanExecutor:
                         step=i,
                     )
                     break
-                commands = interrupted.get('commands', [])
+                commands = task_memory.commands(interrupted)
                 i = interrupted.get('currentStep', 0)
                 preserve_task = False
                 task_memory.resume_interrupted()

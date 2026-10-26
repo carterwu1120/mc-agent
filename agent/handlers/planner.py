@@ -476,19 +476,12 @@ def _maybe_plan_resume(message: str, state: dict) -> dict | None:
     remaining = [
         s["cmd"] for s in steps[current_step:]
         if s.get("status") not in ("done", "failed")
-    ] or task.get("commands", [])[current_step:]
+    ]
 
     if not remaining:
         return {"command": "chat", "text": "目前沒有可恢復的步驟。"}
 
-    task_context = task.get("context") or {}
-    work_pos = task_context.get("workPos") or task_context.get("currentPos")
-    if not work_pos:
-        for step in reversed(steps):
-            sc = step.get("context") or {}
-            work_pos = sc.get("workPos") or sc.get("currentPos")
-            if work_pos:
-                break
+    work_pos = (task.get("context") or {}).get("workPos")
 
     commands = list(remaining)
     current_pos = state.get("pos") or {}
@@ -570,7 +563,7 @@ def _task_remaining_commands(task: dict | None) -> list[str]:
     remaining = [
         s["cmd"] for s in steps[current_step:]
         if s.get("status") not in ("done", "failed")
-    ] or task.get("commands", [])[current_step:]
+    ]
     return list(remaining)
 
 
@@ -759,14 +752,7 @@ async def handle(state: dict, llm: LLMClient) -> dict | None:
             if task_status in ("running", "interrupted") else []
 
         # Extract last known work position from task context
-        task_context = prev_task.get("context") or {}
-        work_pos = task_context.get("workPos") or task_context.get("currentPos")
-        if not work_pos:
-            for s in reversed(steps):
-                sc = s.get("context") or {}
-                work_pos = sc.get("workPos") or sc.get("currentPos")
-                if work_pos:
-                    break
+        work_pos = (prev_task.get("context") or {}).get("workPos")
         work_pos_str = ""
         if work_pos:
             work_pos_str = f"\n上次工作位置：({work_pos.get('x', 0):.0f}, {work_pos.get('y', 0):.0f}, {work_pos.get('z', 0):.0f})"

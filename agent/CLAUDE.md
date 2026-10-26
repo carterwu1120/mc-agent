@@ -234,13 +234,15 @@ Local mechanical navigation remains separate.
    for recovery from inside `execute()` (stop_not_confirmed, recovery_timeout)
    either consumes the resulting replan or aborts; returning with `_running` set
    would strand the plan handed to `executor.replan()`.
-9. Prompt short-term memory (`context_builder.build_for_skill`) only includes events
-   and failures from the last 30 minutes (`MEMORY_MAX_AGE`); older entries describe
-   conditions that may no longer hold. A replaced step is recorded as
+9. task.json keeps no event/failure history (single-task mode); those go to the
+   database, so `task_memory.recent_events()`/`recent_failures()` are empty and prompts
+   rely on live state plus the recovery supervisor's own attempt history.
+   `context_builder.build_for_skill` still drops entries older than 30 minutes
+   (`MEMORY_MAX_AGE`) if given any. A replaced step is recorded as
    `replanned:<stuck reason>`, not a bare "replanned".
 
 `live_state.json` includes supervision phase/deadline/expected_outcome. Recovery
-attempts and final blocking reasons are recorded in task history. Runtime waits and
+attempts and final blocking reasons are recorded in the database history. Runtime waits and
 command IDs are included in bridge snapshots. See bot/CLAUDE.md for scope rules.
 Offline tests cover the protocol and adversarial async timelines; they cannot prove
 server physics, permissions, block placement or every plugin API is cancellable.
