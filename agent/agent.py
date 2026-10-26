@@ -22,7 +22,7 @@ from agent.handlers import task_arbitration as task_arbitration_handler
 from agent.handlers import respawn as respawn_handler
 from agent.handlers import tool_durability as tool_durability_handler
 from agent.executor import PlanExecutor
-from agent.recovery import RecoverySupervisor
+from agent.recovery import PLANNER_UNAVAILABLE, RecoverySupervisor
 from agent.handlers import recovery as recovery_handler
 from agent import task_memory
 from agent import food_recovery
@@ -175,7 +175,16 @@ async def _handle_recovery(state: dict, ws) -> None:
 
         task_memory.update_runtime({'supervision': recovery.status()})
         task_memory.record_event('recovery_blocked', reason=reason)
-        if 'recovery_budget_exhausted' in reason:
+        if reason.startswith(PLANNER_UNAVAILABLE):
+            # The model never answered (network/service), which says nothing about the task.
+            seconds = round(recovery.decision_timeout)
+            if recovery.retry_at is not None:
+                message = (f'規劃模型 {seconds} 秒內沒有回應（可能是網路或服務問題），任務保留；'
+                           f'{round(recovery.provider_retry_delay / 60)} 分鐘後自動重試，也可以直接說「繼續」。')
+            else:
+                message = (f'規劃模型連續 {recovery.provider_failures} 次沒有回應，已停止自動重試，任務保留；'
+                           '網路恢復後請說「繼續」。')
+        elif 'recovery_budget_exhausted' in reason:
             # The raw exception name means nothing to a player; say what happened.
             message = ('短時間內連續恢復都沒有讓任務前進，先暫停並保留任務。'
                        f"最後的問題：{state.get('reason')}（{str(state.get('detail') or '')[:80]}）。"
@@ -1276,6 +1285,17 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             _planner_lock.release()
 
 
+async def _retry_unavailable_planner(state: dict, ws) -> None:
+    """A recovery was lost to an unreachable planner; ask it again once the delay passed."""
+    if executor.is_running() or recovery.busy or state.get('activity', 'idle') != 'idle':
+        recovery.retry_at = recovery.clock() + 30  # something else is running; look again later
+        return
+    recovery.retry_at = None
+    print(f"[Recovery] 規劃模型先前無回應，自動重試（第 {recovery.provider_failures} 次失敗後）")
+    await _send_chat(ws, '重新嘗試連線規劃模型，接續原任務…')
+    await _continue_player_task({**state, 'message': '（自動重試：規劃模型先前沒有回應）'}, ws, explicit=True)
+
+
 async def _continue_player_task(state: dict, ws, *, explicit: bool) -> None:
     """Reassess a held task without submitting a new coordinator envelope."""
     task = task_memory.load() or {}
@@ -1346,6 +1366,8 @@ async def _handle_player_chat(state: dict, ws) -> None:
         if 'recovery_budget_exhausted' in blocked:
             last = next((h.get('reason') for h in reversed(recovery.history) if h.get('reason')), None)
             blocked = f'短時間內多次恢復都沒有進展（最後的問題：{last or "未知"}）'
+        elif blocked.startswith(PLANNER_UNAVAILABLE):
+            blocked = '規劃模型沒有回應（可能是網路或服務問題），不是遊戲裡的阻礙'
         arb_state['chat_task']['blockedReason'] = blocked
     try:
         decision = await task_arbitration_handler.handle(arb_state, llm)
@@ -1505,6 +1527,10 @@ async def run():
                             _t = asyncio.create_task(_coordinator_poll(state, ws))
                             _bg_tasks.add(_t)
                             _t.add_done_callback(_bg_tasks.discard)
+
+                    if event_type == 'tick' and recovery.provider_retry_due():
+                        session_tasks.append(asyncio.create_task(_retry_unavailable_planner(state, ws)))
+                        continue
 
                     if event_type == 'tick' and await _handle_waiting_for_change(state, ws):
                         _write_live_state()

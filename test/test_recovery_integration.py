@@ -424,3 +424,19 @@ def test_wait_chat_is_cut_at_a_sentence_and_chat_judge_gets_the_block_reason(run
     ws = Mock(send=AsyncMock())
     asyncio.run(app._handle_player_chat({'message': '你為什麼卡住？'}, ws))
     assert seen[0]['blockedReason'] == '四個方向下方都是洞穴，請帶我到別處'
+
+
+def test_planner_retry_waits_while_busy_then_resumes_the_task(runtime, monkeypatch):
+    app, _task = runtime
+    resumed, sent = [], []
+    monkeypatch.setattr(app, '_continue_player_task', AsyncMock(side_effect=lambda s, ws, explicit: resumed.append(explicit)))
+    ws = Mock(send=AsyncMock(side_effect=lambda raw: sent.append(json.loads(raw))))
+
+    app.recovery.phase, app.recovery.retry_at = 'waiting_player', 0
+    asyncio.run(app._retry_unavailable_planner({'activity': 'mining'}, ws))
+    assert resumed == [] and app.recovery.retry_at is not None, 'busy bot: retry later, do not drop it'
+
+    app.executor._running = False  # the fixture claims the executor; the blocked task released it
+    asyncio.run(app._retry_unavailable_planner({'activity': 'idle'}, ws))
+    assert resumed == [True] and app.recovery.retry_at is None
+    assert sent[-1]['command'] == 'chat'

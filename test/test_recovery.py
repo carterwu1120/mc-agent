@@ -221,3 +221,39 @@ def test_progress_does_not_allow_repeating_the_same_failed_strategy():
         await r.recover(STATE, ws, decide=AsyncMock(return_value=PLAN), apply=AsyncMock(), blocked=blocked)
         assert r.held and "same_failed_strategy" in r.reason
     asyncio.run(scenario())
+
+
+def test_unreachable_planner_schedules_bounded_retries_instead_of_a_plain_block():
+    # Seen live: both recovery calls timed out during a network outage and the bot sat
+    # at "任務已保留，暫停等待協助：TimeoutError:" until the player noticed.
+    async def scenario():
+        now = [0.0]
+        r = RecoverySupervisor(decision_timeout=0.01, clock=lambda: now[0],
+                               provider_retry_delay=120, provider_max_retries=2)
+
+        async def silent(_state):
+            await asyncio.sleep(1)
+
+        blocked = AsyncMock()
+        for failures in (1, 2, 3):
+            r.invalidate()  # what the retry / "continue" path does before recovering again
+            await r.recover(STATE, Socket(r), decide=silent, apply=AsyncMock(), blocked=blocked)
+            assert blocked.call_args.args[0].startswith("planner_unavailable: TimeoutError")
+            assert r.provider_failures == failures
+            r._episodes.clear()
+        assert r.retry_at is None, "stops retrying after provider_max_retries"
+
+        r.invalidate()
+        r.provider_failures = 1
+        await r.recover(STATE, Socket(r), decide=silent, apply=AsyncMock(), blocked=blocked)
+        assert not r.provider_retry_due()
+        now[0] += 121
+        assert r.provider_retry_due()
+
+        # A real answer (even "wait") is not a provider failure and clears the count.
+        r.invalidate()
+        await r.recover(STATE, Socket(r), decide=AsyncMock(return_value={"action": "wait", "text": "需要玩家帶路"}),
+                        apply=AsyncMock(), blocked=blocked)
+        assert (r.provider_failures, r.retry_at) == (0, None)
+        assert blocked.call_args.args[0] == "需要玩家帶路"
+    asyncio.run(scenario())

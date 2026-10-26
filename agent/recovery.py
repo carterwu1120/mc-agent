@@ -7,8 +7,14 @@ import time
 import uuid
 
 
+# Failures that say nothing about the strategy: the planner never answered.
+PROVIDER_ERRORS = {"TimeoutError", "CLIProviderError"}
+PLANNER_UNAVAILABLE = "planner_unavailable"
+
+
 class RecoverySupervisor:
-    def __init__(self, *, pause_timeout=5, decision_timeout=60, clock=time.monotonic):
+    def __init__(self, *, pause_timeout=5, decision_timeout=60, clock=time.monotonic,
+                 provider_retry_delay=120, provider_max_retries=3):
         if not all(math.isfinite(value) and value > 0 for value in (pause_timeout, decision_timeout)):
             raise ValueError('Recovery timeouts must be positive finite seconds')
         self.pause_timeout = pause_timeout
@@ -27,6 +33,12 @@ class RecoverySupervisor:
         self.wait_snapshot = None
         self._episodes = deque(maxlen=3)
         self.history = deque(maxlen=6)
+        self.provider_retry_delay = provider_retry_delay
+        self.provider_max_retries = provider_max_retries
+        # Consecutive recoveries lost to an unreachable planner; survives invalidate() so
+        # automatic retries stay bounded, cleared by any real decision.
+        self.provider_failures = 0
+        self.retry_at = None
 
     @property
     def busy(self):
@@ -72,8 +84,12 @@ class RecoverySupervisor:
         self.reason = self.deadline = self.expected = self._idle = None
         self.wait_kind = None
         self.wait_snapshot = None
+        self.retry_at = None
         self._episodes.clear()
         self.history.clear()
+
+    def provider_retry_due(self) -> bool:
+        return self.phase == "waiting_player" and self.retry_at is not None and self.clock() >= self.retry_at
 
     def note_progress(self):
         """A long-running step finished in the world, so earlier episodes were resolved.
@@ -114,6 +130,7 @@ class RecoverySupervisor:
         self._request_id = uuid.uuid4().hex
         self._ack = asyncio.get_running_loop().create_future()
         error = "recovery_failed"
+        provider_errors = 0
         try:
             await asyncio.wait_for(ws.send(json.dumps({"command": "suspend", "request_id": self._request_id})), self.pause_timeout)
             ack = await asyncio.wait_for(self._ack, self.pause_timeout)
@@ -160,6 +177,7 @@ class RecoverySupervisor:
                                          "expected_outcome": result["expected_outcome"], "fingerprint": fingerprint})
                     self.expected = result["expected_outcome"]
                     await apply(result)
+                    self.provider_failures = 0
                     self.phase = "executing"
                     self.deadline = None
                     return
@@ -167,6 +185,8 @@ class RecoverySupervisor:
                     raise
                 except Exception as exc:
                     error = type(exc).__name__ + ": " + str(exc)[:200]
+                    if type(exc).__name__ in PROVIDER_ERRORS:
+                        provider_errors += 1
                     self.history.append({"reason": "decision_failed", "error": error})
         except asyncio.CancelledError:
             if revision == self.revision:
@@ -180,5 +200,14 @@ class RecoverySupervisor:
                 self.deadline = None
         if revision == self.revision:
             self.phase = "waiting_player"
+            if provider_errors == 2:
+                # Both attempts got no answer; retry later instead of waiting on the player.
+                self.provider_failures += 1
+                error = f"{PLANNER_UNAVAILABLE}: {error}"
+                retry = self.provider_failures <= self.provider_max_retries
+                self.retry_at = self.clock() + self.provider_retry_delay if retry else None
+            else:
+                self.provider_failures = 0
+                self.retry_at = None
             self.reason = error
             await blocked(error)

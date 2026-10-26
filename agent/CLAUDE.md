@@ -227,6 +227,12 @@ Local mechanical navigation remains separate.
    invalid/empty plans, missing stop acknowledgement or exhausted budget preserve
    the task as recovery_blocked and enter waiting_player. Autonomous ticks cannot
    overwrite it. A player instruction can restart/replan explicitly.
+   Exception: when both decision attempts fail only because the planner never answered
+   (`TimeoutError`/`CLIProviderError`), the block reason is `planner_unavailable: …`, the
+   player is told it is a model/network problem, and a tick re-runs the resume after
+   `provider_retry_delay` (120s), at most `provider_max_retries` (3) times in a row.
+   `provider_failures` survives `invalidate()` so retries stay bounded; any real decision
+   (plan or wait) resets it.
 8. New tasks, manual stops, death/disconnect invalidate pending AI responses.
    Commands carry correlation IDs; late completions cannot complete a different
    command. PlanExecutor clears completion flags before sending, and old runs may
