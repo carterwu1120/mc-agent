@@ -51,6 +51,8 @@ def system_prompt(state: dict) -> str:
     if section:
         sections.append(section)
     text = knowledge("recovery", *sections)
+    if state.get("reason") == "respawned":
+        text += "\n\n" + knowledge("respawn")
     if capabilities:
         text += "\n\n" + knowledge("bot_capabilities", *capabilities)
     return render_prompt("recovery", commands=_COMMANDS, knowledge=text)

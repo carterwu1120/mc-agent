@@ -430,16 +430,41 @@ async def _on_player_died(state: dict, _llm: LLMClient):
     DEATH_FILE.write_text(json.dumps(death_info), encoding='utf-8')
     print(f'[Death] 死亡記錄：{death_info}')
 
-    return [{'command': 'chat', 'text': f'我死了（{cause}），重生後會繼續任務。'}]
+    return [{'command': 'chat', 'text': f'我死了（{cause}），重生後會依目前狀態接續任務。'}]
 
 
-async def _on_player_respawned(state: dict, llm: LLMClient):
+# A bot that keeps dying should stop and wait instead of walking back into it.
+RESPAWN_LOOP_LIMIT = 3
+RESPAWN_LOOP_WINDOW = 300.0
+_recent_respawns: deque[float] = deque()
+
+
+async def _resume_after_respawn(state: dict, ws) -> None:
+    """Continue the interrupted task after a respawn, planned from the current gear."""
+    try:
+        death = json.loads(DEATH_FILE.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        death = {}
     DEATH_FILE.unlink(missing_ok=True)
+    now = time.monotonic()
+    _recent_respawns.append(now)
+    while _recent_respawns and now - _recent_respawns[0] > RESPAWN_LOOP_WINDOW:
+        _recent_respawns.popleft()
+
+    task = task_memory.load() or {}
+    if not task or task.get('status') not in {'running', 'interrupted'}:
+        return
     task_memory.interrupt('player_died')
     recovery.invalidate()
-    recovery.phase = 'waiting_player'
-    recovery.reason = '重生後等待玩家明確指示。'
-    return {"command": "chat", "text": "已重生，原任務暫停，請確認現況後指示繼續。"}
+    if len(_recent_respawns) >= RESPAWN_LOOP_LIMIT:
+        recovery.phase = 'waiting_player'
+        recovery.reason = f'{int(RESPAWN_LOOP_WINDOW // 60)} 分鐘內死亡 {len(_recent_respawns)} 次'
+        await _send_chat(ws, f'{recovery.reason}，先暫停並保留任務；請確認環境安全後指示繼續。')
+        return
+    await _send_chat(ws, '已重生，依目前裝備與位置接續原任務。')
+    await _handle_recovery({**state, 'type': 'activity_stuck', 'reason': 'respawned',
+        'detail': f"剛死亡重生；死因 {death.get('cause', '未知')}，死亡位置 {death.get('deathPos')}，"
+                  f"當時步驟 {death.get('taskCurrentCmd')}。依目前背包與裝備規劃接續原目標，避開剛才的死因。"}, ws)
 
 
 async def _on_test_plan(state: dict, _llm: LLMClient):
@@ -468,13 +493,12 @@ HANDLERS = {
     "task_stopped":   _on_task_stopped,
     "test_plan":      _on_test_plan,
     "player_died":        _on_player_died,
-    "player_respawned":   _on_player_respawned,
     "tool_low_durability": tool_durability_handler.handle,
     "chat":           planner_handler.handle,
 }
 
 _LLM_EVENT_TYPES = {
-    "inventory_full", "craft_decision", "tick", "player_respawned",
+    "inventory_full", "craft_decision", "tick",
     "tool_low_durability",
 }
 
@@ -1634,6 +1658,9 @@ async def run():
                         _write_live_state()
                         continue
 
+                    if event_type == 'player_respawned':
+                        session_tasks.append(asyncio.create_task(_resume_after_respawn(state, ws)))
+                        continue
                     if not handler:
                         continue
                     if event_type in _thinking:

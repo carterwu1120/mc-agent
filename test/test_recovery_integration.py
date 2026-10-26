@@ -362,3 +362,50 @@ def test_no_local_food_waits_and_keeps_task_without_llm(runtime, monkeypatch):
         assert app.recovery.phase == 'waiting_for_change'
         model.chat.assert_not_called()
     asyncio.run(scenario())
+
+
+def test_respawn_resumes_the_task_through_recovery(runtime, monkeypatch, tmp_path):
+    app, task = runtime
+    app.executor.unclaim()
+    monkeypatch.setattr(app, 'DEATH_FILE', tmp_path / 'death.json')
+    (tmp_path / 'death.json').write_text(json.dumps({'cause': 'other', 'taskCurrentCmd': 'mine diamond 10'}))
+    monkeypatch.setattr(app, '_recent_respawns', app.deque())
+    seen, chats = [], []
+
+    async def fake_recovery(state, ws):
+        seen.append(state)
+
+    async def fake_chat(ws, text):
+        chats.append(text)
+
+    monkeypatch.setattr(app, '_handle_recovery', fake_recovery)
+    monkeypatch.setattr(app, '_send_chat', fake_chat)
+    asyncio.run(app._resume_after_respawn({'type': 'player_respawned', 'pos': {'x': 0, 'y': 64, 'z': 0}}, None))
+
+    assert [s['reason'] for s in seen] == ['respawned']
+    assert 'mine diamond 10' in seen[0]['detail']
+    assert not (tmp_path / 'death.json').exists()
+    assert task['status'] == 'interrupted'
+
+
+def test_repeated_deaths_stop_auto_resume(runtime, monkeypatch, tmp_path):
+    app, task = runtime
+    app.executor.unclaim()
+    monkeypatch.setattr(app, 'DEATH_FILE', tmp_path / 'death.json')
+    monkeypatch.setattr(app, '_recent_respawns', app.deque())
+    resumed, chats = [], []
+
+    async def fake_recovery(state, ws):
+        resumed.append(state['reason'])
+
+    async def fake_chat(ws, text):
+        chats.append(text)
+
+    monkeypatch.setattr(app, '_handle_recovery', fake_recovery)
+    monkeypatch.setattr(app, '_send_chat', fake_chat)
+    for _ in range(app.RESPAWN_LOOP_LIMIT):
+        asyncio.run(app._resume_after_respawn({'type': 'player_respawned'}, None))
+
+    assert resumed == ['respawned'] * (app.RESPAWN_LOOP_LIMIT - 1)
+    assert app.recovery.phase == 'waiting_player'
+    assert '暫停' in chats[-1]

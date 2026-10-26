@@ -156,7 +156,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `food_low` | Food < 10 & idle & no food | Yes — deterministic: pause and ask the player for food |
 | `chat` | Player sent a message | Yes — planner handler |
 | `player_died` | Bot health → 0 | Yes — aborts executor, writes `agent/data/death.json` |
-| `player_respawned` | Bot respawned | Yes — LLM respawn handler |
+| `player_respawned` | Bot respawned | Yes — resumes the task through recovery (`reason=respawned`); 3 deaths in 5 min pause for the player |
 | `tool_low_durability` | Main hand ≤ 10% durability (every 5s, 60s cooldown) | Yes — LLM decides |
 
 **Key rule:** `activity_done` is NOT routed to LLM — it signals PlanExecutor only. Only `activity_stuck` triggers LLM intervention.
@@ -170,7 +170,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 | `planner.py` | `chat` event | 自然語言 → command 序列；偵測「繼續」→ 從 task_memory 恢復 |
 | `inventory.py` | `inventory_full` | In-place cleanup: guarded items never drop; 128 building blocks kept; junk dropped by rule; LLM judges misc items only when still above 28 slots; falls back to rules on a bad reply |
 | `recovery.py` | supervised `activity_stuck` | Validated replacement strategy or explicit wait for player |
-| `respawn.py` | `player_respawned` | LLM 決定重生後恢復計畫 |
+| `respawn.py` | (not routed) | 舊的重生規劃器；重生改由 recovery 接續任務，知識在 `knowledge/respawn.md` |
 | `tool_durability.py` | `tool_low_durability` | LLM 決定工具耐久不足的處理 |
 | `food.py` | `food_low` | 沒有食物時暫停當前任務並請玩家補給（不呼叫 LLM） |
 | `craft_decision.py` | `craft_decision` | Decide what to craft |
@@ -188,7 +188,7 @@ in bridge state and stuck prompts. See `bot/CLAUDE.md` and
 4. **LIFO stack** — pushing auto-pauses current top; popping auto-resumes previous.
 5. **Prompts live in templates** — system prompt text belongs in `agent/prompts/<handler>.md`, rendered by its handler; never in JS. Domain rules they share live in `agent/knowledge/`.
 6. **Command descriptions live in `commands_ref.py`** — import `command_list(keys)`, never duplicate inline.
-7. **Death → LLM** — `player_died` aborts executor; `player_respawned` routes to `respawn.py`.
+7. **Death → resume** — `player_died` aborts executor and halts JS frames; `player_respawned` resumes the task through recovery with the death report and `knowledge/respawn.md`, unless the bot died 3 times in 5 minutes.
 8. **Inventory check at dispatch** — `commands.js` calls `checkFull(bot)` before any activity command. Do not add per-activity checks.
 9. **No-progress beats not-done** — long-running activities (for example `mine diamond 10`) may legitimately take minutes. Stuck detection must be based on lack of meaningful progress, not merely lack of `activity_done`.
 10. **Recovery is layered** — JS bot handles mechanical/local recovery first (movement, placement, watchdog), Python handles orchestration/plan recovery, and LLM handles ambiguous strategy decisions.
