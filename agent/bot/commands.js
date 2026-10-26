@@ -378,6 +378,25 @@ function dispatch(bot, msg) {
             })()
             break
 
+        case 'makearmor':
+            ;(async () => {
+                const material = msg.args?.[0]
+                try {
+                    const { crafted, missing } = await require('./combat').makeArmor(bot, material)
+                    if (missing > 0) {
+                        bridge.sendState(bot, 'activity_stuck', {
+                            reason: 'armor_materials_missing', armor_crafted: crafted,
+                            detail: `need ${missing} more ${material === 'diamond' ? 'diamond' : 'iron_ingot'}`,
+                        })
+                        return
+                    }
+                    bridge.sendState(bot, 'action_done', { armor_crafted: crafted })
+                } catch (error) {
+                    bridge.sendState(bot, 'activity_stuck', { reason: 'armor_failed', detail: error.message })
+                }
+            })()
+            break
+
         case 'equip':
             ;(async () => {
                 const target = msg.args?.[0]

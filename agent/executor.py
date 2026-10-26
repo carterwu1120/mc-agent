@@ -504,7 +504,7 @@ class PlanExecutor:
                     elapsed_command = now - self._command_sent_at
                     long_running = msg['command'] in {'mine', 'chop', 'fish', 'smelt', 'hunt', 'getfood', 'combat', 'surface'}
                     limit = ACTIVITY_START_TIMEOUT if long_running else ACTION_TIMEOUT
-                    if msg['command'] == 'preparetool':
+                    if msg['command'] in {'preparetool', 'makearmor'}:
                         limit = 120.0
                     if elapsed_command > limit and (not long_running or self._latest_state.get('activity', 'idle') == 'idle'):
                         await self._request_recovery('unexpected_idle' if long_running else 'action_timeout', ws)
@@ -681,7 +681,7 @@ class PlanExecutor:
         immediate_commands = {
             *_STOP_COMMANDS,
             'home', 'back', 'sethome', 'equip', 'unequip', 'deposit', 'withdraw', 'readchest', 'setchest', 'labelchest',
-            'makechest', 'chat', 'setmode', 'resumetask', 'tp', 'preparetool',
+            'makechest', 'chat', 'setmode', 'resumetask', 'tp', 'preparetool', 'makearmor',
         }
         if event_type == 'action_done':
             if command in immediate_commands:

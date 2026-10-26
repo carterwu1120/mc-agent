@@ -29,6 +29,7 @@ COMMANDS: dict[str, dict] = {
     "tp":          {"desc": "傳送到座標或玩家", "usage": "tp <x> <y> <z> | tp <player>",  "example": "tp 10 64 -200、tp Carter"},
     # ── Equipment & inventory ─────────────────────────────────
     "equip":       {"desc": "裝備背包現有武裝，不合成", "usage": "equip"},
+    "makearmor":   {"desc": "用背包現有鐵錠/鑽石合成並穿上盔甲，只補空、快壞或較差的部位；不採集不冶煉，不足時回報缺多少", "usage": "makearmor <iron|diamond>"},
     "preparetool": {"desc": "用背包現有材料（含工作台、木棍）做出至少該等級的鎬子，不採集（tier: wooden/stone/iron/diamond/netherite）", "usage": "preparetool <tier>_pickaxe"},
     # ── Meta ──────────────────────────────────────────────────
     "chat":        {"desc": "傳送訊息給玩家", "usage": "chat"},

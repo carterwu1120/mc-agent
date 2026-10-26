@@ -1147,6 +1147,33 @@ function _hasSolidFloor(bot, pos) {
     return !!block && block.boundingBox === 'block' && !_isLava(block)
 }
 
+// Non-falling blocks a stair landing may be built from (gravel/sand would drop into the hole).
+const FLOOR_BLOCKS = ['cobbled_deepslate', 'cobblestone', 'dirt', 'stone', 'deepslate', 'tuff',
+    'andesite', 'diorite', 'granite', 'netherrack']
+
+// Seen live: above a cave every stair direction had no floor and the descent gave up while
+// carrying 128 building blocks. Place one under the landing instead, as a player would.
+async function _placeFloor(bot, pos) {
+    const current = bot.blockAt(pos)
+    if (!current || _isLava(current) || _hasAdjacentLava(bot, pos)) return false
+    const filler = bot.inventory.items().find(i => FLOOR_BLOCKS.includes(i.name))
+    if (!filler) return false
+    for (const [dx, dy, dz] of [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, -1, 0]]) {
+        const ref = bot.blockAt(pos.offset(dx, dy, dz))
+        if (!ref || ref.boundingBox !== 'block' || _isLava(ref)) continue
+        try {
+            await bot.equip(filler, 'hand')
+            if (_shouldAbort()) return false
+            await bot.placeBlock(ref, new Vec3(-dx, -dy, -dz))
+        } catch (_) { continue }
+        if (_hasSolidFloor(bot, pos)) {
+            console.log(`[Mine] 下潛落點下方是空洞，放 ${filler.name} 當地板`)
+            return true
+        }
+    }
+    return false
+}
+
 async function _stairDown(bot, yaw, steps) {
     const dx = Math.round(-Math.sin(yaw))
     const dz = Math.round(-Math.cos(yaw))
@@ -1176,8 +1203,9 @@ async function _stairDown(bot, yaw, steps) {
             }
         }
         if (lavaDetected) return
-        if (!_hasSolidFloor(bot, feet.offset(dx, -2, dz))) {
-            console.log('[Mine] 下潛落點下方是空洞（洞穴/峽谷），不往這個方向下')
+        const floorPos = feet.offset(dx, -2, dz)
+        if (!_hasSolidFloor(bot, floorPos) && !(await _placeFloor(bot, floorPos))) {
+            console.log('[Mine] 下潛落點下方是空洞（洞穴/峽谷）且無法補地板，不往這個方向下')
             return
         }
 

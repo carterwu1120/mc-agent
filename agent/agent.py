@@ -181,7 +181,7 @@ async def _handle_recovery(state: dict, ws) -> None:
                        f"最後的問題：{state.get('reason')}（{str(state.get('detail') or '')[:80]}）。"
                        '請告訴我要繼續、改做什麼，或幫我排除障礙。')
         else:
-            message = '任務已保留，暫停等待協助：' + reason[:180]
+            message = '任務已保留，暫停等待協助：' + _short_chat(reason)
         await asyncio.wait_for(_send_chat(ws, message), 5)
 
     async def decide(snapshot):
@@ -665,6 +665,15 @@ def _parse_manual_override(message: str) -> dict | None:
     return None
 
 
+def _short_chat(text: str, limit: int = 100) -> str:
+    """Minecraft cuts long chat lines; keep the first sentence(s) that fit. The full text stays in logs."""
+    text = ' '.join(str(text or '').split())
+    if len(text) <= limit:
+        return text
+    cut = max(text.rfind(mark, 0, limit) for mark in '。！？.!?')
+    return text[:cut + 1] if cut > limit // 3 else text[:limit - 1] + '…'
+
+
 async def _send_chat(ws, text: str) -> None:
     await ws.send(json.dumps({"command": "chat", "text": text}))
 
@@ -1102,7 +1111,7 @@ async def _handle_and_send(state: dict, handler, ws) -> None:
             return  # Idle never creates or resumes tasks.
         skill_name = handler.__module__.split('.')[-1]
         if event_type in _LLM_EVENT_TYPES:
-            print(f"[Agent] 呼叫 LLM 處理 {event_type}...")
+            print(f"[Agent] 處理 {event_type}（需要時才呼叫 LLM，見 [CLI] 行）")
         t0 = time.monotonic()
         result = await handler(state, llm)
         if request_revision != recovery.revision:
@@ -1331,6 +1340,13 @@ async def _handle_player_chat(state: dict, ws) -> None:
     revision = recovery.revision
     arb_state = _augment_state(state, player_task=message)
     arb_state['chat_task'] = {k: prior.get(k) for k in ('id', 'goal', 'status', 'interruptedBy')}
+    if recovery.held and recovery.reason:
+        # Without this the reply could only say "recovery_blocked" when asked why it stopped.
+        blocked = recovery.reason
+        if 'recovery_budget_exhausted' in blocked:
+            last = next((h.get('reason') for h in reversed(recovery.history) if h.get('reason')), None)
+            blocked = f'短時間內多次恢復都沒有進展（最後的問題：{last or "未知"}）'
+        arb_state['chat_task']['blockedReason'] = blocked
     try:
         decision = await task_arbitration_handler.handle(arb_state, llm)
     except CLIProviderError as error:

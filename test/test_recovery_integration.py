@@ -404,3 +404,23 @@ def test_clear_task_phrases_stop_and_forget_the_task(runtime, monkeypatch):
 def test_step_records_keep_only_command_status_and_error():
     from agent.plan_utils import build_step_records
     assert build_step_records(['mine iron 3']) == [{'cmd': 'mine iron 3', 'status': 'pending', 'error': None}]
+
+
+def test_wait_chat_is_cut_at_a_sentence_and_chat_judge_gets_the_block_reason(runtime, monkeypatch):
+    app, _task = runtime
+    long = 'Diamond mining is blocked at y=-20. ' + 'The bot rotated its descent direction many times. ' * 5
+    assert app._short_chat(long) == 'Diamond mining is blocked at y=-20. The bot rotated its descent direction many times.'
+    assert len(app._short_chat('x' * 300)) == 100
+
+    app.recovery.phase, app.recovery.reason = 'waiting_player', '四個方向下方都是洞穴，請帶我到別處'
+    seen = []
+
+    async def judge(state, _llm):
+        seen.append(state['chat_task'])
+        return {'decision': 'reply', 'text': 'ok'}
+
+    monkeypatch.setattr(app.task_arbitration_handler, 'handle', judge)
+    monkeypatch.setattr(app.task_memory, 'load_any', lambda: {'id': 'original', 'goal': '取得鐵', 'status': 'interrupted'})
+    ws = Mock(send=AsyncMock())
+    asyncio.run(app._handle_player_chat({'message': '你為什麼卡住？'}, ws))
+    assert seen[0]['blockedReason'] == '四個方向下方都是洞穴，請帶我到別處'

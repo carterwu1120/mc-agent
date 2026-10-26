@@ -9,7 +9,7 @@ from agent.handlers.commands_ref import command_list
 from agent.handlers.knowledge import knowledge
 from agent.handlers.prompts import render_prompt
 
-_DURABILITY_COMMANDS = command_list(["mine", "chop", "smelt", "preparetool", "equip", "chat", "idle"])
+_DURABILITY_COMMANDS = command_list(["mine", "chop", "smelt", "preparetool", "makearmor", "equip", "chat", "idle"])
 
 SYSTEM_PROMPT = render_prompt("tool_durability", commands=_DURABILITY_COMMANDS, durability=knowledge("durability"))
 

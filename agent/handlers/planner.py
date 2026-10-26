@@ -23,7 +23,7 @@ _PLANNER_ALLOWED_KEYS = [
     "mine", "chop", "fish", "hunt", "getfood", "smelt", "combat",
     "stopmine", "stopchop", "stopfish", "stopsmelt", "stopcombat", "stopsurface",
     "home", "back", "surface",
-    "deposit", "withdraw", "makechest", "labelchest", "preparetool", "equip", "come", "tp",
+    "deposit", "withdraw", "makechest", "labelchest", "preparetool", "makearmor", "equip", "come", "tp",
 ]
 # come/tp get planner-specific guidance below instead of the generic registry line.
 _PLANNER_COMMANDS = command_list([k for k in _PLANNER_ALLOWED_KEYS if k not in ("come", "tp")])
@@ -374,6 +374,8 @@ def _equipment_goal_shortcut(message: str, state: dict, activity: str) -> dict |
         if shortfall > 0:
             commands.append(f"mine stone {shortfall}")
 
+    if material in ("iron", "diamond") and any(item in ARMOR_SET_ITEMS for item in requested_items):
+        commands.append(f"makearmor {material}")
     commands.append("equip")
 
     goal_material = {

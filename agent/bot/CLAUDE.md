@@ -36,10 +36,15 @@ disables the previously unconditional Forge handshake for vanilla LAN testing.
 
 Routine monitors must not flood logs or retry impossible crafting on every loop.
 `eating.js` reports an empty food inventory at most once per minute;
-`combat.js` attempts sword crafting at most once per 30 seconds and emits an armor
-material decision at most once per minute; `crafting.js` rate-limits the missing
-workbench-material message. These cooldowns suppress identical attempts only;
+`combat.js` attempts sword crafting at most once per 30 seconds; `crafting.js`
+rate-limits the missing workbench-material message. These cooldowns suppress identical attempts only;
 inventory, capability and environment state remains present in bridge snapshots.
+
+Armor is never crafted automatically (not after combat, not on low durability): only
+`makearmor <iron|diamond>` (`combat.makeArmor`) crafts and equips that material for slots
+that are empty, nearly broken or below it, from carried ingots/diamonds. It never gathers
+or smelts; a shortfall reports `activity_stuck` `armor_materials_missing` with the count.
+Combat and low-durability warnings only re-equip carried armor; Python decides the rest.
 
 Targeted mining (`mine <ore> <n>`) never acquires its starting pickaxe: without the
 required tier it yields `no_tools`. If that pickaxe breaks mid-task, it crafts the same
@@ -79,8 +84,10 @@ Recovery `suspend` and `stopX` clear the stack, so `back` must not require a fra
 (cancelling any cleanup it is still doing, e.g. furnace reclaim) instead of pausing it;
 a paused finished frame never popped and resumed after later pops. On death the bot
 invalidates execution and halts every frame (`haltActivities`), so nothing resumes at
-the spawn point. Staircase descent only steps onto a solid block (`_hasSolidFloor`); air,
-water or lava under the next stair turns the descent instead of falling into a cave.
+the spawn point. Staircase descent only steps onto a solid block (`_hasSolidFloor`). Air
+or water under the next stair is first filled with a carried non-falling block
+(`_placeFloor`); only lava, no blocks or a failed placement turn the descent instead of
+falling into a cave.
 
 `hunt` and `getfood` require explicit positive count goals. Their JS activities
 reject missing or invalid goals instead of supplying hidden defaults. `getfood`

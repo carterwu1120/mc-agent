@@ -21,11 +21,12 @@ function loadMining(water = { isEscaping: () => false }) {
 
 // Ore blocks keyed by "x,y,z"; the bot stands in air at the origin and dug blocks
 // become air; everything else is solid deepslate. `lava` marks lava blocks.
-function makeBot(ores, lava = []) {
+function makeBot(ores, lava = [], { air = [], items = [{ name: 'iron_pickaxe', count: 1 }] } = {}) {
     const key = p => `${p.x},${p.y},${p.z}`
     const oreSet = new Set(ores.map(key))
     const lavaSet = new Set(lava.map(key))
-    const airSet = new Set(['0,-58,0', '0,-57,0'])
+    const airSet = new Set(['0,-58,0', '0,-57,0', ...air.map(key)])
+    const placed = []
     const dug = []
     const blockAt = p => {
         const k = key(p)
@@ -36,9 +37,14 @@ function makeBot(ores, lava = []) {
     }
     return {
         dug,
+        placed,
         entity: { position: new Vec3(0, -58, 0) },
         entities: {},
-        inventory: { items: () => [{ name: 'iron_pickaxe', count: 1 }] },
+        inventory: { items: () => items },
+        placeBlock: async (ref, face) => {
+            const p = ref.position.plus(face)
+            airSet.delete(key(p)); placed.push(key(p))
+        },
         findBlocks: ({ matching }) => [...oreSet].map(k => new Vec3(...k.split(',').map(Number)))
             .filter(p => matching(blockAt(p))),
         blockAt,
@@ -88,4 +94,19 @@ test('mining does not dig while a hazard escape is digging the bot out', async (
     escaping = false
     await run
     assert.deepEqual(bot.dug, ['1,-58,0'])
+})
+
+test('a stair landing over a cave gets a placed floor instead of giving up', async () => {
+    // Seen live: above a cave all four stair directions had no floor, so the descent
+    // stopped while the bot carried 128 building blocks.
+    const mining = loadMining()
+    const hole = new Vec3(1, -60, 0)
+    const bot = makeBot([], [], { air: [hole], items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'cobbled_deepslate', count: 64 }] })
+    await mining._stairDown(bot, -Math.PI / 2, 1)
+    assert.deepEqual(bot.placed, ['1,-60,0'])
+    assert.ok(bot.dug.includes('1,-59,0'), 'then digs the stair step')
+
+    const noBlocks = makeBot([], [], { air: [hole] })
+    await mining._stairDown(noBlocks, -Math.PI / 2, 1)
+    assert.deepEqual([noBlocks.placed, noBlocks.dug], [[], []], 'without blocks it still refuses the hole')
 })

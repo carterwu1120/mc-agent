@@ -71,6 +71,9 @@ def validate_command(command: str, allowed_commands: set[str] | None = None) -> 
             'wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'
         } else 'preparetool 必須指定有效的稿子等級'
 
+    if name == "makearmor":
+        return None if args in (["iron"], ["diamond"]) else "`makearmor` 格式應為 `makearmor <iron|diamond>`"
+
     if name == "chop":
         if len(args) != 2 or args[0] != "logs" or not _is_positive_int(args[1]):
             return "`chop` 格式應為 `chop logs <count>`"
