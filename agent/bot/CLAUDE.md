@@ -57,6 +57,12 @@ pillager, blaze, witch, drowned) keep shooting from outside it: with a weapon an
 reports `cannot_reach_target`. Armor auto-crafting does not run after self-defense, since
 it would smelt raw iron the task is collecting. Targeted mining that is deeper than the
 ore's best height first mines reachable exposed target ore at its current depth.
+When the target count is reached, `_finishVein` also mines same-target ore within 5
+blocks (at most 8 extra, same lava/water/tier skips) so the rest of a vein is not left
+in front of the bot; stone/cobblestone/deepslate targets are excluded.
+**No x-ray:** every ore search targets only exposed ore (`_isExposed`: touching air or
+cave air), and logs never report buried ore. Digging an ore exposes its neighbours, so a
+connected vein is still followed. Do not add targeting of buried blocks.
 `findSurfaceSpot` checks the column above the bot, stops each column at its first solid
 block, skips empty chunk sections, searches every column to 24 blocks and every other
 one to 64, and reports `no_surface_found` when nothing qualifies.

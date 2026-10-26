@@ -325,6 +325,46 @@ async function _replaceBrokenPickaxe(bot, required) {
     return _hasPickaxeFor(bot, required)
 }
 
+// Ores come in veins. Stopping the moment the count is reached left the rest of the vein
+// in front of the bot, so also take same-target ore right next to it before reporting
+// done. Bounded: nearby only, a few blocks, same safety skips as normal ore mining.
+// Like all ore targeting it only uses exposed ore (no seeing through rock); digging one
+// ore exposes its neighbours, so a connected vein is still followed.
+const VEIN_RADIUS = 5
+const VEIN_MAX_EXTRA = 8
+const NO_VEIN_TARGETS = new Set(['stone', 'cobblestone', 'deepslate'])
+
+async function _finishVein(bot, goal, gen) {
+    if (NO_VEIN_TARGETS.has(goal.target)) return
+    let extra = 0
+    while (extra < VEIN_MAX_EXTRA && !_shouldAbort(gen)) {
+        const orePos = bot.findBlocks({ matching: b => miningPhase.matches(b.name, goal.target), maxDistance: VEIN_RADIUS, count: 20 })
+            .find(p => {
+                const block = bot.blockAt(p)
+                return block && _isExposed(bot, p) && !_digFailed.has(p.toString()) && !_lavaOres.has(p.toString()) &&
+                    !_hasAdjacentLava(bot, p) && !_isNearWaterHazard(p) &&
+                    _hasPickaxeFor(bot, _requiredPickaxe(block.name))
+            })
+        if (!orePos) return
+        try {
+            _setMovements(bot)
+            await _goto(bot, new goals.GoalNear(orePos.x, orePos.y, orePos.z, 1), 8000)
+            if (_shouldAbort(gen)) return
+            const fresh = bot.blockAt(orePos)
+            if (!fresh || !miningPhase.matches(fresh.name, goal.target)) { _digFailed.add(orePos.toString()); continue }
+            await _equipToolForDig(bot, fresh)
+            await _dig(bot, fresh)
+            if (_shouldAbort(gen)) return
+            extra++
+            console.log(`[Mine] 順手挖完礦脈：${fresh.name}（額外 ${extra}）`)
+            await _collectNearby(bot, orePos, 4)
+        } catch (_) {
+            if (_shouldAbort(gen)) return
+            _digFailed.add(orePos.toString())
+        }
+    }
+}
+
 function _resetStaleMining(bot, reason = 'stale') {
     console.log(`[Mine] 偵測到殘留狀態，重置 mining (${reason})`)
     isMining = false
@@ -548,6 +588,8 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
             break
         }
         if (goal.target && goal.count && _targetCount >= goal.count) {
+            await _finishVein(bot, goal, _myGen)
+            if (_shouldAbort(_myGen)) return
             console.log(`[Mine] 達到目標 ${goal.target} x${goal.count}，停止`)
             isMining = false
             sendActivityDone(bot, 'mining', { goal_target: goal.target ?? 'general', mined_pos: bot.entity.position })
@@ -969,9 +1011,10 @@ async function _runLoop(bot, goal, resumePos, _myGen) {
                     })
                     break
                 }
-                console.log(detectedOres.length
-                    ? `[Mine] 掃描到 ${detectedOres.length} 個候選礦石，但未能直接採集（暴露且避開水域=${wideOres.length}，其中先前失敗=${wideOres.filter(p => _digFailed.has(p.toString())).length}），改挖隧道`
-                    : '[Mine] 本次 32 格掃描未找到目標礦石，挖隧道繼續')
+                // Only exposed ore counts as seen; buried ore is not reported (no x-ray).
+                console.log(wideOres.length
+                    ? `[Mine] 看得到 ${wideOres.length} 個目標礦石但無法前往（其中先前失敗=${wideOres.filter(p => _digFailed.has(p.toString())).length}），改挖隧道`
+                    : '[Mine] 附近沒有看得到的目標礦石，挖隧道繼續')
                 if (!await _ensurePickaxeOrStuck(bot)) break
                 if (_shouldAbort(_myGen)) return
                 const tunneled = await _digTunnel(bot, tunnelYaw, 16, bestY, goal, _myGen)
