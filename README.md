@@ -360,14 +360,7 @@ Dashboard :3002 → Backend API :8000 → Coordinator :3010 / state files / Post
 - `agent/task_memory.py`: task goals, execution progress, and recent events.
 - `backend/`: public API; the dashboard serves the page and fetches data from the backend.
 
-Food recovery uses a semantic `waiting_for_change` state after bounded recovery
-cannot find a viable plan. It does not retry on a timer or compare exact
-coordinates. The agent automatically leaves this state when hunger reaches the
-existing safe threshold (`food >= 10`), or retries food planning once when a
-new usable opportunity appears (new raw food, visible animals, fishing rod
-plus water, or a safe surface). Unchanged ticks do not call the model. If food recovery had
-interrupted another task, that task resumes after the food crisis is resolved;
-a standalone food task simply finishes.
+Food is handled conservatively; see "Food handling is weak" under Known limitations.
 
 Each bot uses a separate `BOT_ID` and data directory, and registers with the coordinator to pull tasks.
 Address bots with `@Agent0` or `@Agent1`; `BOT_USERNAMES` identifies other bots whose chat should be ignored.
@@ -392,6 +385,30 @@ Coordinator port `3010` is internal and is not a client-facing API.
 - Forge handshaking does not imply full mod compatibility; custom blocks, items, and packets need separate validation.
 - `MC_ADAPTIVE_NAVIGATION` is experimental mining navigation; synthetic terrain tests do not guarantee success in every real world.
 - Multiple bots may compete for the same resources; there is no complete world map persisted across sessions.
+
+### Food handling is weak
+
+The bot cannot keep itself fed. It only eats what it carries and asks the player for the rest.
+
+- **No autonomous food gathering.** When hunger drops below 10 and the inventory has no food,
+  the bot sends `food_low`, pauses the current task and asks the player for food
+  (`handlers/food.py`, no model call). It does not hunt, fish or farm on its own. The
+  `waiting_for_change` retry only asks the player again; `_build_food_plan` (hunt/fish/getfood
+  quantities) exists and is tested but is not wired into `food_low`.
+- **Resume depends on the player.** The task resumes once hunger is back to 10 or more,
+  which in practice means the player gave food and the bot ate it.
+- **Food sources are local only.** `hunt` needs animals in view, `fish` needs a fishing rod
+  (never crafted) next to water, and `getfood` only cooks raw food already carried. With
+  exploration removed, nothing searches farther away.
+- **Eating picks the first edible item, not the best one.** It may eat raw chicken (poison
+  risk) or rotten flesh (hunger effect) before cooked food further down the inventory.
+- **Eating is deferred during mining, chopping, hunting and combat** until hunger is below
+  10, so long tasks often run on a low bar and stop when food runs out mid-task.
+- **Planning food in advance is up to the planner.** Food for a long task is only gathered if
+  the plan includes it (guidance in `agent/knowledge/bot_capabilities.md`); nothing tops it up
+  later.
+
+Practical advice: give the bot a stack of cooked food before long tasks (deep mining).
 
 ## Exploration removed
 
