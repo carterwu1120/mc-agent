@@ -114,6 +114,10 @@ If `text` field is present in any response, it is sent as a chat message to the 
 }
 ```
 Step status: `pending` / `running` / `done` / `failed`. Resume skips `done` steps.
+`context` and each step's `context` hold only `workPos` (plus `objective` on the task);
+live activity/stack/progress belongs in `runtime`, which is overwritten, not accumulated.
+Player chat 「清除任務」/「取消任務」/`cancel task` stops the activity and deletes task.json
+(current and interrupted tasks), so 「繼續」 has nothing to resume.
 
 ---
 

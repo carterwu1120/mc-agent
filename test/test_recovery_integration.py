@@ -409,3 +409,22 @@ def test_repeated_deaths_stop_auto_resume(runtime, monkeypatch, tmp_path):
     assert resumed == ['respawned'] * (app.RESPAWN_LOOP_LIMIT - 1)
     assert app.recovery.phase == 'waiting_player'
     assert '暫停' in chats[-1]
+
+
+def test_clear_task_phrases_stop_and_forget_the_task(runtime, monkeypatch):
+    app, _task = runtime
+    for message in ('清除任務', '取消目前的任務', 'cancel task', 'Forget the task'):
+        assert app._parse_manual_override(message) == {'kind': 'clear'}
+    assert app._parse_manual_override('取消任務然後去挖鐵') is None
+
+    cleared, sent = [], []
+    monkeypatch.setattr(app.task_memory, 'clear', lambda: cleared.append(True))
+    ws = Mock(send=AsyncMock(side_effect=lambda raw: sent.append(json.loads(raw))))
+    asyncio.run(app._handle_player_chat({'message': '清除任務', 'activity': 'mining'}, ws))
+    assert cleared == [True]
+    assert [m.get('command') for m in sent] == ['stopmine', 'chat']
+
+
+def test_step_records_keep_only_command_status_and_error():
+    from agent.plan_utils import build_step_records
+    assert build_step_records(['mine iron 3']) == [{'cmd': 'mine iron 3', 'status': 'pending', 'error': None}]

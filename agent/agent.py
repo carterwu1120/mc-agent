@@ -601,14 +601,7 @@ def _save_current_task_to_memory(state: dict) -> None:
     goal_str = f"{activity} {goal}"
     current_pos = _clean_pos(state.get("pos"))
     work_pos = _clean_pos(top.get("startPos")) or current_pos
-    context = {
-        "expectedActivity": activity,
-        "activeActivity": activity,
-        "activeCommand": resume_cmd,
-        "activityStack": _stack_activity_names(state),
-        "workPos": work_pos,
-        "currentPos": current_pos,
-    }
+    context = {"workPos": work_pos}
     runtime = {
         "activeActivity": activity,
         "activeCommand": resume_cmd,
@@ -618,15 +611,7 @@ def _save_current_task_to_memory(state: dict) -> None:
         "activeWorkPos": work_pos,
         "currentPos": current_pos,
     }
-    step_context = {
-        "currentStepCmd": resume_cmd,
-        "expectedActivity": activity,
-        "stackActivity": activity,
-        "workPos": work_pos,
-        "currentPos": current_pos,
-        "goal": goal,
-        "progress": progress,
-    }
+    step_context = {"workPos": work_pos}
     task_memory.remember_interrupted(
         goal_str,
         [resume_cmd],
@@ -745,51 +730,11 @@ def _sync_task_context(state: dict) -> None:
         "currentPos": current_pos,
     })
 
-    context_patch = {
-        "currentStep": idx,
-        "currentStepCmd": current_cmd,
-        "expectedActivity": expected_activity,
-        "activeActivity": active_activity,
-        "activeCommand": active_command,
-        "activityStack": stack_names,
-        "currentPos": current_pos,
-    }
-
+    # task.json keeps only where the work happens; live state already lives in runtime.
+    work_pos = (_clean_pos(frame.get("startPos")) if frame else None) or current_pos
     if frame:
-        work_pos = _clean_pos(frame.get("startPos")) or current_pos
-        context_patch["workPos"] = work_pos
-        step_patch = {
-            "currentStepCmd": current_cmd,
-            "expectedActivity": expected_activity,
-            "stackActivity": frame.get("activity"),
-            "workPos": work_pos,
-            "currentPos": current_pos,
-            "goal": frame.get("goal") or {},
-            "progress": frame.get("progress") or {},
-            "activeActivity": active_activity,
-            "activeCommand": active_command,
-            "activityStack": stack_names,
-            "activeGoal": active_goal,
-            "activeProgress": active_progress,
-        }
-    else:
-        step_patch = {
-            "currentStepCmd": current_cmd,
-            "expectedActivity": expected_activity,
-            "stackActivity": None,
-            "workPos": current_pos,
-            "currentPos": current_pos,
-            "goal": {},
-            "progress": {},
-            "activeActivity": active_activity,
-            "activeCommand": active_command,
-            "activityStack": stack_names,
-            "activeGoal": active_goal,
-            "activeProgress": active_progress,
-        }
-
-    task_memory.update_context(context_patch)
-    task_memory.update_step_context(idx, step_patch)
+        task_memory.update_context({"workPos": work_pos})
+    task_memory.update_step_context(idx, {"workPos": work_pos})
 
 
 
@@ -814,6 +759,12 @@ def _is_system_chat_message(message: str) -> bool:
     return any(re.match(p, lowered) for p in _SYSTEM_CHAT_PATTERNS)
 
 
+_CLEAR_TASK_PATTERNS = (
+    r"(清除|取消|忘記|放棄)(目前的?|這個)?任務",
+    r"(cancel|clear|forget) (the )?task",
+)
+
+
 def _parse_manual_override(message: str) -> dict | None:
     text = (message or "").strip()
     lowered = text.lower()
@@ -822,6 +773,8 @@ def _parse_manual_override(message: str) -> dict | None:
         return {"kind": "abort"}
     if re.fullmatch(r"!resume", lowered):
         return {"kind": "resume"}
+    if any(re.fullmatch(p, lowered) for p in _CLEAR_TASK_PATTERNS):
+        return {"kind": "clear"}
 
     m = re.match(r"^!interrupt\s+(.+?)\s*$", text, flags=re.IGNORECASE)
     if m:
@@ -879,7 +832,7 @@ async def _dispatch_result(item: dict, state: dict, ws) -> None:
         await ws.send(json.dumps(item))
 
 
-async def _apply_manual_abort(state: dict, ws) -> None:
+async def _apply_manual_abort(state: dict, ws, announce: bool = True) -> None:
     recovery.invalidate()
     if executor.is_running():
         print("[TaskArb] 手動 abort：中止目前計畫")
@@ -892,7 +845,7 @@ async def _apply_manual_abort(state: dict, ws) -> None:
     if stop_cmd:
         print(f"[TaskArb] 手動 abort：停止當前活動 {activity}")
         await ws.send(json.dumps({"command": stop_cmd}))
-    else:
+    elif announce:
         await _send_chat(ws, "已停止目前任務。")
 
 
@@ -1474,6 +1427,12 @@ async def _handle_player_chat(state: dict, ws) -> None:
         kind = override["kind"]
         if kind == "abort":
             await _apply_manual_abort(state, ws)
+            return
+        if kind == "clear":
+            await _apply_manual_abort(state, ws, announce=False)
+            task_memory.clear()
+            print("[TaskArb] 已清除目前與中斷的任務")
+            await _send_chat(ws, "已清除任務，不會再接續。")
             return
         if kind == "resume":
             await _continue_player_task(state, ws, explicit=True)
